@@ -23,3 +23,13 @@ make floci-down
 ## フィクスチャ
 
 reconciler のテストで使う RDS イベントのサンプルは `internal/reconcile/testdata/` にあります。EventBridge ルールのパターンの参照ペイロードも兼ねています(変更時は `aws events test-event-pattern` で検証してください)。
+
+## モック
+
+テストは [testify](https://github.com/stretchr/testify) のアサーションと [go.uber.org/mock](https://github.com/uber-go/mock)(gomock)のダブルを使います。`internal/store`、`internal/target`、`internal/reconcile` の各インターフェース(定義の隣に `//go:generate` を配置)から `internal/mocks/` に生成されます。`internal/mocks/dynastore.go` だけは手書きで、生成された `MockStoreAPI` をインメモリテーブルに接続し、ストアの実際の Scan/GetItem/PutItem/UpdateItem/DeleteItem と同じ挙動で `Seed`/`Item`/`FailOn`/`SetScanPageSize` を使えるようにしています。
+
+```console
+make generate     # go generate ./... — インターフェース変更後に internal/mocks/{store,target,reconcile}.go を再生成
+```
+
+生成物はコミットされます(再生成する CI はありません)。モック対象のインターフェースのメソッドを追加・変更したら、必ず `make generate` を実行して差分を含めてください。

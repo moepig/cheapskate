@@ -210,8 +210,8 @@ aws lambda add-permission --function-name cheapskate-reconciler \
 
 ## 8. 呼び出しペイロード(リファレンス)
 
-- **定期 / 手動のフル reconcile**: `"source": "aws.rds"` を含まない任意の JSON オブジェクト — 標準形は `{}`。すべての `config#` アイテムを reconcile します。
-- **RDS イベント**: EventBridge イベントそのもの(`source: aws.rds`、`detail.SourceType: DB_INSTANCE|CLUSTER`、`detail.SourceIdentifier`)。そのリソースだけを reconcile し、未登録のリソースは無視します。
+- **定期 / 手動のフル reconcile**: `"source": "aws.rds"` を含まない任意の JSON オブジェクト — 標準形は `{}`。すべてのタグとそのメンバーを reconcile します。
+- **RDS イベント**: EventBridge イベントそのもの(`source: aws.rds`、`detail.SourceType: DB_INSTANCE|CLUSTER`、`detail.SourceIdentifier`)。そのリソース1件だけを reconcile し(同じタグの他メンバーには触れません)、未登録のリソースは無視します。
 
 ## 9. Web コンソール(オプション)
 
@@ -252,7 +252,7 @@ aws lambda add-permission --function-name cheapskate-reconciler \
 
 ## 10. デプロイの検証
 
-1. 稼働中の開発用 RDS インスタンスに `mode: pinned`、`desired: stopped` の `config#` アイテムを登録する(`cheapskate-cli pin rds-instance#<id> stopped`、[operations.md](operations.md) 参照)→ 1 インターバル以内に `stopping` へ遷移し、`status#` アイテムに `last_action: stop` が記録されること。
+1. 稼働中の開発用 RDS インスタンスをタグに追加して pin する(`cheapskate-cli add --tag dev --type rds-instance --name <id>` の後 `cheapskate-cli pin --tag dev stopped`、[operations.md](operations.md) 参照)→ 1 インターバル以内に `stopping` へ遷移し、`status#` アイテムに `last_action: stop` が記録されること。
 2. コンソールから手動で起動する → 1 インターバル以内に再び停止されること(ドリフト補正)。
-3. `mode: schedule` の ECS サービスを登録する → cron の境界で desiredCount が切り替わること(停止で 0、起動で `restore_count`)。
+3. `mode: schedule` のタグに ECS サービスを追加する → cron の境界で desiredCount が切り替わること(停止で 0、起動で `restore_count`)。
 4. 通知を設定している場合、各アクションで SNS メッセージが 1 通発行され、収束済みサイクルでは発行されないこと。

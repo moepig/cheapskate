@@ -168,8 +168,8 @@ aws lambda add-permission --function-name cheapskate-reconciler \
 
 ## 8. Invocation payloads (reference)
 
-- **Periodic / manual full reconcile**: any JSON object without `"source": "aws.rds"` — canonically `{}`. Reconciles every `config#` item.
-- **RDS event**: the unmodified EventBridge event (`source: aws.rds`, `detail.SourceType: DB_INSTANCE|CLUSTER`, `detail.SourceIdentifier`). Reconciles only that resource; unregistered resources are ignored.
+- **Periodic / manual full reconcile**: any JSON object without `"source": "aws.rds"` — canonically `{}`. Reconciles every tag and its members.
+- **RDS event**: the unmodified EventBridge event (`source: aws.rds`, `detail.SourceType: DB_INSTANCE|CLUSTER`, `detail.SourceIdentifier`). Reconciles only that one resource (never the rest of its tag); unregistered resources are ignored.
 
 ## 9. Web console (optional)
 
@@ -196,7 +196,7 @@ Deploy to a stage whose name matches `BASE_PATH` (e.g. stage `console`, `BASE_PA
 
 ## 10. Verify the deployment
 
-1. Register a `config#` item with `mode: pinned`, `desired: stopped` for a running dev RDS instance (`cheapskate-cli pin rds-instance#<id> stopped`, see [operations.md](operations.md)) → within one interval it must transition to `stopping`, and the `status#` item must show `last_action: stop`.
+1. Add a running dev RDS instance to a tag and pin it stopped (`cheapskate-cli add --tag dev --type rds-instance --name <id>` then `cheapskate-cli pin --tag dev stopped`, see [operations.md](operations.md)) → within one interval it must transition to `stopping`, and the `status#` item must show `last_action: stop`.
 2. Start it manually from the console → it must be stopped again within one interval (drift correction).
-3. Register a `mode: schedule` ECS service → desiredCount must flip at the cron boundaries (0 at stop, `restore_count` at start).
+3. Add an ECS service to a `mode: schedule` tag → desiredCount must flip at the cron boundaries (0 at stop, `restore_count` at start).
 4. If notifications are configured, each action must produce one SNS message; converged cycles must produce none.

@@ -24,7 +24,7 @@ flowchart LR
         fn["Reconciler Lambda
         (Go, container image)"]
         ddb[("DynamoDB state table
-        config# / override# / status# items")]
+        tag# / member# / override# / status# items")]
         sns["SNS topic
         (actions & failures)"]
         rds["RDS instances /
@@ -57,7 +57,7 @@ Development — working on cheapskate itself:
 - [development/test.md](development/test.md) — unit/integration tests and lint
 - [development/run_local.md](development/run_local.md) — running the reconciler and web console locally
 
-Design notes (Japanese): [DESIGN.md](../../DESIGN.md), [consider.md](../../consider.md).
+Design notes (Japanese): [DESIGN.md](../../DESIGN.md), [DESIGN_v2.md](../../DESIGN_v2.md), [DESIGN_v3.md](../../DESIGN_v3.md) (current data model), [consider.md](../../consider.md).
 
 ## License
 

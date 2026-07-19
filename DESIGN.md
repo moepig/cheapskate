@@ -1,5 +1,7 @@
 # DESIGN: cheapskate — 実装方針
 
+> **データモデルは v3 でタグ中心に刷新済み。** 本書と DESIGN_v2.md が前提とする「1 リソース = 1 `config#` アイテム」は現行実装と一致しない。現行スキーマと意味論上の決定事項は [DESIGN_v3.md](DESIGN_v3.md) を参照。
+
 方式選定の経緯とコスト比較は [consider.md](consider.md) を参照。本書は採用した方式A(望ましい状態 + Reconcile ループ)の実装方針を定める。
 
 ## 要件

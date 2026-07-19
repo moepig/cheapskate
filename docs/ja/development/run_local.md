@@ -1,15 +1,27 @@
 # ローカル実行
 
-すべてのコンポーネントは手元で実行できます。ローカルエミュレータ(Floci、`make floci-up`、エンドポイント `http://localhost:4566`)に対しても、自分の認証情報で実際の AWS アカウントに対しても動きます。エミュレータを使う場合は以下を export します:
+## クイックスタート: `make dev`
+
+```console
+make dev       # floci + state テーブル + サンプルタグ "dev"(rds-instance + ecs メンバー、スケジュール済み) + Web コンソール
+```
+
+Floci を起動し(`docker compose`)、ヘルスチェックを待ち、`cheapskate-dev` state テーブルを(`internal/statetable` 経由で、冪等に — 再実行しても安全)作成し、実際の `cheapskate-cli` でサンプルタグを投入し(投入コマンド自体が使用例を兼ねます)、Web コンソールを `http://127.0.0.1:8080/` でフォアグラウンド起動します。すべて `go run` 経由なので、コードの変更は次のリクエストや次の `make dev` に反映されます。
+
+Ctrl-C でコンソールを停止、`make dev-down` で Floci を停止します。投入したサンプルリソースは Floci 上に実体を持たないため、これらに対する手動 reconcile(下記参照)は not-found として報告されます — これは想定内の挙動で、reconcile ループ全体をエンドツーエンドで検証するには統合テスト(`make integration`)の方が適しています。
+
+## 手動でのコンポーネント個別起動
+
+各コンポーネントは個別に手元で実行することもできます。ローカルエミュレータ(Floci、`make floci-up`、エンドポイント `http://localhost:4566`)に対しても、自分の認証情報で実際の AWS アカウントに対しても動きます。エミュレータを使う場合は以下を export します:
 
 ```console
 export AWS_ENDPOINT_URL=http://localhost:4566
 export AWS_REGION=ap-northeast-1 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test
 ```
 
-まず state テーブルを作成します(スキーマは本番と同じ — `docs/ja/usage/setup.md` §2 参照)。Floci に対しても同じ `aws dynamodb create-table` コマンドがそのまま使えます。
+まず state テーブルを作成します(スキーマは本番と同じ — `docs/ja/usage/setup.md` §2 参照)。`CHEAPSKATE_TABLE` を設定して `go run ./cmd/dev-bootstrap` を実行するか、setup.md と同じ `aws dynamodb create-table` コマンドを Floci に対して直接使います。
 
-## Web コンソール
+### Web コンソール
 
 ローカルモードでは Lambda を介さないただの HTTP サーバーです:
 
@@ -18,15 +30,16 @@ CHEAPSKATE_TABLE=cheapskate-state go run ./cmd/webconsole          # http://127.
 go run ./cmd/webconsole -addr 127.0.0.1:9090                       # ポート変更
 ```
 
-## cheapskate-cli
+### cheapskate-cli
 
 ```console
 export CHEAPSKATE_TABLE=cheapskate-state
 go run ./cmd/cheapskate-cli list
-go run ./cmd/cheapskate-cli pin rds-instance#dev-db stopped
+go run ./cmd/cheapskate-cli add --tag dev --type rds-instance --name dev-db
+go run ./cmd/cheapskate-cli pin --tag dev stopped
 ```
 
-## Reconciler
+### Reconciler
 
 reconciler は Lambda エントリポイントなので、`provided:al2023` ベースイメージに同梱されている Runtime Interface Emulator を使ってコンテナイメージ内で実行します:
 

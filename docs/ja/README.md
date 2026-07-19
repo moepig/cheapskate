@@ -24,7 +24,7 @@ flowchart LR
         fn["Reconciler Lambda
         (Go, コンテナイメージ)"]
         ddb[("DynamoDB state テーブル
-        config# / override# / status# アイテム")]
+        tag# / member# / override# / status# アイテム")]
         sns["SNS トピック
         (アクション・失敗の通知)"]
         rds["RDS インスタンス /
@@ -57,7 +57,7 @@ Development — cheapskate 自体の開発:
 - [development/test.md](development/test.md) — ユニット/統合テストと lint
 - [development/run_local.md](development/run_local.md) — reconciler と Web コンソールのローカル実行
 
-設計メモ: [DESIGN.md](../../DESIGN.md), [consider.md](../../consider.md)。
+設計メモ: [DESIGN.md](../../DESIGN.md)、[DESIGN_v2.md](../../DESIGN_v2.md)、[DESIGN_v3.md](../../DESIGN_v3.md)(現行データモデル)、[consider.md](../../consider.md)。
 
 ## ライセンス
 
