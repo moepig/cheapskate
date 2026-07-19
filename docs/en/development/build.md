@@ -6,7 +6,7 @@ Prerequisites: Go 1.26+; Docker (BuildKit) for the container image.
 
 ```console
 make build       # go build ./... — compile everything
-make csctl       # bin/csctl — the operator CLI
+make cheapskate-cli       # bin/cheapskate-cli — the operator CLI
 make webconsole  # bin/webconsole — the web console (local mode)
 ```
 

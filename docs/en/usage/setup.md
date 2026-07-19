@@ -173,7 +173,7 @@ aws lambda add-permission --function-name cheapskate-reconciler \
 
 ## 9. Web console (optional)
 
-A browser frontend for the same operations as `csctl`. **Access control is an IP allowlist only — no login.** Anyone inside the allowed CIDRs can operate the console; skip this section if that trade-off doesn't fit. It can also run locally against the table without deploying anything (see [../development/run_local.md](../development/run_local.md)).
+A browser frontend for the same operations as `cheapskate-cli`. **Access control is an IP allowlist only — no login.** Anyone inside the allowed CIDRs can operate the console; skip this section if that trade-off doesn't fit. It can also run locally against the table without deploying anything (see [../development/run_local.md](../development/run_local.md)).
 
 Components:
 
@@ -196,7 +196,7 @@ Deploy to a stage whose name matches `BASE_PATH` (e.g. stage `console`, `BASE_PA
 
 ## 10. Verify the deployment
 
-1. Register a `config#` item with `mode: pinned`, `desired: stopped` for a running dev RDS instance (`csctl pin rds-instance#<id> stopped`, see [operations.md](operations.md)) → within one interval it must transition to `stopping`, and the `status#` item must show `last_action: stop`.
+1. Register a `config#` item with `mode: pinned`, `desired: stopped` for a running dev RDS instance (`cheapskate-cli pin rds-instance#<id> stopped`, see [operations.md](operations.md)) → within one interval it must transition to `stopping`, and the `status#` item must show `last_action: stop`.
 2. Start it manually from the console → it must be stopped again within one interval (drift correction).
 3. Register a `mode: schedule` ECS service → desiredCount must flip at the cron boundaries (0 at stop, `restore_count` at start).
 4. If notifications are configured, each action must produce one SNS message; converged cycles must produce none.

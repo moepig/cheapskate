@@ -13,7 +13,7 @@ cheapskate は**ソースコードのみ**で配布されます。CloudFormation
 
 ```mermaid
 flowchart LR
-    ops["csctl CLI / Web コンソール /
+    ops["cheapskate-cli CLI / Web コンソール /
     IaC / aws dynamodb put-item"]
 
     subgraph account["自分の AWS アカウント"]
@@ -42,14 +42,14 @@ flowchart LR
     fn --> sns
 ```
 
-Lambda は毎サイクル、望ましい状態(DynamoDB)と実際の状態(Describe API)を比較して収束させます。遷移中の状態(`starting`、`stopping` など)のリソースはスキップされ、次のサイクルで再度処理されます。RDS/ECS の API を呼び出すのは reconciler Lambda だけで、`csctl` と Web コンソールは DynamoDB テーブルにしか触れません。
+Lambda は毎サイクル、望ましい状態(DynamoDB)と実際の状態(Describe API)を比較して収束させます。遷移中の状態(`starting`、`stopping` など)のリソースはスキップされ、次のサイクルで再度処理されます。RDS/ECS の API を呼び出すのは reconciler Lambda だけで、`cheapskate-cli` と Web コンソールは DynamoDB テーブルにしか触れません。
 
 ## ドキュメント
 
 Usage — 自分の AWS アカウントへのホスティング:
 
 - [usage/setup.md](usage/setup.md) — 作成するリソースの完全な仕様(設定値、IAM ポリシー、実行例つき)
-- [usage/operations.md](usage/operations.md) — リソースの登録、`csctl` CLI、Web コンソール、監視
+- [usage/operations.md](usage/operations.md) — リソースの登録、`cheapskate-cli` CLI、Web コンソール、監視
 
 Development — cheapskate 自体の開発:
 

@@ -24,7 +24,7 @@ DESIGN.md が明記する防御「Describe が空リストを返した場合も 
 
 ### A-4. ops パッケージの仕様がテストで固定されていない
 
-`internal/ops` を直接叩く単体テストが無く、csctl 統合テストと webconsole テスト経由の部分カバーのみ。特に以下の明文仕様が未検証:
+`internal/ops` を直接叩く単体テストが無く、cheapskate-cli 統合テストと webconsole テスト経由の部分カバーのみ。特に以下の明文仕様が未検証:
 
 - **「pin は旧 cron 設定を保持し schedule で復帰可」**(DESIGN.md の CLI 節、ops.go:81-86)。pin → schedule で cron が戻るシナリオはどのテストにも無い
 - `Schedule` が既存 config の `RestoreCount` を破棄する非対称動作(B-10 のバグでもある)
@@ -94,15 +94,15 @@ not-found(リソース削除済みで config が残存)、AccessDenied(権限外
 
 ### B-5. 不正な override アイテム 1 件で list / index が全滅する
 
-`ops.List` は各行の `GetOverride` エラー(desired 不正など、手書き・Terraform 起因で起こりうる)で全体を即 return する(ops.go:33-36)。csctl list と webconsole のトップページが 1 件の不正データで丸ごと使えなくなり、原因のリソースを特定する手段も失われる。
+`ops.List` は各行の `GetOverride` エラー(desired 不正など、手書き・Terraform 起因で起こりうる)で全体を即 return する(ops.go:33-36)。cheapskate-cli list と webconsole のトップページが 1 件の不正データで丸ごと使えなくなり、原因のリソースを特定する手段も失われる。
 
-**対応方針**: `Row` にエラーフィールドを追加し、行単位で保持して一覧表示を継続する(csctl はその行に error を表示、webconsole は行をエラースタイルで描画)。reconcile 側は既に per-resource で閉じ込めているので対象外。
+**対応方針**: `Row` にエラーフィールドを追加し、行単位で保持して一覧表示を継続する(cheapskate-cli はその行に error を表示、webconsole は行をエラースタイルで描画)。reconcile 側は既に per-resource で閉じ込めているので対象外。
 
 ### B-6. disabled + override の組合せが無言で無効
 
-`ReconcileOne` は override を読む前に mode=disabled でスキップし(reconcile.go:139-142)、`ResolveDesired` も disabled を最優先で返す(schedule.go:15-17)。一方 csctl / webconsole は disabled リソースへの override 登録を警告なく受け付ける。「override が最優先」という DESIGN の記述と実装が食い違い、利用者は override が効かない理由に気づけない。
+`ReconcileOne` は override を読む前に mode=disabled でスキップし(reconcile.go:139-142)、`ResolveDesired` も disabled を最優先で返す(schedule.go:15-17)。一方 cheapskate-cli / webconsole は disabled リソースへの override 登録を警告なく受け付ける。「override が最優先」という DESIGN の記述と実装が食い違い、利用者は override が効かない理由に気づけない。
 
-**対応方針**: 仕様としては「disabled は override より強い(完全な管理停止)」を採用し、DESIGN と csctl ヘルプに明記する。その上で `ops.SetOverride` は対象 config が mode=disabled のとき拒否(またはエラーメッセージ付き警告)する。
+**対応方針**: 仕様としては「disabled は override より強い(完全な管理停止)」を採用し、DESIGN と cheapskate-cli ヘルプに明記する。その上で `ops.SetOverride` は対象 config が mode=disabled のとき拒否(またはエラーメッセージ付き警告)する。
 
 ### B-7. SNS Subject の制約違反リスク
 
@@ -120,13 +120,13 @@ CSP に `frame-ancestors` が無く、`X-Frame-Options` も無い(webconsole.go:
 
 `ops.Schedule` は既存アイテムを読まず新規アイテムで置き換えるため、`-restore-count` を付けずに cron だけ変更した再実行で restore_count が消える(ops.go:120-131)。`Pin` は既存値を保持する設計(ops.go:81-86)と非対称で、ECS の復帰台数が意図せず 1 に落ちる実害がある。
 
-**対応方針**: `Pin` と同様に既存 config を読み、`RestoreCount`(と `Desired` — schedule 下では不活性だが pin 復帰用)を引き継ぐ。明示的に消したい場合のために `-restore-count 0` を「クリア」と定義するか、`csctl remove` → 再登録に誘導する。A-4 のテストで固定する。
+**対応方針**: `Pin` と同様に既存 config を読み、`RestoreCount`(と `Desired` — schedule 下では不活性だが pin 復帰用)を引き継ぐ。明示的に消したい場合のために `-restore-count 0` を「クリア」と定義するか、`cheapskate-cli remove` → 再登録に誘導する。A-4 のテストで固定する。
 
 ### B-10. 収束済みでも observed_state が status に反映されない
 
-差分なしの周期は一切書き込まない設計(意図的)だが、その結果 `csctl list` の OBSERVED 列は「最後にアクションした時点」の状態のまま古くなる。手動で起動された DB が transitioning → running になっても status は stopped 直前の値を示し続け、監査用途(DESIGN が status の目的とするもの)に対して誤解を招く。
+差分なしの周期は一切書き込まない設計(意図的)だが、その結果 `cheapskate-cli list` の OBSERVED 列は「最後にアクションした時点」の状態のまま古くなる。手動で起動された DB が transitioning → running になっても status は stopped 直前の値を示し続け、監査用途(DESIGN が status の目的とするもの)に対して誤解を招く。
 
-**対応方針**: 書き込み抑制の設計は維持しつつ、表示側で「observed_state は last_action 時点のスナップショット」であることを csctl list のヘッダ(例: `OBSERVED(AT LAST ACTION)`)と docs に明記する。リアルタイム性が必要になった場合のみ「observed が前回記録値から変化した時だけ書く」への拡張を検討する(書き込み頻度は転移時のみで増分は小さい)。
+**対応方針**: 書き込み抑制の設計は維持しつつ、表示側で「observed_state は last_action 時点のスナップショット」であることを cheapskate-cli list のヘッダ(例: `OBSERVED(AT LAST ACTION)`)と docs に明記する。リアルタイム性が必要になった場合のみ「observed が前回記録値から変化した時だけ書く」への拡張を検討する(書き込み頻度は転移時のみで増分は小さい)。
 
 ## C. 改善すべき設計
 
@@ -160,11 +160,11 @@ resolve → describe → act → persist → notify が 1 つの無名関数に�
 
 **対応方針**: dynafake に (1) 操作・pk 指定のエラー注入、(2) Scan のページサイズ設定、を追加する。フェイクの複雑化を避けるため、条件式など store が発行しない機能は今後も実装しない方針を package コメントに明記する。
 
-### C-6. csctl の FlagSet が ExitOnError
+### C-6. cheapskate-cli の FlagSet が ExitOnError
 
 サブコマンドの flag パース失敗で `run()` がテスト不能な `os.Exit` に到達する(main.go:54, 185, 224)。統合テストが検証しているのは「パースを通ったあとの検証エラー」だけで、フラグ誤用のエラーメッセージは無検証。
 
-**対応方針**: `flag.ContinueOnError` に変更してエラーを `run()` の戻り値に載せ、usage 表示は main 側で行う。csctl のフラグ誤用ケースを統合テストに追加できるようになる。
+**対応方針**: `flag.ContinueOnError` に変更してエラーを `run()` の戻り値に載せ、usage 表示は main 側で行う。cheapskate-cli のフラグ誤用ケースを統合テストに追加できるようになる。
 
 ## 推奨着手順
 

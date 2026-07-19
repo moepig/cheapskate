@@ -6,7 +6,7 @@
 
 ```console
 make build       # go build ./... — 全体をコンパイル
-make csctl       # bin/csctl — オペレーター CLI
+make cheapskate-cli       # bin/cheapskate-cli — オペレーター CLI
 make webconsole  # bin/webconsole — Web コンソール(ローカルモード)
 ```
 

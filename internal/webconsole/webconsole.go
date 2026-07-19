@@ -1,4 +1,4 @@
-// Package webconsole is the opt-in browser frontend for the configuration operations in internal/ops. It renders server-side HTML (no JavaScript) and, like csctl, only touches DynamoDB items. Access control (IP allowlist) lives in the API Gateway resource policy, not here.
+// Package webconsole is the opt-in browser frontend for the configuration operations in internal/ops. It renders server-side HTML (no JavaScript) and, like cheapskate-cli, only touches DynamoDB items. Access control (IP allowlist) lives in the API Gateway resource policy, not here.
 package webconsole
 
 import (

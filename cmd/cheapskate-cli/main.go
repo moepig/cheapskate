@@ -1,4 +1,4 @@
-// csctl is the cheapskate configuration CLI. It manipulates the config#, override#, and status# items in the DynamoDB state table; it never calls the RDS/ECS APIs itself (the reconciler Lambda does that).
+// cheapskate-cli is the cheapskate configuration CLI. It manipulates the config#, override#, and status# items in the DynamoDB state table; it never calls the RDS/ECS APIs itself (the reconciler Lambda does that).
 package main
 
 import (
@@ -20,10 +20,10 @@ import (
 	"cheapskate/internal/store"
 )
 
-const usage = `csctl — cheapskate configuration CLI
+const usage = `cheapskate-cli — cheapskate configuration CLI
 
 Usage:
-  csctl [-table TABLE] <command> [arguments]
+  cheapskate-cli [-table TABLE] <command> [arguments]
 
 Commands:
   list                                     registered resources and their state
@@ -47,13 +47,13 @@ The table name comes from -table or the CHEAPSKATE_TABLE environment variable. A
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
-		fmt.Fprintln(os.Stderr, "csctl:", err)
+		fmt.Fprintln(os.Stderr, "cheapskate-cli:", err)
 		os.Exit(1)
 	}
 }
 
 func run(args []string) error {
-	global := flag.NewFlagSet("csctl", flag.ContinueOnError)
+	global := flag.NewFlagSet("cheapskate-cli", flag.ContinueOnError)
 	global.Usage = func() { fmt.Fprint(os.Stderr, usage) }
 	table := global.String("table", os.Getenv("CHEAPSKATE_TABLE"), "DynamoDB state table name")
 	if err := global.Parse(args); err != nil {
@@ -270,7 +270,7 @@ func cmdRemove(ctx context.Context, s *store.Store, args []string) error {
 
 func resourceIDArg(args []string, want int) (string, error) {
 	if len(args) < want {
-		return "", fmt.Errorf("missing argument (see csctl -h)")
+		return "", fmt.Errorf("missing argument (see cheapskate-cli -h)")
 	}
 	resourceID := args[0]
 	if _, err := model.ResourceIDType(resourceID); err != nil {

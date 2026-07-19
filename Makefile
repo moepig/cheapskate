@@ -4,13 +4,13 @@ TAG      ?= dev
 PLATFORM ?= linux/arm64
 ECR_REPO ?=
 
-.PHONY: build unit integration test lint fmt vet image push csctl webconsole floci-up floci-down smoke
+.PHONY: build unit integration test lint fmt vet image push cli webconsole floci-up floci-down smoke
 
 build:
 	go build ./...
 
-csctl:
-	go build -o bin/csctl ./cmd/csctl
+cli:
+	go build -o bin/cheapskate-cli ./cmd/cheapskate-cli
 
 webconsole:
 	go build -o bin/webconsole ./cmd/webconsole

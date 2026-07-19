@@ -1,34 +1,34 @@
 # cheapskate の運用
 
-望ましい状態は DynamoDB state テーブルの `config#` アイテムとして保持されます。付属の `csctl` CLI、Web コンソール、IaC、生の `put-item` のどれで管理しても構いません。単なるデータです。RDS/ECS の API を呼び出すのは reconciler Lambda だけです。
+望ましい状態は DynamoDB state テーブルの `config#` アイテムとして保持されます。付属の `cheapskate-cli` CLI、Web コンソール、IaC、生の `put-item` のどれで管理しても構いません。単なるデータです。RDS/ECS の API を呼び出すのは reconciler Lambda だけです。
 
-## csctl CLI
+## cheapskate-cli CLI
 
 ```console
-go build -o csctl ./cmd/csctl        # またはリリースバイナリを取得
+go build -o cheapskate-cli ./cmd/cheapskate-cli        # またはリリースバイナリを取得
 export CHEAPSKATE_TABLE=<state-テーブル名>
 
 # Aurora クラスターを無期限に停止したままにする(7日後の自動起動を回避):
-csctl pin rds-cluster#dev-aurora stopped
+cheapskate-cli pin rds-cluster#dev-aurora stopped
 
 # ECS サービスを平日 09:00-20:00 JST で稼働させる:
-csctl schedule ecs#dev-cluster/api -start "0 9 * * MON-FRI" -stop "0 20 * * MON-FRI" \
+cheapskate-cli schedule ecs#dev-cluster/api -start "0 9 * * MON-FRI" -stop "0 20 * * MON-FRI" \
   -timezone Asia/Tokyo -restore-count 2
 
 # ピン設定にかかわらず一時的に起動する(TTL で自動的に失効):
-csctl override rds-cluster#dev-aurora running -for 2h
+cheapskate-cli override rds-cluster#dev-aurora running -for 2h
 
-csctl list                           # 全リソースの override / last-action / 観測状態を表示
-csctl show rds-cluster#dev-aurora    # config + override + status を JSON で表示
-csctl disable ecs#dev-cluster/api    # config は残したまま管理対象から外す
-csctl remove ecs#dev-cluster/api     # config, override, status を削除
+cheapskate-cli list                           # 全リソースの override / last-action / 観測状態を表示
+cheapskate-cli show rds-cluster#dev-aurora    # config + override + status を JSON で表示
+cheapskate-cli disable ecs#dev-cluster/api    # config は残したまま管理対象から外す
+cheapskate-cli remove ecs#dev-cluster/api     # config, override, status を削除
 ```
 
-`csctl` を使うオペレーターに必要なのは state テーブルへの `dynamodb:Scan`、`GetItem`、`PutItem`、`DeleteItem` だけです。RDS/ECS の権限は不要です。
+`cheapskate-cli` を使うオペレーターに必要なのは state テーブルへの `dynamodb:Scan`、`GetItem`、`PutItem`、`DeleteItem` だけです。RDS/ECS の権限は不要です。
 
 ## IaC やスクリプトから
 
-Terraform を使う場合は `aws_dynamodb_table_item` で config アイテムを管理できます。reconciler は `config#` アイテムを書き込まないため、ドリフト検出はクリーンなままです。一時的な操作には引き続き `csctl override` を使ってください — override は TTL で失効するもので、IaC 管理には向きません。
+Terraform を使う場合は `aws_dynamodb_table_item` で config アイテムを管理できます。reconciler は `config#` アイテムを書き込まないため、ドリフト検出はクリーンなままです。一時的な操作には引き続き `cheapskate-cli override` を使ってください — override は TTL で失効するもので、IaC 管理には向きません。
 
 同等の生の登録方法:
 
@@ -60,6 +60,6 @@ aws dynamodb put-item --table-name <state-テーブル名> --item '{
 ## 監視と挙動のメモ
 
 - 通知(トピック設定時)はアクションが実行されたか失敗した場合にのみ送信され、収束済みサイクルでは何も送信されません。
-- 恒常的な失敗を検知するには Lambda の `Errors` メトリクスにアラームを設定してください。リソースごとの直近のエラーは `status#` アイテムの `last_error` に記録され、`csctl show` で確認できます。
+- 恒常的な失敗を検知するには Lambda の `Errors` メトリクスにアラームを設定してください。リソースごとの直近のエラーは `status#` アイテムの `last_error` に記録され、`cheapskate-cli show` で確認できます。
 - 遷移中の状態(`starting`、`stopping` など)のリソースはスキップされ、次のサイクルで再度処理されます。
 - Application Auto Scaling が設定された ECS サービスは、停止時に min/max が 0/0 に設定され、起動時に復元されます(そうしないとスケーリングポリシーが desiredCount の変更を元に戻してしまうため)。

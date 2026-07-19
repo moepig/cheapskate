@@ -13,7 +13,7 @@ cheapskate is distributed as **source code only** — there is no CloudFormation
 
 ```mermaid
 flowchart LR
-    ops["csctl CLI / web console /
+    ops["cheapskate-cli CLI / web console /
     IaC / aws dynamodb put-item"]
 
     subgraph account["Your AWS account"]
@@ -42,14 +42,14 @@ flowchart LR
     fn --> sns
 ```
 
-Every cycle the Lambda compares desired state (DynamoDB) with actual state (Describe APIs) and converges. Resources in transitional states (`starting`, `stopping`, …) are skipped and picked up on the next cycle. Only the reconciler Lambda calls RDS/ECS APIs; `csctl` and the web console touch nothing but the DynamoDB table.
+Every cycle the Lambda compares desired state (DynamoDB) with actual state (Describe APIs) and converges. Resources in transitional states (`starting`, `stopping`, …) are skipped and picked up on the next cycle. Only the reconciler Lambda calls RDS/ECS APIs; `cheapskate-cli` and the web console touch nothing but the DynamoDB table.
 
 ## Documentation
 
 Usage — hosting cheapskate in your own AWS account:
 
 - [usage/setup.md](usage/setup.md) — everything to build and create, with concrete settings, IAM policies, and example commands
-- [usage/operations.md](usage/operations.md) — registering resources, the `csctl` CLI, the web console, monitoring
+- [usage/operations.md](usage/operations.md) — registering resources, the `cheapskate-cli` CLI, the web console, monitoring
 
 Development — working on cheapskate itself:
 

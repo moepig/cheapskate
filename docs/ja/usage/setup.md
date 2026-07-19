@@ -215,7 +215,7 @@ aws lambda add-permission --function-name cheapskate-reconciler \
 
 ## 9. Web コンソール(オプション)
 
-`csctl` と同じ操作をブラウザから行うフロントエンドです。**アクセス制御は IP 許可リストのみで、ログインはありません。**許可 CIDR の内側にいる人は誰でも操作できます。この割り切りが合わない場合はこの節をスキップしてください。デプロイせずローカルでテーブルに対して動かすこともできます([../development/run_local.md](../development/run_local.md))。
+`cheapskate-cli` と同じ操作をブラウザから行うフロントエンドです。**アクセス制御は IP 許可リストのみで、ログインはありません。**許可 CIDR の内側にいる人は誰でも操作できます。この割り切りが合わない場合はこの節をスキップしてください。デプロイせずローカルでテーブルに対して動かすこともできます([../development/run_local.md](../development/run_local.md))。
 
 構成要素:
 
@@ -252,7 +252,7 @@ aws lambda add-permission --function-name cheapskate-reconciler \
 
 ## 10. デプロイの検証
 
-1. 稼働中の開発用 RDS インスタンスに `mode: pinned`、`desired: stopped` の `config#` アイテムを登録する(`csctl pin rds-instance#<id> stopped`、[operations.md](operations.md) 参照)→ 1 インターバル以内に `stopping` へ遷移し、`status#` アイテムに `last_action: stop` が記録されること。
+1. 稼働中の開発用 RDS インスタンスに `mode: pinned`、`desired: stopped` の `config#` アイテムを登録する(`cheapskate-cli pin rds-instance#<id> stopped`、[operations.md](operations.md) 参照)→ 1 インターバル以内に `stopping` へ遷移し、`status#` アイテムに `last_action: stop` が記録されること。
 2. コンソールから手動で起動する → 1 インターバル以内に再び停止されること(ドリフト補正)。
 3. `mode: schedule` の ECS サービスを登録する → cron の境界で desiredCount が切り替わること(停止で 0、起動で `restore_count`)。
 4. 通知を設定している場合、各アクションで SNS メッセージが 1 通発行され、収束済みサイクルでは発行されないこと。

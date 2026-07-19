@@ -1,4 +1,4 @@
-// Package ops implements the configuration operations shared by csctl and the web console. Like both frontends, it only touches DynamoDB items — never the RDS/ECS APIs.
+// Package ops implements the configuration operations shared by cheapskate-cli and the web console. Like both frontends, it only touches DynamoDB items — never the RDS/ECS APIs.
 package ops
 
 import (

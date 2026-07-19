@@ -18,12 +18,12 @@ CHEAPSKATE_TABLE=cheapskate-state go run ./cmd/webconsole          # http://127.
 go run ./cmd/webconsole -addr 127.0.0.1:9090                       # ポート変更
 ```
 
-## csctl
+## cheapskate-cli
 
 ```console
 export CHEAPSKATE_TABLE=cheapskate-state
-go run ./cmd/csctl list
-go run ./cmd/csctl pin rds-instance#dev-db stopped
+go run ./cmd/cheapskate-cli list
+go run ./cmd/cheapskate-cli pin rds-instance#dev-db stopped
 ```
 
 ## Reconciler
