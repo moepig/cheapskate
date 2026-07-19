@@ -3,7 +3,9 @@ package ops
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/adhocore/gronx"
@@ -12,180 +14,298 @@ import (
 	"cheapskate/internal/store"
 )
 
-// Row is one resource in the list view: config joined with its override and status. Err is set when this row's override or status item was malformed (B-5); the row is still shown so the operator can see and fix it instead of the whole list disappearing.
-type Row struct {
+// MemberRow is one tag member with its status.
+type MemberRow struct {
 	ResourceID string
-	Config     model.ConfigItem
-	Override   *model.Override
+	Member     model.MemberItem
 	Status     model.Status
-	Err        error
 }
 
-// List returns every registered resource with override and status joined, via one Scan pass (store.ScanAll) instead of a GetItem per resource (C-1). A resource_id with an override or status item but no config is orphaned data and is not listed here.
-func List(ctx context.Context, s *store.Store, now time.Time) ([]Row, error) {
+// TagRow is one tag with its override and resolved members. Err is set when this tag's override or a member/status item was malformed (B-5); the row is still shown so the operator can see and fix it instead of the whole list disappearing.
+type TagRow struct {
+	Name     string
+	Tag      model.TagItem
+	Override *model.Override
+	Members  []MemberRow
+	Err      error
+}
+
+// List returns every registered tag with its override and members resolved, via one Scan pass (store.ScanAll) instead of a GetItem per tag/member (C-1). A tag name with members/override/status but no tag# item is orphaned data and is not listed here.
+func List(ctx context.Context, s *store.Store, now time.Time) ([]TagRow, error) {
 	scanRows, err := s.ScanAll(ctx, now)
 	if err != nil {
 		return nil, err
 	}
-	rows := make([]Row, 0, len(scanRows))
+	rows := make([]TagRow, 0, len(scanRows))
 	for _, sr := range scanRows {
-		if !sr.HasConfig {
+		if !sr.HasTag {
 			continue
 		}
-		rows = append(rows, Row{ResourceID: sr.ResourceID, Config: sr.Config, Override: sr.Override, Status: sr.Status, Err: sr.Err})
+		rows = append(rows, toTagRow(sr))
 	}
 	return rows, nil
 }
 
-// Get returns a single registered resource, or an error when unregistered.
-func Get(ctx context.Context, s *store.Store, resourceID string, now time.Time) (Row, error) {
-	cfg, err := s.GetConfig(ctx, resourceID)
+// Get returns a single registered tag with its members resolved, or an error when unregistered.
+func Get(ctx context.Context, s *store.Store, tag string, now time.Time) (TagRow, error) {
+	if err := model.ValidTagName(tag); err != nil {
+		return TagRow{}, err
+	}
+	scanRows, err := s.ScanAll(ctx, now)
 	if err != nil {
-		return Row{}, err
+		return TagRow{}, err
 	}
-	if cfg == nil {
-		return Row{}, fmt.Errorf("%s is not registered", resourceID)
+	for _, sr := range scanRows {
+		if sr.Name == tag {
+			if !sr.HasTag {
+				break
+			}
+			return toTagRow(sr), nil
+		}
 	}
-	override, err := s.GetOverride(ctx, resourceID, now)
-	if err != nil {
-		return Row{}, err
-	}
-	status, err := s.GetStatus(ctx, resourceID)
-	if err != nil {
-		return Row{}, err
-	}
-	return Row{ResourceID: resourceID, Config: *cfg, Override: override, Status: status}, nil
+	return TagRow{}, fmt.Errorf("tag %q is not registered", tag)
 }
 
-// Pin sets mode=pinned with the given desired state. Cron fields of an existing config are kept; they are inert under mode=pinned and restorable via Schedule.
-func Pin(ctx context.Context, s *store.Store, resourceID, desired string) error {
+func toTagRow(sr store.TagRow) TagRow {
+	members := make([]MemberRow, 0, len(sr.Members))
+	for _, mr := range sr.Members {
+		members = append(members, MemberRow{ResourceID: mr.ResourceID, Member: mr.Member, Status: mr.Status})
+	}
+	return TagRow{Name: sr.Name, Tag: sr.Tag, Override: sr.Override, Members: members, Err: sr.Err}
+}
+
+// AssembleResourceID validates a (type, name, cluster, service) combination as entered via the CLI
+// or the web console's add form and assembles the internal "<type>#<identifier>" resource ID. The
+// type token matches the storage prefix (model.ResourceTypes' keys), not the resolved
+// model.Type* constant — e.g. "ecs", not "ecs-service".
+func AssembleResourceID(typ, name, cluster, service string) (string, error) {
+	switch typ {
+	case "":
+		return "", fmt.Errorf("--type is required (rds-instance | rds-cluster | ecs)")
+	case "rds-instance", "rds-cluster":
+		if name == "" {
+			return "", fmt.Errorf("--type %s requires --name", typ)
+		}
+		if cluster != "" || service != "" {
+			return "", fmt.Errorf("--cluster/--service apply only to --type ecs")
+		}
+		return typ + "#" + name, nil
+	case "ecs":
+		if cluster == "" || service == "" {
+			return "", fmt.Errorf("--type ecs requires --cluster and --service")
+		}
+		if name != "" {
+			return "", fmt.Errorf("--name applies only to rds-instance/rds-cluster; use --cluster/--service for ecs")
+		}
+		return "ecs#" + cluster + "/" + service, nil
+	default:
+		return "", fmt.Errorf("unknown --type %q (rds-instance | rds-cluster | ecs)", typ)
+	}
+}
+
+// Add registers a resource as a member of a tag, creating the tag (mode=disabled) if it does not
+// already exist. A resource may belong to only one tag: adding a resource already in a different
+// tag is an error; re-adding it to the same tag upserts (restoreCount 0 preserves whatever
+// restore_count was already stored, matching Schedule's B-9 semantics for crons).
+func Add(ctx context.Context, s *store.Store, tag, resourceID string, restoreCount int) (tagCreated bool, err error) {
+	if err := model.ValidTagName(tag); err != nil {
+		return false, err
+	}
+	typ, err := model.ResourceIDType(resourceID)
+	if err != nil {
+		return false, err
+	}
+	if restoreCount != 0 && typ != model.TypeEcsService {
+		return false, fmt.Errorf("restore count only applies to ecs resources")
+	}
+
+	existing, err := s.GetMember(ctx, resourceID)
+	if err != nil {
+		return false, err
+	}
+	if existing != nil && existing.Tag != tag {
+		return false, fmt.Errorf("%s is already in tag %q (remove it first: cheapskate-cli remove --tag %s ...)", resourceID, existing.Tag, existing.Tag)
+	}
+
+	if t, err := s.GetTag(ctx, tag); err != nil {
+		return false, err
+	} else if t == nil {
+		if err := s.PutTag(ctx, model.TagItem{PK: model.TagPrefix + tag, Mode: model.ModeDisabled}); err != nil {
+			return false, err
+		}
+		tagCreated = true
+	}
+
+	item := model.MemberItem{PK: model.MemberPrefix + resourceID, Tag: tag, Type: typ}
+	switch {
+	case restoreCount > 0:
+		count := int32(restoreCount)
+		item.RestoreCount = &count
+	case existing != nil:
+		item.RestoreCount = existing.RestoreCount
+	}
+
+	if existing != nil {
+		return tagCreated, s.PutMember(ctx, item)
+	}
+	if err := s.CreateMember(ctx, item); err != nil {
+		if errors.Is(err, store.ErrMemberExists) {
+			// Raced with a concurrent add between the GetMember check above and here.
+			if m, gerr := s.GetMember(ctx, resourceID); gerr == nil && m != nil && m.Tag != tag {
+				return tagCreated, fmt.Errorf("%s is already in tag %q", resourceID, m.Tag)
+			}
+			return tagCreated, nil
+		}
+		return tagCreated, err
+	}
+	return tagCreated, nil
+}
+
+// RemoveMember deletes a single member (and its status) from a tag, without touching the tag itself.
+func RemoveMember(ctx context.Context, s *store.Store, tag, resourceID string) error {
+	m, err := s.GetMember(ctx, resourceID)
+	if err != nil {
+		return err
+	}
+	if m == nil {
+		return fmt.Errorf("%s is not a member of any tag", resourceID)
+	}
+	if m.Tag != tag {
+		return fmt.Errorf("%s is in tag %q, not %q", resourceID, m.Tag, tag)
+	}
+	if err := s.Delete(ctx, model.MemberPrefix+resourceID); err != nil {
+		return err
+	}
+	return s.Delete(ctx, model.StatusPrefix+resourceID)
+}
+
+// RemoveTag deletes a tag entirely: all its members, their statuses, its override, and the tag
+// item itself. Members are deleted first so a failure partway through leaves the tag item (and
+// any remaining members) reachable for a retry, rather than an orphaned tag-less member.
+func RemoveTag(ctx context.Context, s *store.Store, tag string) error {
+	members, err := s.ListMembers(ctx, tag)
+	if err != nil {
+		return err
+	}
+	for _, m := range members {
+		resourceID := strings.TrimPrefix(m.PK, model.MemberPrefix)
+		if err := s.Delete(ctx, model.MemberPrefix+resourceID); err != nil {
+			return err
+		}
+		if err := s.Delete(ctx, model.StatusPrefix+resourceID); err != nil {
+			return err
+		}
+	}
+	if err := s.Delete(ctx, model.OverridePrefix+tag); err != nil {
+		return err
+	}
+	return s.Delete(ctx, model.TagPrefix+tag)
+}
+
+// Pin sets mode=pinned with the given desired state on an existing tag. Cron fields are kept; they are inert under mode=pinned and restorable via Schedule.
+func Pin(ctx context.Context, s *store.Store, tag, desired string) error {
 	if err := ValidDesired(desired); err != nil {
 		return err
 	}
-	resourceType, err := model.ResourceIDType(resourceID)
+	existing, err := requireTag(ctx, s, tag)
 	if err != nil {
 		return err
 	}
-	item := model.ConfigItem{
-		PK:      model.ConfigPrefix + resourceID,
-		Type:    resourceType,
-		Mode:    model.ModePinned,
-		Desired: desired,
-	}
-	if existing, err := s.GetConfig(ctx, resourceID); err != nil {
-		return err
-	} else if existing != nil {
-		item.StartCron, item.StopCron = existing.StartCron, existing.StopCron
-		item.Timezone, item.RestoreCount = existing.Timezone, existing.RestoreCount
-	}
-	return s.PutConfig(ctx, item)
+	item := *existing
+	item.Mode, item.Desired = model.ModePinned, desired
+	return s.PutTag(ctx, item)
 }
 
-// ScheduleSpec are the arguments to Schedule. RestoreCount 0 means "leave whatever the existing config already has" (B-9) — to clear it explicitly, remove the resource and re-register it.
+// ScheduleSpec are the arguments to Schedule.
 type ScheduleSpec struct {
-	StartCron    string
-	StopCron     string
-	Timezone     string
-	RestoreCount int
+	StartCron string
+	StopCron  string
+	Timezone  string
 }
 
-// Schedule sets mode=schedule with the given crons and returns the written item.
-func Schedule(ctx context.Context, s *store.Store, resourceID string, spec ScheduleSpec) (model.ConfigItem, error) {
+// Schedule sets mode=schedule with the given crons on an existing tag and returns the written item.
+func Schedule(ctx context.Context, s *store.Store, tag string, spec ScheduleSpec) (model.TagItem, error) {
 	if spec.StartCron == "" && spec.StopCron == "" {
-		return model.ConfigItem{}, fmt.Errorf("schedule requires a start and/or stop cron")
+		return model.TagItem{}, fmt.Errorf("schedule requires a start and/or stop cron")
 	}
 	for _, expr := range []string{spec.StartCron, spec.StopCron} {
 		if expr != "" && !gronx.IsValid(expr) {
-			return model.ConfigItem{}, fmt.Errorf("invalid cron expression %q", expr)
+			return model.TagItem{}, fmt.Errorf("invalid cron expression %q", expr)
 		}
 	}
 	if spec.Timezone != "" {
 		if _, err := time.LoadLocation(spec.Timezone); err != nil {
-			return model.ConfigItem{}, fmt.Errorf("invalid timezone %q", spec.Timezone)
+			return model.TagItem{}, fmt.Errorf("invalid timezone %q", spec.Timezone)
 		}
 	}
-	resourceType, err := model.ResourceIDType(resourceID)
-	if err != nil {
-		return model.ConfigItem{}, err
+	if _, err := requireTag(ctx, s, tag); err != nil {
+		return model.TagItem{}, err
 	}
-	if spec.RestoreCount != 0 && resourceType != model.TypeEcsService {
-		return model.ConfigItem{}, fmt.Errorf("restore count only applies to ecs# resources")
-	}
-	item := model.ConfigItem{
-		PK:        model.ConfigPrefix + resourceID,
-		Type:      resourceType,
+	item := model.TagItem{
+		PK:        model.TagPrefix + tag,
 		Mode:      model.ModeSchedule,
 		StartCron: spec.StartCron,
 		StopCron:  spec.StopCron,
 		Timezone:  spec.Timezone,
 	}
-	if spec.RestoreCount > 0 {
-		count := int32(spec.RestoreCount)
-		item.RestoreCount = &count
-	} else if existing, err := s.GetConfig(ctx, resourceID); err != nil {
-		return model.ConfigItem{}, err
-	} else if existing != nil {
-		// B-9: re-running schedule without -restore-count must not silently drop it, the way it would if Schedule always overwrote the whole item.
-		item.RestoreCount = existing.RestoreCount
-	}
-	if err := s.PutConfig(ctx, item); err != nil {
-		return model.ConfigItem{}, err
+	if err := s.PutTag(ctx, item); err != nil {
+		return model.TagItem{}, err
 	}
 	return item, nil
 }
 
-// Disable sets mode=disabled, keeping the rest of the config.
-func Disable(ctx context.Context, s *store.Store, resourceID string) error {
-	existing, err := s.GetConfig(ctx, resourceID)
+// Disable sets mode=disabled, keeping the rest of the tag config.
+func Disable(ctx context.Context, s *store.Store, tag string) error {
+	existing, err := requireTag(ctx, s, tag)
 	if err != nil {
 		return err
 	}
-	if existing == nil {
-		return fmt.Errorf("%s is not registered", resourceID)
-	}
 	existing.Mode = model.ModeDisabled
-	return s.PutConfig(ctx, *existing)
+	return s.PutTag(ctx, *existing)
 }
 
-// SetOverride writes a time-limited override and returns its expiry.
-func SetOverride(ctx context.Context, s *store.Store, resourceID, desired string, d time.Duration, now time.Time) (time.Time, error) {
+// SetOverride writes a time-limited override for a tag and returns its expiry.
+func SetOverride(ctx context.Context, s *store.Store, tag, desired string, d time.Duration, now time.Time) (time.Time, error) {
 	if err := ValidDesired(desired); err != nil {
 		return time.Time{}, err
 	}
 	if d <= 0 {
 		return time.Time{}, fmt.Errorf("override duration must be positive")
 	}
-	existing, err := s.GetConfig(ctx, resourceID)
+	existing, err := requireTag(ctx, s, tag)
 	if err != nil {
 		return time.Time{}, err
 	}
-	if existing == nil {
-		return time.Time{}, fmt.Errorf("%s is not registered (an override without a config has no effect)", resourceID)
-	}
-	// B-6: disabled is a stronger stop than override — ReconcileOne skips disabled resources before it ever looks at the override, so accepting one here would silently do nothing.
+	// B-6: disabled is a stronger stop than override — the reconciler skips disabled tags before it ever looks at the override, so accepting one here would silently do nothing.
 	if existing.Mode == model.ModeDisabled {
-		return time.Time{}, fmt.Errorf("%s is disabled; disabled overrides mode=schedule/pinned but is itself not overridable (schedule or pin it first)", resourceID)
+		return time.Time{}, fmt.Errorf("tag %q is disabled; disabled overrides mode=schedule/pinned but is itself not overridable (schedule or pin it first)", tag)
 	}
 	expiresAt := now.Add(d)
-	if err := s.PutOverride(ctx, resourceID, model.Override{Desired: desired, ExpiresAt: expiresAt.Unix()}); err != nil {
+	if err := s.PutOverride(ctx, tag, model.Override{Desired: desired, ExpiresAt: expiresAt.Unix()}); err != nil {
 		return time.Time{}, err
 	}
 	return expiresAt, nil
 }
 
 // ClearOverride removes the override item now (instead of waiting for TTL).
-func ClearOverride(ctx context.Context, s *store.Store, resourceID string) error {
-	return s.Delete(ctx, model.OverridePrefix+resourceID)
+func ClearOverride(ctx context.Context, s *store.Store, tag string) error {
+	return s.Delete(ctx, model.OverridePrefix+tag)
 }
 
-// Remove deletes config, override, and status.
-func Remove(ctx context.Context, s *store.Store, resourceID string) error {
-	for _, prefix := range []string{model.ConfigPrefix, model.OverridePrefix, model.StatusPrefix} {
-		if err := s.Delete(ctx, prefix+resourceID); err != nil {
-			return err
-		}
+// requireTag fetches and validates an existing tag, since Pin/Schedule/Disable/SetOverride must
+// not silently create one from a typo — unlike Add, which creates on first use by design.
+func requireTag(ctx context.Context, s *store.Store, tag string) (*model.TagItem, error) {
+	if err := model.ValidTagName(tag); err != nil {
+		return nil, err
 	}
-	return nil
+	existing, err := s.GetTag(ctx, tag)
+	if err != nil {
+		return nil, err
+	}
+	if existing == nil {
+		return nil, fmt.Errorf("tag %q not found (create it by adding a member: cheapskate-cli add --tag %s ...)", tag, tag)
+	}
+	return existing, nil
 }
 
 // ValidDesired checks a desired-state argument.

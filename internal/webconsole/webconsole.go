@@ -21,17 +21,17 @@ var templateFS embed.FS
 
 // Server serves the web console. Base is the URL path prefix as seen by the browser (the API Gateway stage, e.g. "/console"); empty when serving locally.
 type Server struct {
-	store  *store.Store
-	base   string
-	loc    *time.Location
-	index  *template.Template
-	detail *template.Template
-	now    func() time.Time
+	store *store.Store
+	base  string
+	loc   *time.Location
+	index *template.Template
+	tag   *template.Template
+	now   func() time.Time
 }
 
 func New(s *store.Store, base string, loc *time.Location) *Server {
 	funcs := template.FuncMap{
-		"cfgDesc": describeConfig,
+		"tagDesc": describeTag,
 		"ovDesc": func(o *model.Override) string {
 			if o == nil {
 				return ""
@@ -49,19 +49,19 @@ func New(s *store.Store, base string, loc *time.Location) *Server {
 		return template.Must(template.New("base.gohtml").Funcs(funcs).ParseFS(templateFS, "templates/base.gohtml", "templates/"+page))
 	}
 	return &Server{
-		store:  s,
-		base:   strings.TrimSuffix(base, "/"),
-		loc:    loc,
-		index:  parse("index.gohtml"),
-		detail: parse("detail.gohtml"),
-		now:    time.Now,
+		store: s,
+		base:  strings.TrimSuffix(base, "/"),
+		loc:   loc,
+		index: parse("index.gohtml"),
+		tag:   parse("tag.gohtml"),
+		now:   time.Now,
 	}
 }
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", s.handleIndex)
-	mux.HandleFunc("GET /resource", s.handleResource)
+	mux.HandleFunc("GET /tag", s.handleTag)
 	mux.HandleFunc("POST /op", s.handleOp)
 	return securityHeaders(mux)
 }
@@ -82,8 +82,8 @@ type view struct {
 	Base string
 	Msg  string
 	Err  string
-	Row  ops.Row
-	Rows []ops.Row
+	Row  ops.TagRow
+	Rows []ops.TagRow
 }
 
 func (s *Server) view(r *http.Request) view {
@@ -94,7 +94,7 @@ func (s *Server) view(r *http.Request) view {
 	}
 }
 
-func describeConfig(item model.ConfigItem) string {
+func describeTag(item model.TagItem) string {
 	switch item.Mode {
 	case model.ModePinned:
 		return item.Desired
@@ -118,7 +118,7 @@ func describeConfig(item model.ConfigItem) string {
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	rows, err := ops.List(r.Context(), s.store, s.now())
 	if err != nil {
-		http.Error(w, "list resources: "+err.Error(), http.StatusInternalServerError)
+		http.Error(w, "list tags: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 	v := s.view(r)
@@ -126,20 +126,20 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	s.render(w, s.index, v)
 }
 
-func (s *Server) handleResource(w http.ResponseWriter, r *http.Request) {
-	resourceID := r.URL.Query().Get("id")
-	if _, err := model.ResourceIDType(resourceID); err != nil {
+func (s *Server) handleTag(w http.ResponseWriter, r *http.Request) {
+	tag := r.URL.Query().Get("name")
+	if err := model.ValidTagName(tag); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	row, err := ops.Get(r.Context(), s.store, resourceID, s.now())
+	row, err := ops.Get(r.Context(), s.store, tag, s.now())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
 	v := s.view(r)
 	v.Row = row
-	s.render(w, s.detail, v)
+	s.render(w, s.tag, v)
 }
 
 func (s *Server) render(w http.ResponseWriter, t *template.Template, v view) {
@@ -155,8 +155,8 @@ func (s *Server) handleOp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	action := r.PostFormValue("action")
-	resourceID := r.PostFormValue("id")
-	if _, err := model.ResourceIDType(resourceID); err != nil {
+	tag := r.PostFormValue("tag")
+	if err := model.ValidTagName(tag); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -164,10 +164,41 @@ func (s *Server) handleOp(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	var msg string
 	var err error
+	removedTag := false
 	switch action {
+	case "add":
+		resourceID, aerr := ops.AssembleResourceID(
+			r.PostFormValue("type"), r.PostFormValue("name"), r.PostFormValue("cluster"), r.PostFormValue("service"))
+		if aerr != nil {
+			err = aerr
+			break
+		}
+		var restoreCount int
+		if raw := strings.TrimSpace(r.PostFormValue("restore_count")); raw != "" {
+			if restoreCount, err = strconv.Atoi(raw); err != nil {
+				err = fmt.Errorf("restore count must be a number, got %q", raw)
+				break
+			}
+		}
+		var tagCreated bool
+		tagCreated, err = ops.Add(ctx, s.store, tag, resourceID, restoreCount)
+		if err == nil {
+			msg = "added " + resourceID
+			if tagCreated {
+				msg += " (created tag)"
+			}
+		}
+	case "remove-member":
+		resourceID := r.PostFormValue("id")
+		err = ops.RemoveMember(ctx, s.store, tag, resourceID)
+		msg = "removed " + resourceID
+	case "remove-tag":
+		err = ops.RemoveTag(ctx, s.store, tag)
+		msg = "removed tag " + tag
+		removedTag = err == nil
 	case "pin":
 		desired := r.PostFormValue("desired")
-		err = ops.Pin(ctx, s.store, resourceID, desired)
+		err = ops.Pin(ctx, s.store, tag, desired)
 		msg = "pinned to " + desired
 	case "schedule":
 		spec := ops.ScheduleSpec{
@@ -175,16 +206,10 @@ func (s *Server) handleOp(w http.ResponseWriter, r *http.Request) {
 			StopCron:  strings.TrimSpace(r.PostFormValue("stop")),
 			Timezone:  strings.TrimSpace(r.PostFormValue("timezone")),
 		}
-		if raw := strings.TrimSpace(r.PostFormValue("restore_count")); raw != "" {
-			if spec.RestoreCount, err = strconv.Atoi(raw); err != nil {
-				err = fmt.Errorf("restore count must be a number, got %q", raw)
-				break
-			}
-		}
-		_, err = ops.Schedule(ctx, s.store, resourceID, spec)
+		_, err = ops.Schedule(ctx, s.store, tag, spec)
 		msg = "schedule saved"
 	case "disable":
-		err = ops.Disable(ctx, s.store, resourceID)
+		err = ops.Disable(ctx, s.store, tag)
 		msg = "disabled"
 	case "override":
 		desired := r.PostFormValue("desired")
@@ -194,22 +219,19 @@ func (s *Server) handleOp(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		var until time.Time
-		if until, err = ops.SetOverride(ctx, s.store, resourceID, desired, d, s.now()); err == nil {
+		if until, err = ops.SetOverride(ctx, s.store, tag, desired, d, s.now()); err == nil {
 			msg = fmt.Sprintf("override %s until %s", desired, until.In(s.loc).Format("2006-01-02 15:04 MST"))
 		}
 	case "clear-override":
-		err = ops.ClearOverride(ctx, s.store, resourceID)
+		err = ops.ClearOverride(ctx, s.store, tag)
 		msg = "override cleared"
-	case "remove":
-		err = ops.Remove(ctx, s.store, resourceID)
-		msg = "removed " + resourceID
 	default:
 		http.Error(w, fmt.Sprintf("unknown action %q", action), http.StatusBadRequest)
 		return
 	}
 
-	target := s.base + "/resource?id=" + url.QueryEscape(resourceID)
-	if action == "remove" && err == nil {
+	target := s.base + "/tag?name=" + url.QueryEscape(tag)
+	if removedTag {
 		target = s.base + "/"
 	}
 	sep := "&"

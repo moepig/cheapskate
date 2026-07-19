@@ -98,11 +98,11 @@ func TestRdsInstanceStopStart(t *testing.T) {
 		})
 	tgt := &RdsInstanceTarget{Client: c}
 
-	require.NoError(t, tgt.Stop(context.Background(), "db", model.Config{}, model.Status{}))
-	_, err := tgt.Start(context.Background(), "db", model.Config{}, model.Status{})
+	require.NoError(t, tgt.Stop(context.Background(), "db", model.Member{}, model.Status{}))
+	_, err := tgt.Start(context.Background(), "db", model.Member{}, model.Status{})
 	require.NoError(t, err)
 
-	saved, err := tgt.PrepareStop(context.Background(), "db", model.Config{}, model.Status{})
+	saved, err := tgt.PrepareStop(context.Background(), "db", model.Member{}, model.Status{})
 	require.NoError(t, err)
 	assert.Nil(t, saved, "RDS has nothing to save before stop")
 }
@@ -154,7 +154,7 @@ func TestRdsClusterStopStart(t *testing.T) {
 		})
 	tgt := &RdsClusterTarget{Client: c}
 
-	require.NoError(t, tgt.Stop(context.Background(), "cluster", model.Config{}, model.Status{}))
-	_, err := tgt.Start(context.Background(), "cluster", model.Config{}, model.Status{})
+	require.NoError(t, tgt.Stop(context.Background(), "cluster", model.Member{}, model.Status{}))
+	_, err := tgt.Start(context.Background(), "cluster", model.Member{}, model.Status{})
 	require.NoError(t, err)
 }

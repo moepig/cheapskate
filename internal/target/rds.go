@@ -42,16 +42,16 @@ func (t *RdsInstanceTarget) Describe(ctx context.Context, ref string) (model.Obs
 	return rdsObservation(*out.DBInstances[0].DBInstanceStatus), nil
 }
 
-func (t *RdsInstanceTarget) PrepareStop(_ context.Context, _ string, _ model.Config, _ model.Status) (*model.SavedState, error) {
+func (t *RdsInstanceTarget) PrepareStop(_ context.Context, _ string, _ model.Member, _ model.Status) (*model.SavedState, error) {
 	return nil, nil
 }
 
-func (t *RdsInstanceTarget) Stop(ctx context.Context, ref string, _ model.Config, _ model.Status) error {
+func (t *RdsInstanceTarget) Stop(ctx context.Context, ref string, _ model.Member, _ model.Status) error {
 	_, err := t.Client.StopDBInstance(ctx, &rds.StopDBInstanceInput{DBInstanceIdentifier: &ref})
 	return err
 }
 
-func (t *RdsInstanceTarget) Start(ctx context.Context, ref string, _ model.Config, _ model.Status) (*model.SavedState, error) {
+func (t *RdsInstanceTarget) Start(ctx context.Context, ref string, _ model.Member, _ model.Status) (*model.SavedState, error) {
 	_, err := t.Client.StartDBInstance(ctx, &rds.StartDBInstanceInput{DBInstanceIdentifier: &ref})
 	return nil, err
 }
@@ -78,16 +78,16 @@ func (t *RdsClusterTarget) Describe(ctx context.Context, ref string) (model.Obse
 	return rdsObservation(*out.DBClusters[0].Status), nil
 }
 
-func (t *RdsClusterTarget) PrepareStop(_ context.Context, _ string, _ model.Config, _ model.Status) (*model.SavedState, error) {
+func (t *RdsClusterTarget) PrepareStop(_ context.Context, _ string, _ model.Member, _ model.Status) (*model.SavedState, error) {
 	return nil, nil
 }
 
-func (t *RdsClusterTarget) Stop(ctx context.Context, ref string, _ model.Config, _ model.Status) error {
+func (t *RdsClusterTarget) Stop(ctx context.Context, ref string, _ model.Member, _ model.Status) error {
 	_, err := t.Client.StopDBCluster(ctx, &rds.StopDBClusterInput{DBClusterIdentifier: &ref})
 	return err
 }
 
-func (t *RdsClusterTarget) Start(ctx context.Context, ref string, _ model.Config, _ model.Status) (*model.SavedState, error) {
+func (t *RdsClusterTarget) Start(ctx context.Context, ref string, _ model.Member, _ model.Status) (*model.SavedState, error) {
 	_, err := t.Client.StartDBCluster(ctx, &rds.StartDBClusterInput{DBClusterIdentifier: &ref})
 	return nil, err
 }

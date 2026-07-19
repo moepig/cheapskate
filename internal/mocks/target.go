@@ -60,47 +60,47 @@ func (mr *MockTargetMockRecorder) Describe(ctx, ref any) *gomock.Call {
 }
 
 // PrepareStop mocks base method.
-func (m *MockTarget) PrepareStop(ctx context.Context, ref string, cfg model.Config, status model.Status) (*model.SavedState, error) {
+func (m *MockTarget) PrepareStop(ctx context.Context, ref string, member model.Member, status model.Status) (*model.SavedState, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "PrepareStop", ctx, ref, cfg, status)
+	ret := m.ctrl.Call(m, "PrepareStop", ctx, ref, member, status)
 	ret0, _ := ret[0].(*model.SavedState)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // PrepareStop indicates an expected call of PrepareStop.
-func (mr *MockTargetMockRecorder) PrepareStop(ctx, ref, cfg, status any) *gomock.Call {
+func (mr *MockTargetMockRecorder) PrepareStop(ctx, ref, member, status any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PrepareStop", reflect.TypeOf((*MockTarget)(nil).PrepareStop), ctx, ref, cfg, status)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PrepareStop", reflect.TypeOf((*MockTarget)(nil).PrepareStop), ctx, ref, member, status)
 }
 
 // Start mocks base method.
-func (m *MockTarget) Start(ctx context.Context, ref string, cfg model.Config, status model.Status) (*model.SavedState, error) {
+func (m *MockTarget) Start(ctx context.Context, ref string, member model.Member, status model.Status) (*model.SavedState, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Start", ctx, ref, cfg, status)
+	ret := m.ctrl.Call(m, "Start", ctx, ref, member, status)
 	ret0, _ := ret[0].(*model.SavedState)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // Start indicates an expected call of Start.
-func (mr *MockTargetMockRecorder) Start(ctx, ref, cfg, status any) *gomock.Call {
+func (mr *MockTargetMockRecorder) Start(ctx, ref, member, status any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Start", reflect.TypeOf((*MockTarget)(nil).Start), ctx, ref, cfg, status)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Start", reflect.TypeOf((*MockTarget)(nil).Start), ctx, ref, member, status)
 }
 
 // Stop mocks base method.
-func (m *MockTarget) Stop(ctx context.Context, ref string, cfg model.Config, status model.Status) error {
+func (m *MockTarget) Stop(ctx context.Context, ref string, member model.Member, status model.Status) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Stop", ctx, ref, cfg, status)
+	ret := m.ctrl.Call(m, "Stop", ctx, ref, member, status)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // Stop indicates an expected call of Stop.
-func (mr *MockTargetMockRecorder) Stop(ctx, ref, cfg, status any) *gomock.Call {
+func (mr *MockTargetMockRecorder) Stop(ctx, ref, member, status any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Stop", reflect.TypeOf((*MockTarget)(nil).Stop), ctx, ref, cfg, status)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Stop", reflect.TypeOf((*MockTarget)(nil).Stop), ctx, ref, member, status)
 }
 
 // Type mocks base method.

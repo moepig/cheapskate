@@ -65,7 +65,7 @@ func (t *EcsServiceTarget) Describe(ctx context.Context, ref string) (model.Obse
 // PrepareStop is read-only: it determines what must be restorable on Start and returns it for the caller to persist before Stop mutates anything.
 //
 // A desiredCount or scaling min/max of 0 at this point means cheapskate itself already stopped the service (or someone else pinned it to 0/0); that field is left nil so the caller's write does not clobber a real saved value with a zero (B-2).
-func (t *EcsServiceTarget) PrepareStop(ctx context.Context, ref string, _ model.Config, _ model.Status) (*model.SavedState, error) {
+func (t *EcsServiceTarget) PrepareStop(ctx context.Context, ref string, _ model.Member, _ model.Status) (*model.SavedState, error) {
 	cluster, service, err := parseEcsRef(ref)
 	if err != nil {
 		return nil, err
@@ -89,7 +89,7 @@ func (t *EcsServiceTarget) PrepareStop(ctx context.Context, ref string, _ model.
 	return saved, nil
 }
 
-func (t *EcsServiceTarget) Stop(ctx context.Context, ref string, _ model.Config, _ model.Status) error {
+func (t *EcsServiceTarget) Stop(ctx context.Context, ref string, _ model.Member, _ model.Status) error {
 	cluster, service, err := parseEcsRef(ref)
 	if err != nil {
 		return err
@@ -108,12 +108,12 @@ func (t *EcsServiceTarget) Stop(ctx context.Context, ref string, _ model.Config,
 	return err
 }
 
-func (t *EcsServiceTarget) Start(ctx context.Context, ref string, cfg model.Config, status model.Status) (*model.SavedState, error) {
+func (t *EcsServiceTarget) Start(ctx context.Context, ref string, member model.Member, status model.Status) (*model.SavedState, error) {
 	cluster, service, err := parseEcsRef(ref)
 	if err != nil {
 		return nil, err
 	}
-	count := restoreCount(cfg, status)
+	count := restoreCount(member.RestoreCount, status)
 	if status.SavedScalingMin != nil {
 		max := *status.SavedScalingMin
 		if status.SavedScalingMax != nil {
@@ -127,10 +127,10 @@ func (t *EcsServiceTarget) Start(ctx context.Context, ref string, cfg model.Conf
 	return nil, err
 }
 
-// restoreCount: config.restore_count > count saved at stop time > 1.
-func restoreCount(cfg model.Config, status model.Status) int32 {
-	if cfg.RestoreCount != nil && *cfg.RestoreCount > 0 {
-		return *cfg.RestoreCount
+// restoreCount: member.restore_count > count saved at stop time > 1.
+func restoreCount(memberRestoreCount *int32, status model.Status) int32 {
+	if memberRestoreCount != nil && *memberRestoreCount > 0 {
+		return *memberRestoreCount
 	}
 	if status.SavedDesiredCount != nil && *status.SavedDesiredCount > 0 {
 		return *status.SavedDesiredCount

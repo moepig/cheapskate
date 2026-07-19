@@ -10,43 +10,43 @@ import (
 	"cheapskate/internal/model"
 )
 
-// ResolveDesired returns "running" / "stopped", or "" when the resource is disabled.
-func ResolveDesired(cfg model.Config, override *model.Override, now time.Time, defaultTimezone string) (string, error) {
-	if cfg.Mode == model.ModeDisabled {
+// ResolveDesired returns "running" / "stopped", or "" when the tag is disabled.
+func ResolveDesired(tag model.TagConfig, override *model.Override, now time.Time, defaultTimezone string) (string, error) {
+	if tag.Mode == model.ModeDisabled {
 		return "", nil
 	}
 	if override != nil && override.ExpiresAt > now.Unix() {
 		return override.Desired, nil
 	}
-	if cfg.Mode == model.ModePinned {
-		return cfg.Desired, nil
+	if tag.Mode == model.ModePinned {
+		return tag.Desired, nil
 	}
-	return fromSchedule(cfg, now, defaultTimezone)
+	return fromSchedule(tag, now, defaultTimezone)
 }
 
-func fromSchedule(cfg model.Config, now time.Time, defaultTimezone string) (string, error) {
-	tzName := cfg.Timezone
+func fromSchedule(tag model.TagConfig, now time.Time, defaultTimezone string) (string, error) {
+	tzName := tag.Timezone
 	if tzName == "" {
 		tzName = defaultTimezone
 	}
 	loc, err := time.LoadLocation(tzName)
 	if err != nil {
-		return "", fmt.Errorf("%s: invalid timezone %q: %w", cfg.ResourceID, tzName, err)
+		return "", fmt.Errorf("tag %s: invalid timezone %q: %w", tag.Name, tzName, err)
 	}
 	localNow := now.In(loc)
 
-	lastStart, err := prev(cfg.StartCron, localNow)
+	lastStart, err := prev(tag.StartCron, localNow)
 	if err != nil {
-		return "", fmt.Errorf("%s: start_cron: %w", cfg.ResourceID, err)
+		return "", fmt.Errorf("tag %s: start_cron: %w", tag.Name, err)
 	}
-	lastStop, err := prev(cfg.StopCron, localNow)
+	lastStop, err := prev(tag.StopCron, localNow)
 	if err != nil {
-		return "", fmt.Errorf("%s: stop_cron: %w", cfg.ResourceID, err)
+		return "", fmt.Errorf("tag %s: stop_cron: %w", tag.Name, err)
 	}
 
 	switch {
 	case lastStart == nil && lastStop == nil:
-		return "", fmt.Errorf("%s: mode=schedule requires start_cron and/or stop_cron", cfg.ResourceID)
+		return "", fmt.Errorf("tag %s: mode=schedule requires start_cron and/or stop_cron", tag.Name)
 	case lastStart == nil:
 		return model.DesiredStopped, nil
 	case lastStop == nil:

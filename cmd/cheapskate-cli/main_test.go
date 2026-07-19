@@ -16,9 +16,9 @@ func TestFlagMisuseReturnsErrorInsteadOfExiting(t *testing.T) {
 		want string
 	}{
 		{"unknown global flag", []string{"-bogus"}, "flag provided but not defined"},
-		{"unknown schedule flag", []string{"-table", "t", "schedule", "rds-instance#db", "-bogus"}, "flag provided but not defined"},
-		{"unknown override flag", []string{"-table", "t", "override", "rds-instance#db", "running", "-for", "2h", "-bogus"}, "flag provided but not defined"},
-		{"malformed duration", []string{"-table", "t", "override", "rds-instance#db", "running", "-for", "not-a-duration"}, "invalid value"},
+		{"unknown schedule flag", []string{"-table", "t", "schedule", "--tag", "dev", "-bogus"}, "flag provided but not defined"},
+		{"unknown override flag", []string{"-table", "t", "override", "--tag", "dev", "running", "-for", "2h", "-bogus"}, "flag provided but not defined"},
+		{"malformed duration", []string{"-table", "t", "override", "--tag", "dev", "running", "-for", "not-a-duration"}, "invalid value"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

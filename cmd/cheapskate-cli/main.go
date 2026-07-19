@@ -1,4 +1,6 @@
-// cheapskate-cli is the cheapskate configuration CLI. It manipulates the config#, override#, and status# items in the DynamoDB state table; it never calls the RDS/ECS APIs itself (the reconciler Lambda does that).
+// cheapskate-cli is the cheapskate configuration CLI. It manipulates the tag#, member#, and
+// override# items in the DynamoDB state table; it never calls the RDS/ECS APIs itself (the
+// reconciler Lambda does that).
 package main
 
 import (
@@ -26,21 +28,32 @@ Usage:
   cheapskate-cli [-table TABLE] <command> [arguments]
 
 Commands:
-  list                                     registered resources and their state
-  show <resource-id>                       config + override + status as JSON
-  pin <resource-id> running|stopped        keep the resource in a fixed state
-  schedule <resource-id> [-start CRON] [-stop CRON] [-timezone TZ] [-restore-count N]
-                                           cron-based start/stop
-  disable <resource-id>                    keep the config but stop managing
-  override <resource-id> running|stopped -for DURATION
-                                           temporary override (expires via TTL)
-                                           rejected if the resource is disabled: disabled is a
-                                           stronger stop than override, so schedule or pin it first
-  override <resource-id> -clear            remove the override now
-  remove <resource-id>                     delete config, override, and status
+  list                                     all tags with their members and state
+  show --tag NAME                          tag config + override + members as JSON
+  add --tag NAME --type TYPE <resource flags> [-restore-count N]
+                                           add a resource to a tag; creates the tag on
+                                           first add (mode=disabled until pinned or
+                                           scheduled). A resource belongs to exactly
+                                           one tag.
+  remove --tag NAME [--type TYPE <resource flags>]
+                                           with resource flags: remove that member
+                                           (and its status); without: remove the whole
+                                           tag, its members, override, and statuses
+  pin --tag NAME running|stopped           keep every member in a fixed state
+  schedule --tag NAME [-start CRON] [-stop CRON] [-timezone TZ]
+                                           cron-based start/stop for all members
+  disable --tag NAME                       keep the config but stop managing
+  override --tag NAME running|stopped -for DURATION
+                                           temporary override for all members (expires
+                                           via TTL); rejected while the tag is disabled
+  override --tag NAME -clear               remove the override now
 
-Resource IDs:
-  rds-instance#<identifier> | rds-cluster#<identifier> | ecs#<cluster>/<service>
+Resource flags (add / remove):
+  --type rds-instance|rds-cluster|ecs
+  --name IDENTIFIER                        for rds-instance and rds-cluster
+  --cluster CLUSTER --service SERVICE      for ecs
+  -restore-count N                         ecs only: desiredCount used on start
+                                           (default: the count saved at stop time, then 1)
 
 The table name comes from -table or the CHEAPSKATE_TABLE environment variable. AWS credentials/region use the standard SDK chain.
 `
@@ -82,6 +95,10 @@ func run(args []string) error {
 		return cmdList(ctx, s)
 	case "show":
 		return cmdShow(ctx, s, rest)
+	case "add":
+		return cmdAdd(ctx, s, rest)
+	case "remove":
+		return cmdRemove(ctx, s, rest)
 	case "pin":
 		return cmdPin(ctx, s, rest)
 	case "schedule":
@@ -90,12 +107,47 @@ func run(args []string) error {
 		return cmdDisable(ctx, s, rest)
 	case "override":
 		return cmdOverride(ctx, s, rest)
-	case "remove":
-		return cmdRemove(ctx, s, rest)
 	default:
 		global.Usage()
 		return fmt.Errorf("unknown command %q", command)
 	}
+}
+
+// parseInterleaved parses fs over args, collecting non-flag tokens as positionals so flags and
+// positionals (only ever "running"/"stopped" here, which never start with "-") may appear in any
+// order — e.g. both "pin --tag dev stopped" and "pin stopped --tag dev" work.
+func parseInterleaved(fs *flag.FlagSet, args []string) ([]string, error) {
+	var pos []string
+	for {
+		if err := fs.Parse(args); err != nil {
+			return nil, err
+		}
+		args = fs.Args()
+		if len(args) == 0 {
+			return pos, nil
+		}
+		pos, args = append(pos, args[0]), args[1:]
+	}
+}
+
+// resourceFlags are the --type/--name/--cluster/--service flags shared by add and remove.
+type resourceFlags struct {
+	typ, name, cluster, service string
+}
+
+func addResourceFlags(fs *flag.FlagSet, r *resourceFlags) {
+	fs.StringVar(&r.typ, "type", "", "resource type: rds-instance | rds-cluster | ecs")
+	fs.StringVar(&r.name, "name", "", "RDS instance/cluster identifier (rds types only)")
+	fs.StringVar(&r.cluster, "cluster", "", "ECS cluster name (ecs only)")
+	fs.StringVar(&r.service, "service", "", "ECS service name (ecs only)")
+}
+
+func (r *resourceFlags) given() bool {
+	return r.typ != "" || r.name != "" || r.cluster != "" || r.service != ""
+}
+
+func (r *resourceFlags) resourceID() (string, error) {
+	return ops.AssembleResourceID(r.typ, r.name, r.cluster, r.service)
 }
 
 func cmdList(ctx context.Context, s *store.Store) error {
@@ -104,20 +156,23 @@ func cmdList(ctx context.Context, s *store.Store) error {
 		return err
 	}
 	w := tabwriter.NewWriter(os.Stdout, 2, 8, 2, ' ', 0)
-	fmt.Fprintln(w, "RESOURCE\tMODE\tCONFIG\tOVERRIDE\tLAST ACTION\tOBSERVED(AT LAST ACTION)")
+	fmt.Fprintln(w, "TAG / MEMBER\tMODE\tCONFIG\tOVERRIDE\tLAST ACTION\tOBSERVED(AT LAST ACTION)")
 	for _, row := range rows {
 		if row.Err != nil {
-			fmt.Fprintf(w, "%s\terror: %s\t\t\t\t\n", row.ResourceID, row.Err)
+			fmt.Fprintf(w, "%s\terror: %s\t\t\t\t\n", row.Name, row.Err)
 			continue
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
-			row.ResourceID, row.Config.Mode, describeConfig(row.Config), describeOverride(row.Override),
-			describeAction(row.Status), row.Status.ObservedState)
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t\t\n",
+			row.Name, row.Tag.Mode, describeTag(row.Tag), describeOverride(row.Override))
+		for _, m := range row.Members {
+			fmt.Fprintf(w, "  %s\t\t\t\t%s\t%s\n",
+				m.ResourceID, describeAction(m.Status), m.Status.ObservedState)
+		}
 	}
 	return w.Flush()
 }
 
-func describeConfig(item model.ConfigItem) string {
+func describeTag(item model.TagItem) string {
 	switch item.Mode {
 	case model.ModePinned:
 		return item.Desired
@@ -152,129 +207,205 @@ func describeAction(st model.Status) string {
 	return st.LastAction + " at " + st.LastActionAt
 }
 
+// showMember/showOutput shape cmdShow's JSON so members resolve their status inline, per the
+// "confirmation commands resolve the tag's applied resources" requirement.
+type showMember struct {
+	ResourceID   string       `json:"resource_id"`
+	Type         string       `json:"type"`
+	RestoreCount *int32       `json:"restore_count,omitempty"`
+	Status       model.Status `json:"status"`
+}
+
+type showOutput struct {
+	Tag      model.TagItem `json:"tag"`
+	Override any           `json:"override,omitempty"`
+	Members  []showMember  `json:"members"`
+}
+
 func cmdShow(ctx context.Context, s *store.Store, args []string) error {
-	resourceID, err := resourceIDArg(args, 1)
+	fs := flag.NewFlagSet("show", flag.ContinueOnError)
+	var tag string
+	fs.StringVar(&tag, "tag", "", "tag name")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if tag == "" {
+		return fmt.Errorf("--tag is required")
+	}
+	row, err := ops.Get(ctx, s, tag, time.Now())
 	if err != nil {
 		return err
 	}
-	row, err := ops.Get(ctx, s, resourceID, time.Now())
-	if err != nil {
-		return err
-	}
-	out := map[string]any{"config": row.Config, "status": row.Status}
+	out := showOutput{Tag: row.Tag}
 	if row.Override != nil {
-		out["override"] = map[string]any{
+		out.Override = map[string]any{
 			"desired":    row.Override.Desired,
 			"expires_at": time.Unix(row.Override.ExpiresAt, 0).UTC().Format(time.RFC3339),
 		}
+	}
+	for _, m := range row.Members {
+		out.Members = append(out.Members, showMember{
+			ResourceID: m.ResourceID, Type: m.Member.Type, RestoreCount: m.Member.RestoreCount, Status: m.Status,
+		})
 	}
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	return enc.Encode(out)
 }
 
-func cmdPin(ctx context.Context, s *store.Store, args []string) error {
-	resourceID, err := resourceIDArg(args, 2)
+func cmdAdd(ctx context.Context, s *store.Store, args []string) error {
+	fs := flag.NewFlagSet("add", flag.ContinueOnError)
+	var tag string
+	var rf resourceFlags
+	var restoreCount int
+	fs.StringVar(&tag, "tag", "", "tag name")
+	addResourceFlags(fs, &rf)
+	fs.IntVar(&restoreCount, "restore-count", 0, "ecs only: desiredCount used on start")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if tag == "" {
+		return fmt.Errorf("--tag is required")
+	}
+	resourceID, err := rf.resourceID()
 	if err != nil {
 		return err
 	}
-	if err := ops.Pin(ctx, s, resourceID, args[1]); err != nil {
-		return err
-	}
-	fmt.Printf("pinned %s to %s\n", resourceID, args[1])
-	return nil
-}
-
-func cmdSchedule(ctx context.Context, s *store.Store, args []string) error {
-	resourceID, err := resourceIDArg(args, 1)
+	tagCreated, err := ops.Add(ctx, s, tag, resourceID, restoreCount)
 	if err != nil {
 		return err
 	}
-	fs := flag.NewFlagSet("schedule", flag.ContinueOnError)
-	startCron := fs.String("start", "", "cron for starting (5-field)")
-	stopCron := fs.String("stop", "", "cron for stopping (5-field)")
-	timezone := fs.String("timezone", "", "IANA timezone for the crons")
-	restoreCount := fs.Int("restore-count", 0, "ECS desiredCount on start")
-	if err := fs.Parse(args[1:]); err != nil {
-		return err
+	fmt.Printf("added %s to tag %q\n", resourceID, tag)
+	if tagCreated {
+		fmt.Printf("(created tag %q, mode=disabled — pin or schedule it)\n", tag)
 	}
-
-	item, err := ops.Schedule(ctx, s, resourceID, ops.ScheduleSpec{
-		StartCron: *startCron, StopCron: *stopCron, Timezone: *timezone, RestoreCount: *restoreCount,
-	})
-	if err != nil {
-		return err
-	}
-	fmt.Printf("scheduled %s (%s)\n", resourceID, describeConfig(item))
-	return nil
-}
-
-func cmdDisable(ctx context.Context, s *store.Store, args []string) error {
-	resourceID, err := resourceIDArg(args, 1)
-	if err != nil {
-		return err
-	}
-	if err := ops.Disable(ctx, s, resourceID); err != nil {
-		return err
-	}
-	fmt.Printf("disabled %s\n", resourceID)
-	return nil
-}
-
-func cmdOverride(ctx context.Context, s *store.Store, args []string) error {
-	resourceID, err := resourceIDArg(args, 1)
-	if err != nil {
-		return err
-	}
-	rest := args[1:]
-	var desired string
-	if len(rest) > 0 && !strings.HasPrefix(rest[0], "-") {
-		desired, rest = rest[0], rest[1:]
-	}
-	fs := flag.NewFlagSet("override", flag.ContinueOnError)
-	duration := fs.Duration("for", 0, "how long the override lasts (e.g. 2h, 90m)")
-	clear := fs.Bool("clear", false, "remove the override")
-	if err := fs.Parse(rest); err != nil {
-		return err
-	}
-
-	if *clear {
-		if err := ops.ClearOverride(ctx, s, resourceID); err != nil {
-			return err
-		}
-		fmt.Printf("cleared override on %s\n", resourceID)
-		return nil
-	}
-	if desired == "" || *duration <= 0 {
-		return fmt.Errorf("override requires a desired state and -for DURATION (or -clear)")
-	}
-	expiresAt, err := ops.SetOverride(ctx, s, resourceID, desired, *duration, time.Now())
-	if err != nil {
-		return err
-	}
-	fmt.Printf("override: %s %s until %s\n", resourceID, desired, expiresAt.Local().Format("2006-01-02 15:04"))
 	return nil
 }
 
 func cmdRemove(ctx context.Context, s *store.Store, args []string) error {
-	resourceID, err := resourceIDArg(args, 1)
-	if err != nil {
+	fs := flag.NewFlagSet("remove", flag.ContinueOnError)
+	var tag string
+	var rf resourceFlags
+	fs.StringVar(&tag, "tag", "", "tag name")
+	addResourceFlags(fs, &rf)
+	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if err := ops.Remove(ctx, s, resourceID); err != nil {
+	if tag == "" {
+		return fmt.Errorf("--tag is required")
+	}
+	if rf.given() {
+		resourceID, err := rf.resourceID()
+		if err != nil {
+			return err
+		}
+		if err := ops.RemoveMember(ctx, s, tag, resourceID); err != nil {
+			return err
+		}
+		fmt.Printf("removed %s from tag %q\n", resourceID, tag)
+		return nil
+	}
+	if err := ops.RemoveTag(ctx, s, tag); err != nil {
 		return err
 	}
-	fmt.Printf("removed %s\n", resourceID)
+	fmt.Printf("removed tag %q\n", tag)
 	return nil
 }
 
-func resourceIDArg(args []string, want int) (string, error) {
-	if len(args) < want {
-		return "", fmt.Errorf("missing argument (see cheapskate-cli -h)")
+func cmdPin(ctx context.Context, s *store.Store, args []string) error {
+	fs := flag.NewFlagSet("pin", flag.ContinueOnError)
+	var tag string
+	fs.StringVar(&tag, "tag", "", "tag name")
+	pos, err := parseInterleaved(fs, args)
+	if err != nil {
+		return err
 	}
-	resourceID := args[0]
-	if _, err := model.ResourceIDType(resourceID); err != nil {
-		return "", err
+	if tag == "" {
+		return fmt.Errorf("--tag is required")
 	}
-	return resourceID, nil
+	if len(pos) != 1 {
+		return fmt.Errorf("pin requires exactly one of running|stopped, got %q", pos)
+	}
+	if err := ops.Pin(ctx, s, tag, pos[0]); err != nil {
+		return err
+	}
+	fmt.Printf("pinned tag %q to %s\n", tag, pos[0])
+	return nil
+}
+
+func cmdSchedule(ctx context.Context, s *store.Store, args []string) error {
+	fs := flag.NewFlagSet("schedule", flag.ContinueOnError)
+	var tag string
+	fs.StringVar(&tag, "tag", "", "tag name")
+	startCron := fs.String("start", "", "cron for starting (5-field)")
+	stopCron := fs.String("stop", "", "cron for stopping (5-field)")
+	timezone := fs.String("timezone", "", "IANA timezone for the crons")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if tag == "" {
+		return fmt.Errorf("--tag is required")
+	}
+
+	item, err := ops.Schedule(ctx, s, tag, ops.ScheduleSpec{
+		StartCron: *startCron, StopCron: *stopCron, Timezone: *timezone,
+	})
+	if err != nil {
+		return err
+	}
+	fmt.Printf("scheduled tag %q (%s)\n", tag, describeTag(item))
+	return nil
+}
+
+func cmdDisable(ctx context.Context, s *store.Store, args []string) error {
+	fs := flag.NewFlagSet("disable", flag.ContinueOnError)
+	var tag string
+	fs.StringVar(&tag, "tag", "", "tag name")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if tag == "" {
+		return fmt.Errorf("--tag is required")
+	}
+	if err := ops.Disable(ctx, s, tag); err != nil {
+		return err
+	}
+	fmt.Printf("disabled tag %q\n", tag)
+	return nil
+}
+
+func cmdOverride(ctx context.Context, s *store.Store, args []string) error {
+	fs := flag.NewFlagSet("override", flag.ContinueOnError)
+	var tag string
+	fs.StringVar(&tag, "tag", "", "tag name")
+	duration := fs.Duration("for", 0, "how long the override lasts (e.g. 2h, 90m)")
+	clear := fs.Bool("clear", false, "remove the override")
+	pos, err := parseInterleaved(fs, args)
+	if err != nil {
+		return err
+	}
+	if tag == "" {
+		return fmt.Errorf("--tag is required")
+	}
+
+	if *clear {
+		if err := ops.ClearOverride(ctx, s, tag); err != nil {
+			return err
+		}
+		fmt.Printf("cleared override on tag %q\n", tag)
+		return nil
+	}
+	if len(pos) != 1 {
+		return fmt.Errorf("override requires a desired state and -for DURATION (or -clear)")
+	}
+	desired := pos[0]
+	if *duration <= 0 {
+		return fmt.Errorf("override requires a desired state and -for DURATION (or -clear)")
+	}
+	expiresAt, err := ops.SetOverride(ctx, s, tag, desired, *duration, time.Now())
+	if err != nil {
+		return err
+	}
+	fmt.Printf("override: tag %q %s until %s\n", tag, desired, expiresAt.Local().Format("2006-01-02 15:04"))
+	return nil
 }

@@ -15,7 +15,7 @@ import (
 type Target interface {
 	Type() string
 	Describe(ctx context.Context, ref string) (model.Observation, error)
-	PrepareStop(ctx context.Context, ref string, cfg model.Config, status model.Status) (*model.SavedState, error)
-	Stop(ctx context.Context, ref string, cfg model.Config, status model.Status) error
-	Start(ctx context.Context, ref string, cfg model.Config, status model.Status) (*model.SavedState, error)
+	PrepareStop(ctx context.Context, ref string, member model.Member, status model.Status) (*model.SavedState, error)
+	Stop(ctx context.Context, ref string, member model.Member, status model.Status) error
+	Start(ctx context.Context, ref string, member model.Member, status model.Status) (*model.SavedState, error)
 }

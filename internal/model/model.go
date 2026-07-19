@@ -3,13 +3,15 @@ package model
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 )
 
 const (
-	ConfigPrefix   = "config#"
 	OverridePrefix = "override#"
 	StatusPrefix   = "status#"
+	TagPrefix      = "tag#"
+	MemberPrefix   = "member#"
 )
 
 const (
@@ -34,36 +36,6 @@ var ResourceTypes = map[string]string{
 	"rds-instance": TypeRdsInstance,
 	"rds-cluster":  TypeRdsCluster,
 	"ecs":          TypeEcsService,
-}
-
-// ConfigItem is the raw shape of a user-managed `config#` item in DynamoDB. The reconciler never writes these.
-type ConfigItem struct {
-	PK           string `dynamodbav:"pk" json:"pk"`
-	Type         string `dynamodbav:"type,omitempty" json:"type,omitempty"`
-	Mode         string `dynamodbav:"mode,omitempty" json:"mode,omitempty"`
-	Desired      string `dynamodbav:"desired,omitempty" json:"desired,omitempty"`
-	StartCron    string `dynamodbav:"start_cron,omitempty" json:"start_cron,omitempty"`
-	StopCron     string `dynamodbav:"stop_cron,omitempty" json:"stop_cron,omitempty"`
-	Timezone     string `dynamodbav:"timezone,omitempty" json:"timezone,omitempty"`
-	RestoreCount *int32 `dynamodbav:"restore_count,omitempty" json:"restore_count,omitempty"`
-}
-
-// Config is a validated ConfigItem.
-type Config struct {
-	ResourceID   string // e.g. "rds-cluster#my-aurora", "ecs#my-cluster/my-service"
-	Type         string
-	Mode         string
-	Desired      string
-	StartCron    string
-	StopCron     string
-	Timezone     string
-	RestoreCount *int32
-}
-
-// Ref is the target-specific identifier (part after the type prefix).
-func (c Config) Ref() string {
-	_, ref, _ := strings.Cut(c.ResourceID, "#")
-	return ref
 }
 
 // Override is a time-limited `override#` item taking precedence over config.
@@ -119,18 +91,45 @@ func ResourceIDType(resourceID string) (string, error) {
 	return t, nil
 }
 
-// ParseConfig validates a raw config item.
-func ParseConfig(item ConfigItem) (Config, error) {
-	rest, hasPrefix := strings.CutPrefix(item.PK, ConfigPrefix)
-	if !hasPrefix || !strings.Contains(rest, "#") {
-		return Config{}, fmt.Errorf("malformed config key: %q", item.PK)
-	}
-	resourceID := rest
+var tagNameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 
-	switch item.Type {
-	case TypeRdsInstance, TypeRdsCluster, TypeEcsService:
-	default:
-		return Config{}, fmt.Errorf("%s: unknown type %q", resourceID, item.Type)
+// ValidTagName reports whether name is usable as a tag name: it excludes "#" (the pk delimiter)
+// and "/", and stays URL- and SNS-subject-safe.
+func ValidTagName(name string) error {
+	if !tagNameRE.MatchString(name) {
+		return fmt.Errorf("invalid tag name %q (must match %s)", name, tagNameRE.String())
+	}
+	return nil
+}
+
+// TagItem is the raw shape of a user-managed `tag#` item in DynamoDB. The reconciler never writes these.
+type TagItem struct {
+	PK        string `dynamodbav:"pk" json:"pk"`
+	Mode      string `dynamodbav:"mode,omitempty" json:"mode,omitempty"`
+	Desired   string `dynamodbav:"desired,omitempty" json:"desired,omitempty"`
+	StartCron string `dynamodbav:"start_cron,omitempty" json:"start_cron,omitempty"`
+	StopCron  string `dynamodbav:"stop_cron,omitempty" json:"stop_cron,omitempty"`
+	Timezone  string `dynamodbav:"timezone,omitempty" json:"timezone,omitempty"`
+}
+
+// TagConfig is a validated TagItem.
+type TagConfig struct {
+	Name      string // e.g. "dev"
+	Mode      string
+	Desired   string
+	StartCron string
+	StopCron  string
+	Timezone  string
+}
+
+// ParseTag validates a raw tag item.
+func ParseTag(item TagItem) (TagConfig, error) {
+	name, hasPrefix := strings.CutPrefix(item.PK, TagPrefix)
+	if !hasPrefix {
+		return TagConfig{}, fmt.Errorf("malformed tag key: %q", item.PK)
+	}
+	if err := ValidTagName(name); err != nil {
+		return TagConfig{}, err
 	}
 	mode := item.Mode
 	if mode == "" {
@@ -139,20 +138,64 @@ func ParseConfig(item ConfigItem) (Config, error) {
 	switch mode {
 	case ModePinned, ModeSchedule, ModeDisabled:
 	default:
-		return Config{}, fmt.Errorf("%s: unknown mode %q", resourceID, mode)
+		return TagConfig{}, fmt.Errorf("tag %s: unknown mode %q", name, mode)
 	}
 	if mode == ModePinned && item.Desired != DesiredRunning && item.Desired != DesiredStopped {
-		return Config{}, fmt.Errorf("%s: mode=pinned requires desired running|stopped", resourceID)
+		return TagConfig{}, fmt.Errorf("tag %s: mode=pinned requires desired running|stopped", name)
 	}
+	return TagConfig{
+		Name:      name,
+		Mode:      mode,
+		Desired:   item.Desired,
+		StartCron: item.StartCron,
+		StopCron:  item.StopCron,
+		Timezone:  item.Timezone,
+	}, nil
+}
 
-	return Config{
+// MemberItem is the raw shape of a `member#` item in DynamoDB: one resource's membership in
+// exactly one tag. The reconciler never writes these.
+type MemberItem struct {
+	PK           string `dynamodbav:"pk" json:"pk"` // member#<resourceID>
+	Tag          string `dynamodbav:"tag" json:"tag"`
+	Type         string `dynamodbav:"type" json:"type"`
+	RestoreCount *int32 `dynamodbav:"restore_count,omitempty" json:"restore_count,omitempty"`
+}
+
+// Member is a validated MemberItem.
+type Member struct {
+	ResourceID   string // e.g. "ecs#dev-cluster/api"
+	Tag          string
+	Type         string
+	RestoreCount *int32
+}
+
+// Ref is the target-specific identifier (part after the type prefix).
+func (m Member) Ref() string {
+	_, ref, _ := strings.Cut(m.ResourceID, "#")
+	return ref
+}
+
+// ParseMember validates a raw member item.
+func ParseMember(item MemberItem) (Member, error) {
+	resourceID, hasPrefix := strings.CutPrefix(item.PK, MemberPrefix)
+	if !hasPrefix {
+		return Member{}, fmt.Errorf("malformed member key: %q", item.PK)
+	}
+	typ, err := ResourceIDType(resourceID)
+	if err != nil {
+		return Member{}, err
+	}
+	if item.Type != typ {
+		return Member{}, fmt.Errorf("%s: type %q does not match resource_id type %q", resourceID, item.Type, typ)
+	}
+	if err := ValidTagName(item.Tag); err != nil {
+		return Member{}, fmt.Errorf("%s: %w", resourceID, err)
+	}
+	return Member{
 		ResourceID:   resourceID,
+		Tag:          item.Tag,
 		Type:         item.Type,
-		Mode:         mode,
-		Desired:      item.Desired,
-		StartCron:    item.StartCron,
-		StopCron:     item.StopCron,
-		Timezone:     item.Timezone,
 		RestoreCount: item.RestoreCount,
 	}, nil
 }

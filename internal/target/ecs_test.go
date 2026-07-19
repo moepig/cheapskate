@@ -44,7 +44,7 @@ func TestEcsPrepareStopReturnsCountAndScaling(t *testing.T) {
 	// No RegisterScalableTarget/UpdateService EXPECT: PrepareStop must not mutate anything.
 	tgt := &EcsServiceTarget{Ecs: e, AutoScaling: a}
 
-	saved, err := tgt.PrepareStop(context.Background(), "dev/api", model.Config{}, model.Status{})
+	saved, err := tgt.PrepareStop(context.Background(), "dev/api", model.Member{}, model.Status{})
 	require.NoError(t, err)
 	require.NotNil(t, saved.DesiredCount)
 	assert.Equal(t, int32(3), *saved.DesiredCount)
@@ -62,7 +62,7 @@ func TestEcsPrepareStopKeepsExistingSavedValuesWhenAlreadyZero(t *testing.T) {
 	aasDescribe(a, &aastypes.ScalableTarget{MinCapacity: i32(0), MaxCapacity: i32(0)})
 	tgt := &EcsServiceTarget{Ecs: e, AutoScaling: a}
 
-	saved, err := tgt.PrepareStop(context.Background(), "dev/api", model.Config{}, model.Status{})
+	saved, err := tgt.PrepareStop(context.Background(), "dev/api", model.Member{}, model.Status{})
 	require.NoError(t, err)
 	assert.Nil(t, saved.DesiredCount, "desired count must be left nil")
 	assert.Nil(t, saved.ScalingMin, "scaling min must be left nil")
@@ -88,7 +88,7 @@ func TestEcsStopPinsScalingAndZeroesDesiredCount(t *testing.T) {
 	)
 	tgt := &EcsServiceTarget{Ecs: e, AutoScaling: a}
 
-	require.NoError(t, tgt.Stop(context.Background(), "dev/api", model.Config{}, model.Status{}))
+	require.NoError(t, tgt.Stop(context.Background(), "dev/api", model.Member{}, model.Status{}))
 }
 
 func TestEcsStopWithoutScalingTarget(t *testing.T) {
@@ -99,7 +99,7 @@ func TestEcsStopWithoutScalingTarget(t *testing.T) {
 	e.EXPECT().UpdateService(gomock.Any(), gomock.Any()).Return(&ecs.UpdateServiceOutput{}, nil)
 	tgt := &EcsServiceTarget{Ecs: e, AutoScaling: a}
 
-	require.NoError(t, tgt.Stop(context.Background(), "dev/api", model.Config{}, model.Status{}))
+	require.NoError(t, tgt.Stop(context.Background(), "dev/api", model.Member{}, model.Status{}))
 }
 
 func TestEcsStartRestoresScalingAndCount(t *testing.T) {
@@ -119,23 +119,23 @@ func TestEcsStartRestoresScalingAndCount(t *testing.T) {
 	tgt := &EcsServiceTarget{Ecs: e, AutoScaling: a}
 	status := model.Status{SavedDesiredCount: i32(3), SavedScalingMin: i32(2), SavedScalingMax: i32(6)}
 
-	_, err := tgt.Start(context.Background(), "dev/api", model.Config{}, status)
+	_, err := tgt.Start(context.Background(), "dev/api", model.Member{}, status)
 	require.NoError(t, err)
 }
 
 func TestEcsRestoreCountPriority(t *testing.T) {
 	cases := []struct {
-		cfg    model.Config
-		status model.Status
-		want   int32
+		memberRestoreCount *int32
+		status             model.Status
+		want               int32
 	}{
-		{model.Config{RestoreCount: i32(5)}, model.Status{SavedDesiredCount: i32(3)}, 5},
-		{model.Config{}, model.Status{SavedDesiredCount: i32(3)}, 3},
-		{model.Config{}, model.Status{}, 1},
-		{model.Config{}, model.Status{SavedDesiredCount: i32(0)}, 1}, // stopped while already 0
+		{i32(5), model.Status{SavedDesiredCount: i32(3)}, 5},
+		{nil, model.Status{SavedDesiredCount: i32(3)}, 3},
+		{nil, model.Status{}, 1},
+		{nil, model.Status{SavedDesiredCount: i32(0)}, 1}, // stopped while already 0
 	}
 	for i, tc := range cases {
-		assert.Equal(t, tc.want, restoreCount(tc.cfg, tc.status), "case %d", i)
+		assert.Equal(t, tc.want, restoreCount(tc.memberRestoreCount, tc.status), "case %d", i)
 	}
 }
 

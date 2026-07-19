@@ -17,6 +17,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sns"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	sqstypes "github.com/aws/aws-sdk-go-v2/service/sqs/types"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"cheapskate/internal/emutest"
 	"cheapskate/internal/model"
@@ -32,16 +34,16 @@ type spyRdsInstanceTarget struct {
 	started []string
 }
 
-func (s *spyRdsInstanceTarget) PrepareStop(_ context.Context, _ string, _ model.Config, _ model.Status) (*model.SavedState, error) {
+func (s *spyRdsInstanceTarget) PrepareStop(_ context.Context, _ string, _ model.Member, _ model.Status) (*model.SavedState, error) {
 	return nil, nil
 }
 
-func (s *spyRdsInstanceTarget) Stop(_ context.Context, ref string, _ model.Config, _ model.Status) error {
+func (s *spyRdsInstanceTarget) Stop(_ context.Context, ref string, _ model.Member, _ model.Status) error {
 	s.stopped = append(s.stopped, ref)
 	return nil
 }
 
-func (s *spyRdsInstanceTarget) Start(_ context.Context, ref string, _ model.Config, _ model.Status) (*model.SavedState, error) {
+func (s *spyRdsInstanceTarget) Start(_ context.Context, ref string, _ model.Member, _ model.Status) (*model.SavedState, error) {
 	s.started = append(s.started, ref)
 	return nil, nil
 }
@@ -61,25 +63,19 @@ func newNotificationProbe(t *testing.T, cfg aws.Config) *notificationProbe {
 
 	topicName := emutest.RandomName("cheapskate-itest")
 	topic, err := snsClient.CreateTopic(ctx, &sns.CreateTopicInput{Name: &topicName})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	t.Cleanup(func() { _, _ = snsClient.DeleteTopic(ctx, &sns.DeleteTopicInput{TopicArn: topic.TopicArn}) })
 
 	queueName := topicName + "-probe"
 	queue, err := sqsClient.CreateQueue(ctx, &sqs.CreateQueueInput{QueueName: &queueName})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	t.Cleanup(func() { _, _ = sqsClient.DeleteQueue(ctx, &sqs.DeleteQueueInput{QueueUrl: queue.QueueUrl}) })
 
 	attrs, err := sqsClient.GetQueueAttributes(ctx, &sqs.GetQueueAttributesInput{
 		QueueUrl:       queue.QueueUrl,
 		AttributeNames: []sqstypes.QueueAttributeName{sqstypes.QueueAttributeNameQueueArn},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	queueArn := attrs.Attributes["QueueArn"]
 
 	_, err = snsClient.Subscribe(ctx, &sns.SubscribeInput{
@@ -87,9 +83,7 @@ func newNotificationProbe(t *testing.T, cfg aws.Config) *notificationProbe {
 		Protocol: aws.String("sqs"),
 		Endpoint: &queueArn,
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	return &notificationProbe{sqs: sqsClient, queueURL: *queue.QueueUrl, topicArn: *topic.TopicArn}
 }
 
@@ -101,15 +95,11 @@ func (p *notificationProbe) receive(t *testing.T) []snsEnvelope {
 		MaxNumberOfMessages: 10,
 		WaitTimeSeconds:     5,
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	var envelopes []snsEnvelope
 	for _, m := range out.Messages {
 		var e snsEnvelope
-		if err := json.Unmarshal([]byte(*m.Body), &e); err != nil {
-			t.Fatalf("non-SNS message in probe queue: %v", err)
-		}
+		require.NoErrorf(t, json.Unmarshal([]byte(*m.Body), &e), "non-SNS message in probe queue")
 		envelopes = append(envelopes, e)
 	}
 	return envelopes
@@ -132,9 +122,7 @@ func createDBInstance(t *testing.T, cfg aws.Config, identifier string) {
 		MasterUserPassword:   aws.String("secret99"),
 		AllocatedStorage:     aws.Int32(5),
 	})
-	if err != nil {
-		t.Fatalf("create db instance: %v", err)
-	}
+	require.NoErrorf(t, err, "create db instance")
 	t.Cleanup(func() {
 		_, _ = client.DeleteDBInstance(ctx, &rds.DeleteDBInstanceInput{
 			DBInstanceIdentifier: &identifier,
@@ -146,15 +134,11 @@ func createDBInstance(t *testing.T, cfg aws.Config, identifier string) {
 	deadline := time.Now().Add(120 * time.Second)
 	for {
 		obs, err := tgt.Describe(ctx, identifier)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		if obs.State == model.StateRunning {
 			return
 		}
-		if time.Now().After(deadline) {
-			t.Fatalf("instance %s not available in time (last: %s %s)", identifier, obs.State, obs.Detail)
-		}
+		require.Falsef(t, time.Now().After(deadline), "instance %s not available in time (last: %s %s)", identifier, obs.State, obs.Detail)
 		time.Sleep(2 * time.Second)
 	}
 }
@@ -185,54 +169,40 @@ func newHarness(t *testing.T) *harness {
 	}
 }
 
+// pin writes a pinned tag with one member, mirroring `cheapskate-cli add` + `pin`.
+func (h *harness) pin(t *testing.T, tag, resourceID, typ, desired string) {
+	t.Helper()
+	ctx := context.Background()
+	require.NoError(t, h.store.PutTag(ctx, model.TagItem{PK: model.TagPrefix + tag, Mode: model.ModePinned, Desired: desired}))
+	require.NoError(t, h.store.PutMember(ctx, model.MemberItem{PK: model.MemberPrefix + resourceID, Tag: tag, Type: typ}))
+}
+
 func TestPinnedStopFlow(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
 	identifier := emutest.RandomName("itest-db")
 	createDBInstance(t, h.cfg, identifier)
 	resourceID := "rds-instance#" + identifier
-
-	err := h.store.PutConfig(ctx, model.ConfigItem{
-		PK: model.ConfigPrefix + resourceID, Type: model.TypeRdsInstance,
-		Mode: model.ModePinned, Desired: model.DesiredStopped,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	tag := "dev"
+	h.pin(t, tag, resourceID, model.TypeRdsInstance, model.DesiredStopped)
 
 	summary, err := reconcile.Run(ctx, json.RawMessage(`{}`), h.deps, time.Now().UTC())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(summary.Errors) != 0 {
-		t.Fatalf("errors: %+v", summary.Errors)
-	}
-	if len(h.spy.stopped) != 1 || h.spy.stopped[0] != identifier {
-		t.Fatalf("stop calls: %v", h.spy.stopped)
-	}
+	require.NoError(t, err)
+	assert.Empty(t, summary.Errors)
+	assert.Equal(t, []string{identifier}, h.spy.stopped)
 
 	status, err := h.store.GetStatus(ctx, resourceID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if status.LastAction != "stop" {
-		t.Fatalf("last_action: %q", status.LastAction)
-	}
+	require.NoError(t, err)
+	assert.Equal(t, "stop", status.LastAction)
 
 	envelopes := h.probe.receive(t)
-	if len(envelopes) != 1 {
-		t.Fatalf("notifications delivered: %d", len(envelopes))
-	}
-	if envelopes[0].Subject != "[cheapskate] stop: "+resourceID {
-		t.Fatalf("subject: %q", envelopes[0].Subject)
-	}
+	require.Len(t, envelopes, 1)
+	assert.Equal(t, "[cheapskate] stop: "+tag+"/"+resourceID, envelopes[0].Subject)
 	var payload map[string]any
-	if err := json.Unmarshal([]byte(envelopes[0].Message), &payload); err != nil {
-		t.Fatal(err)
-	}
-	if payload["action"] != "stop" || payload["resource_id"] != resourceID {
-		t.Fatalf("payload: %v", payload)
-	}
+	require.NoError(t, json.Unmarshal([]byte(envelopes[0].Message), &payload))
+	assert.Equal(t, "stop", payload["action"])
+	assert.Equal(t, resourceID, payload["resource_id"])
+	assert.Equal(t, tag, payload["tag"])
 }
 
 func TestRdsEventReconcilesOnlyNamedResource(t *testing.T) {
@@ -243,15 +213,8 @@ func TestRdsEventReconcilesOnlyNamedResource(t *testing.T) {
 	createDBInstance(t, h.cfg, eventTarget)
 	createDBInstance(t, h.cfg, other)
 
-	for _, id := range []string{eventTarget, other} {
-		err := h.store.PutConfig(ctx, model.ConfigItem{
-			PK: model.ConfigPrefix + "rds-instance#" + id, Type: model.TypeRdsInstance,
-			Mode: model.ModePinned, Desired: model.DesiredStopped,
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
+	h.pin(t, "dev-a", "rds-instance#"+eventTarget, model.TypeRdsInstance, model.DesiredStopped)
+	h.pin(t, "dev-b", "rds-instance#"+other, model.TypeRdsInstance, model.DesiredStopped)
 
 	event := fmt.Sprintf(`{
 	  "source": "aws.rds",
@@ -259,15 +222,9 @@ func TestRdsEventReconcilesOnlyNamedResource(t *testing.T) {
 	  "detail": {"SourceType": "DB_INSTANCE", "SourceIdentifier": %q, "EventID": "RDS-EVENT-0088"}
 	}`, eventTarget)
 	summary, err := reconcile.Run(ctx, json.RawMessage(event), h.deps, time.Now().UTC())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if summary.Reconciled != 1 {
-		t.Fatalf("reconciled: %d", summary.Reconciled)
-	}
-	if len(h.spy.stopped) != 1 || h.spy.stopped[0] != eventTarget {
-		t.Fatalf("stop calls: %v (must not include %s)", h.spy.stopped, other)
-	}
+	require.NoError(t, err)
+	assert.Equal(t, 1, summary.Reconciled)
+	assert.Equal(t, []string{eventTarget}, h.spy.stopped, "must not include %s", other)
 }
 
 func TestScheduleModeAgainstEmulator(t *testing.T) {
@@ -276,33 +233,26 @@ func TestScheduleModeAgainstEmulator(t *testing.T) {
 	identifier := emutest.RandomName("itest-db")
 	createDBInstance(t, h.cfg, identifier)
 	resourceID := "rds-instance#" + identifier
+	tag := "dev"
 
-	err := h.store.PutConfig(ctx, model.ConfigItem{
-		PK: model.ConfigPrefix + resourceID, Type: model.TypeRdsInstance,
-		Mode: model.ModeSchedule, StartCron: "0 9 * * MON-FRI", StopCron: "0 20 * * MON-FRI",
-		Timezone: "Asia/Tokyo",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, h.store.PutTag(ctx, model.TagItem{
+		PK: model.TagPrefix + tag, Mode: model.ModeSchedule,
+		StartCron: "0 9 * * MON-FRI", StopCron: "0 20 * * MON-FRI", Timezone: "Asia/Tokyo",
+	}))
+	require.NoError(t, h.store.PutMember(ctx, model.MemberItem{PK: model.MemberPrefix + resourceID, Tag: tag, Type: model.TypeRdsInstance}))
 
 	// Wednesday 23:00 JST = 14:00 UTC → desired stopped, observed running → stop.
 	night := time.Date(2026, 7, 15, 14, 0, 0, 0, time.UTC)
-	if _, err := reconcile.Run(ctx, json.RawMessage(`{}`), h.deps, night); err != nil {
-		t.Fatal(err)
-	}
-	if len(h.spy.stopped) != 1 {
-		t.Fatalf("night run must stop: %v", h.spy.stopped)
-	}
+	_, err := reconcile.Run(ctx, json.RawMessage(`{}`), h.deps, night)
+	require.NoError(t, err)
+	assert.Len(t, h.spy.stopped, 1, "night run must stop")
 
 	// Wednesday 12:00 JST = 03:00 UTC → desired running, observed running (the emulator instance is still available) → converged, no action.
 	h.spy.stopped = nil
 	noon := time.Date(2026, 7, 15, 3, 0, 0, 0, time.UTC)
 	summary, err := reconcile.Run(ctx, json.RawMessage(`{}`), h.deps, noon)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(h.spy.stopped)+len(h.spy.started) != 0 || len(summary.Actions) != 0 {
-		t.Fatalf("business-hours run must converge without action: %+v", summary)
-	}
+	require.NoError(t, err)
+	assert.Empty(t, h.spy.stopped)
+	assert.Empty(t, h.spy.started)
+	assert.Empty(t, summary.Actions, "business-hours run must converge without action")
 }
