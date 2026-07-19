@@ -4,7 +4,7 @@ TAG      ?= dev
 PLATFORM ?= linux/arm64
 ECR_REPO ?=
 
-.PHONY: build generate unit integration test lint fmt vet image push cli webconsole floci-up floci-down smoke
+.PHONY: build generate unit integration test lint fmt vet image push cli webconsole floci-up floci-down smoke dev dev-down
 
 build:
 	go build ./...
@@ -58,3 +58,11 @@ floci-down:
 # Requires a running emulator (make floci-up) and the AWS CLI.
 smoke:
 	./scripts/smoke.sh
+
+# One-command local bring-up: floci + state table + sample "dev" tag + web console on
+# http://127.0.0.1:8080/, all via `go run`. Ctrl-C stops the console; `make dev-down` stops floci.
+dev:
+	./scripts/dev.sh
+
+dev-down:
+	docker compose down

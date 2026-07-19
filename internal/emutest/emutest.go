@@ -13,7 +13,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+
+	"cheapskate/internal/statetable"
 )
 
 const defaultEndpoint = "http://localhost:4566"
@@ -51,37 +52,18 @@ func RandomName(prefix string) string {
 	return prefix + "-" + hex.EncodeToString(b)
 }
 
-// CreateStateTable creates a throwaway state table (PK pk, TTL expires_at) and registers its deletion as cleanup.
+// CreateStateTable creates a throwaway state table (schema: internal/statetable) and registers its deletion as cleanup.
 func CreateStateTable(t *testing.T, cfg aws.Config) string {
 	t.Helper()
 	ctx := context.Background()
 	db := dynamodb.NewFromConfig(cfg)
 	name := RandomName("cheapskate-itest")
 
-	_, err := db.CreateTable(ctx, &dynamodb.CreateTableInput{
-		TableName:            &name,
-		AttributeDefinitions: []types.AttributeDefinition{{AttributeName: aws.String("pk"), AttributeType: types.ScalarAttributeTypeS}},
-		KeySchema:            []types.KeySchemaElement{{AttributeName: aws.String("pk"), KeyType: types.KeyTypeHash}},
-		BillingMode:          types.BillingModePayPerRequest,
-	})
-	if err != nil {
-		t.Fatalf("create table: %v", err)
+	if err := statetable.Create(ctx, db, name); err != nil {
+		t.Fatal(err)
 	}
 	t.Cleanup(func() {
 		_, _ = db.DeleteTable(ctx, &dynamodb.DeleteTableInput{TableName: &name})
-	})
-
-	waiter := dynamodb.NewTableExistsWaiter(db)
-	if err := waiter.Wait(ctx, &dynamodb.DescribeTableInput{TableName: &name}, 30*time.Second); err != nil {
-		t.Fatalf("table not active: %v", err)
-	}
-	// TTL is enforced in code as well; enabling it here just mirrors production.
-	_, _ = db.UpdateTimeToLive(ctx, &dynamodb.UpdateTimeToLiveInput{
-		TableName: &name,
-		TimeToLiveSpecification: &types.TimeToLiveSpecification{
-			AttributeName: aws.String("expires_at"),
-			Enabled:       aws.Bool(true),
-		},
 	})
 	return name
 }
