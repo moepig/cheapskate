@@ -1,0 +1,70 @@
+{{define "content"}}
+<h2><code>{{.Row.ResourceID}}</code></h2>
+<table>
+  <tr><th>Mode</th><td>{{.Row.Config.Mode}}</td></tr>
+  <tr><th>Config</th><td>{{cfgDesc .Row.Config}}</td></tr>
+  {{with .Row.Config.RestoreCount}}<tr><th>Restore count</th><td>{{.}}</td></tr>{{end}}
+  <tr><th>Override</th><td>{{with ovDesc .Row.Override}}{{.}}{{else}}<span class="muted">none</span>{{end}}</td></tr>
+  <tr><th>Last action</th><td>{{with actDesc .Row.Status}}{{.}}{{else}}<span class="muted">-</span>{{end}}</td></tr>
+  <tr><th>Observed</th><td>{{with .Row.Status.ObservedState}}{{.}}{{else}}<span class="muted">-</span>{{end}}</td></tr>
+  {{if .Row.Status.LastError}}<tr><th>Last error</th><td class="danger">{{.Row.Status.LastError}} at {{.Row.Status.LastErrorAt}}</td></tr>{{end}}
+</table>
+
+<fieldset>
+  <legend>Override (temporary, expires automatically)</legend>
+  <form method="post" action="{{.Base}}/op">
+    <input type="hidden" name="action" value="override">
+    <input type="hidden" name="id" value="{{.Row.ResourceID}}">
+    <select name="desired"><option>running</option><option>stopped</option></select>
+    for
+    <select name="for"><option>1h</option><option selected>2h</option><option>4h</option><option>8h</option><option>24h</option></select>
+    <button>Apply</button>
+  </form>
+  {{if .Row.Override}}
+  <form class="inline" method="post" action="{{.Base}}/op">
+    <input type="hidden" name="action" value="clear-override">
+    <input type="hidden" name="id" value="{{.Row.ResourceID}}">
+    <button>Clear override</button>
+  </form>
+  {{end}}
+</fieldset>
+
+<fieldset>
+  <legend>Pin (fixed state; cron settings are kept)</legend>
+  <form method="post" action="{{.Base}}/op">
+    <input type="hidden" name="action" value="pin">
+    <input type="hidden" name="id" value="{{.Row.ResourceID}}">
+    <select name="desired"><option>stopped</option><option>running</option></select>
+    <button>Pin</button>
+  </form>
+</fieldset>
+
+<fieldset>
+  <legend>Schedule (5-field cron)</legend>
+  <form method="post" action="{{.Base}}/op">
+    <input type="hidden" name="action" value="schedule">
+    <input type="hidden" name="id" value="{{.Row.ResourceID}}">
+    <p><label>Start cron <input name="start" value="{{.Row.Config.StartCron}}" placeholder="0 9 * * 1-5"></label></p>
+    <p><label>Stop cron <input name="stop" value="{{.Row.Config.StopCron}}" placeholder="0 20 * * 1-5"></label></p>
+    <p><label>Timezone <input name="timezone" value="{{.Row.Config.Timezone}}" placeholder="Asia/Tokyo"></label></p>
+    {{if eq .Row.Config.Type "ecs-service"}}
+    <p><label>Restore count <input name="restore_count" value="{{with .Row.Config.RestoreCount}}{{.}}{{end}}" size="4"></label></p>
+    {{end}}
+    <button>Save schedule</button>
+  </form>
+</fieldset>
+
+<fieldset>
+  <legend class="danger">Danger zone</legend>
+  <form class="inline" method="post" action="{{.Base}}/op">
+    <input type="hidden" name="action" value="disable">
+    <input type="hidden" name="id" value="{{.Row.ResourceID}}">
+    <button>Disable (keep config, stop managing)</button>
+  </form>
+  <form class="inline" method="post" action="{{.Base}}/op">
+    <input type="hidden" name="action" value="remove">
+    <input type="hidden" name="id" value="{{.Row.ResourceID}}">
+    <button class="danger">Remove (delete config, override, status)</button>
+  </form>
+</fieldset>
+{{end}}

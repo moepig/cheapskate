@@ -1,0 +1,24 @@
+{{define "content"}}
+<table>
+  <tr><th>Resource</th><th>Mode</th><th>Config</th><th>Override</th><th>Last action</th><th>Observed (at last action)</th></tr>
+  {{range .Rows}}
+  {{if .Err}}
+  <tr>
+    <td><a href="{{$.Base}}/resource?id={{.ResourceID}}"><code>{{.ResourceID}}</code></a></td>
+    <td colspan="5" class="danger">error: {{.Err}}</td>
+  </tr>
+  {{else}}
+  <tr>
+    <td><a href="{{$.Base}}/resource?id={{.ResourceID}}"><code>{{.ResourceID}}</code></a></td>
+    <td>{{.Config.Mode}}</td>
+    <td>{{cfgDesc .Config}}</td>
+    <td>{{with ovDesc .Override}}{{.}}{{else}}<span class="muted">-</span>{{end}}</td>
+    <td>{{with actDesc .Status}}{{.}}{{else}}<span class="muted">-</span>{{end}}</td>
+    <td>{{with .Status.ObservedState}}{{.}}{{else}}<span class="muted">-</span>{{end}}</td>
+  </tr>
+  {{end}}
+  {{else}}
+  <tr><td colspan="6" class="muted">No resources registered. Register them with csctl (or Terraform).</td></tr>
+  {{end}}
+</table>
+{{end}}

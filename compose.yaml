@@ -1,0 +1,9 @@
+services:
+  floci:
+    image: floci/floci:latest
+    ports:
+      - "4566:4566"
+    volumes:
+      # RDS/ECS emulation runs real containers, hence the docker socket.
+      - /var/run/docker.sock:/var/run/docker.sock
+    user: root

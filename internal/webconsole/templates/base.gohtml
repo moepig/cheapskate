@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cheapskate console</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: system-ui, sans-serif; margin: 2rem auto; max-width: 64rem; padding: 0 1rem; line-height: 1.5; }
+  h1 { font-size: 1.3rem; } h1 a { color: inherit; text-decoration: none; }
+  h2 { font-size: 1.05rem; margin-top: 2rem; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { text-align: left; padding: .35rem .6rem; border-bottom: 1px solid #8884; font-size: .92rem; }
+  th { font-weight: 600; }
+  code { font-size: .9rem; }
+  form.inline { display: inline; }
+  input, select, button { font: inherit; padding: .15rem .4rem; }
+  fieldset { border: 1px solid #8886; border-radius: .3rem; margin: 1rem 0; }
+  .msg { background: #2a72; border: 1px solid #2a76; padding: .4rem .8rem; border-radius: .3rem; }
+  .err { background: #d332; border: 1px solid #d336; padding: .4rem .8rem; border-radius: .3rem; }
+  .danger { color: #c22; }
+  .muted { opacity: .65; }
+</style>
+</head>
+<body>
+<h1><a href="{{.Base}}/">cheapskate console</a></h1>
+{{if .Msg}}<p class="msg">{{.Msg}}</p>{{end}}
+{{if .Err}}<p class="err">{{.Err}}</p>{{end}}
+{{template "content" .}}
+</body>
+</html>
