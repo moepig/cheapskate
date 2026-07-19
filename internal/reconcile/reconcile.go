@@ -19,6 +19,8 @@ var rdsSourceTypeToPrefix = map[string]string{
 	"CLUSTER":     "rds-cluster",
 }
 
+//go:generate go tool mockgen -destination ../mocks/reconcile.go -package mocks cheapskate/internal/reconcile Notifier,SnsAPI
+
 // Notifier publishes on actions and failures only.
 type Notifier interface {
 	Publish(ctx context.Context, subject string, payload map[string]any) error

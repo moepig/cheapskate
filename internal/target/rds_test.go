@@ -7,53 +7,15 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/rds"
 	"github.com/aws/aws-sdk-go-v2/service/rds/types"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.uber.org/mock/gomock"
 
+	"cheapskate/internal/mocks"
 	"cheapskate/internal/model"
 )
 
 var errOther = errors.New("some other AWS error")
-
-type fakeRds struct {
-	instances   []types.DBInstance
-	clusters    []types.DBCluster
-	describeErr error
-	stopped     []string
-	started     []string
-}
-
-func (f *fakeRds) DescribeDBInstances(_ context.Context, _ *rds.DescribeDBInstancesInput, _ ...func(*rds.Options)) (*rds.DescribeDBInstancesOutput, error) {
-	if f.describeErr != nil {
-		return nil, f.describeErr
-	}
-	return &rds.DescribeDBInstancesOutput{DBInstances: f.instances}, nil
-}
-
-func (f *fakeRds) DescribeDBClusters(_ context.Context, _ *rds.DescribeDBClustersInput, _ ...func(*rds.Options)) (*rds.DescribeDBClustersOutput, error) {
-	if f.describeErr != nil {
-		return nil, f.describeErr
-	}
-	return &rds.DescribeDBClustersOutput{DBClusters: f.clusters}, nil
-}
-
-func (f *fakeRds) StopDBInstance(_ context.Context, in *rds.StopDBInstanceInput, _ ...func(*rds.Options)) (*rds.StopDBInstanceOutput, error) {
-	f.stopped = append(f.stopped, *in.DBInstanceIdentifier)
-	return &rds.StopDBInstanceOutput{}, nil
-}
-
-func (f *fakeRds) StartDBInstance(_ context.Context, in *rds.StartDBInstanceInput, _ ...func(*rds.Options)) (*rds.StartDBInstanceOutput, error) {
-	f.started = append(f.started, *in.DBInstanceIdentifier)
-	return &rds.StartDBInstanceOutput{}, nil
-}
-
-func (f *fakeRds) StopDBCluster(_ context.Context, in *rds.StopDBClusterInput, _ ...func(*rds.Options)) (*rds.StopDBClusterOutput, error) {
-	f.stopped = append(f.stopped, *in.DBClusterIdentifier)
-	return &rds.StopDBClusterOutput{}, nil
-}
-
-func (f *fakeRds) StartDBCluster(_ context.Context, in *rds.StartDBClusterInput, _ ...func(*rds.Options)) (*rds.StartDBClusterOutput, error) {
-	f.started = append(f.started, *in.DBClusterIdentifier)
-	return &rds.StartDBClusterOutput{}, nil
-}
 
 // rdsObservation's status-string -> Observation mapping is the exact behavior DESIGN.md specifies: anything but "available"/"stopped" is transitioning, so the reconciler retries next cycle instead of waiting.
 func TestRdsObservationStateMapping(t *testing.T) {
@@ -70,137 +32,129 @@ func TestRdsObservationStateMapping(t *testing.T) {
 	}
 	for _, tc := range cases {
 		obs := rdsObservation(tc.raw)
-		if obs.State != tc.want {
-			t.Errorf("rdsObservation(%q).State = %q, want %q", tc.raw, obs.State, tc.want)
-		}
-		if obs.Detail != tc.raw {
-			t.Errorf("rdsObservation(%q).Detail = %q, want %q", tc.raw, obs.Detail, tc.raw)
-		}
+		assert.Equal(t, tc.want, obs.State, tc.raw)
+		assert.Equal(t, tc.raw, obs.Detail, tc.raw)
 	}
 }
 
 func TestRdsInstanceDescribeNotFoundFault(t *testing.T) {
-	f := &fakeRds{describeErr: &types.DBInstanceNotFoundFault{}}
-	tgt := &RdsInstanceTarget{Client: f}
+	ctrl := gomock.NewController(t)
+	c := mocks.NewMockRdsAPI(ctrl)
+	c.EXPECT().DescribeDBInstances(gomock.Any(), gomock.Any()).Return(nil, &types.DBInstanceNotFoundFault{})
+	tgt := &RdsInstanceTarget{Client: c}
 
 	obs, err := tgt.Describe(context.Background(), "gone")
-	if err != nil {
-		t.Fatalf("NotFoundFault must convert to StateNotFound, not an error: %v", err)
-	}
-	if obs.State != model.StateNotFound {
-		t.Fatalf("state: %q", obs.State)
-	}
+	require.NoError(t, err, "NotFoundFault must convert to StateNotFound, not an error")
+	assert.Equal(t, model.StateNotFound, obs.State)
 }
 
 // DESIGN.md: Describe returning an empty list (rather than an error) must also be treated as not-found.
 func TestRdsInstanceDescribeEmptyListIsNotFound(t *testing.T) {
-	f := &fakeRds{instances: nil}
-	tgt := &RdsInstanceTarget{Client: f}
+	ctrl := gomock.NewController(t)
+	c := mocks.NewMockRdsAPI(ctrl)
+	c.EXPECT().DescribeDBInstances(gomock.Any(), gomock.Any()).Return(&rds.DescribeDBInstancesOutput{}, nil)
+	tgt := &RdsInstanceTarget{Client: c}
 
 	obs, err := tgt.Describe(context.Background(), "gone")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if obs.State != model.StateNotFound {
-		t.Fatalf("state: %q", obs.State)
-	}
+	require.NoError(t, err)
+	assert.Equal(t, model.StateNotFound, obs.State)
 }
 
 func TestRdsInstanceDescribeOtherErrorPassesThrough(t *testing.T) {
-	f := &fakeRds{describeErr: errOther}
-	tgt := &RdsInstanceTarget{Client: f}
+	ctrl := gomock.NewController(t)
+	c := mocks.NewMockRdsAPI(ctrl)
+	c.EXPECT().DescribeDBInstances(gomock.Any(), gomock.Any()).Return(nil, errOther)
+	tgt := &RdsInstanceTarget{Client: c}
 
 	_, err := tgt.Describe(context.Background(), "db")
-	if !errors.Is(err, errOther) {
-		t.Fatalf("non-NotFound error must pass through unchanged, got %v", err)
-	}
+	require.ErrorIs(t, err, errOther, "non-NotFound error must pass through unchanged")
 }
 
 func TestRdsInstanceDescribeRunning(t *testing.T) {
 	status := "available"
-	f := &fakeRds{instances: []types.DBInstance{{DBInstanceStatus: &status}}}
-	tgt := &RdsInstanceTarget{Client: f}
+	ctrl := gomock.NewController(t)
+	c := mocks.NewMockRdsAPI(ctrl)
+	c.EXPECT().DescribeDBInstances(gomock.Any(), gomock.Any()).
+		Return(&rds.DescribeDBInstancesOutput{DBInstances: []types.DBInstance{{DBInstanceStatus: &status}}}, nil)
+	tgt := &RdsInstanceTarget{Client: c}
 
 	obs, err := tgt.Describe(context.Background(), "db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if obs.State != model.StateRunning {
-		t.Fatalf("state: %q", obs.State)
-	}
+	require.NoError(t, err)
+	assert.Equal(t, model.StateRunning, obs.State)
 }
 
 func TestRdsInstanceStopStart(t *testing.T) {
-	f := &fakeRds{}
-	tgt := &RdsInstanceTarget{Client: f}
+	ctrl := gomock.NewController(t)
+	c := mocks.NewMockRdsAPI(ctrl)
+	c.EXPECT().StopDBInstance(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, in *rds.StopDBInstanceInput, _ ...func(*rds.Options)) (*rds.StopDBInstanceOutput, error) {
+			assert.Equal(t, "db", *in.DBInstanceIdentifier)
+			return &rds.StopDBInstanceOutput{}, nil
+		})
+	c.EXPECT().StartDBInstance(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, in *rds.StartDBInstanceInput, _ ...func(*rds.Options)) (*rds.StartDBInstanceOutput, error) {
+			assert.Equal(t, "db", *in.DBInstanceIdentifier)
+			return &rds.StartDBInstanceOutput{}, nil
+		})
+	tgt := &RdsInstanceTarget{Client: c}
 
-	if err := tgt.Stop(context.Background(), "db", model.Config{}, model.Status{}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := tgt.Start(context.Background(), "db", model.Config{}, model.Status{}); err != nil {
-		t.Fatal(err)
-	}
-	if len(f.stopped) != 1 || f.stopped[0] != "db" {
-		t.Fatalf("stopped: %v", f.stopped)
-	}
-	if len(f.started) != 1 || f.started[0] != "db" {
-		t.Fatalf("started: %v", f.started)
-	}
-	if saved, err := tgt.PrepareStop(context.Background(), "db", model.Config{}, model.Status{}); err != nil || saved != nil {
-		t.Fatalf("RDS has nothing to save before stop: %+v, %v", saved, err)
-	}
+	require.NoError(t, tgt.Stop(context.Background(), "db", model.Config{}, model.Status{}))
+	_, err := tgt.Start(context.Background(), "db", model.Config{}, model.Status{})
+	require.NoError(t, err)
+
+	saved, err := tgt.PrepareStop(context.Background(), "db", model.Config{}, model.Status{})
+	require.NoError(t, err)
+	assert.Nil(t, saved, "RDS has nothing to save before stop")
 }
 
 func TestRdsClusterDescribeNotFoundFault(t *testing.T) {
-	f := &fakeRds{describeErr: &types.DBClusterNotFoundFault{}}
-	tgt := &RdsClusterTarget{Client: f}
+	ctrl := gomock.NewController(t)
+	c := mocks.NewMockRdsAPI(ctrl)
+	c.EXPECT().DescribeDBClusters(gomock.Any(), gomock.Any()).Return(nil, &types.DBClusterNotFoundFault{})
+	tgt := &RdsClusterTarget{Client: c}
 
 	obs, err := tgt.Describe(context.Background(), "gone")
-	if err != nil {
-		t.Fatalf("NotFoundFault must convert to StateNotFound, not an error: %v", err)
-	}
-	if obs.State != model.StateNotFound {
-		t.Fatalf("state: %q", obs.State)
-	}
+	require.NoError(t, err, "NotFoundFault must convert to StateNotFound, not an error")
+	assert.Equal(t, model.StateNotFound, obs.State)
 }
 
 func TestRdsClusterDescribeEmptyListIsNotFound(t *testing.T) {
-	f := &fakeRds{clusters: nil}
-	tgt := &RdsClusterTarget{Client: f}
+	ctrl := gomock.NewController(t)
+	c := mocks.NewMockRdsAPI(ctrl)
+	c.EXPECT().DescribeDBClusters(gomock.Any(), gomock.Any()).Return(&rds.DescribeDBClustersOutput{}, nil)
+	tgt := &RdsClusterTarget{Client: c}
 
 	obs, err := tgt.Describe(context.Background(), "gone")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if obs.State != model.StateNotFound {
-		t.Fatalf("state: %q", obs.State)
-	}
+	require.NoError(t, err)
+	assert.Equal(t, model.StateNotFound, obs.State)
 }
 
 func TestRdsClusterDescribeOtherErrorPassesThrough(t *testing.T) {
-	f := &fakeRds{describeErr: errOther}
-	tgt := &RdsClusterTarget{Client: f}
+	ctrl := gomock.NewController(t)
+	c := mocks.NewMockRdsAPI(ctrl)
+	c.EXPECT().DescribeDBClusters(gomock.Any(), gomock.Any()).Return(nil, errOther)
+	tgt := &RdsClusterTarget{Client: c}
 
 	_, err := tgt.Describe(context.Background(), "cluster")
-	if !errors.Is(err, errOther) {
-		t.Fatalf("non-NotFound error must pass through unchanged, got %v", err)
-	}
+	require.ErrorIs(t, err, errOther, "non-NotFound error must pass through unchanged")
 }
 
 func TestRdsClusterStopStart(t *testing.T) {
-	f := &fakeRds{}
-	tgt := &RdsClusterTarget{Client: f}
+	ctrl := gomock.NewController(t)
+	c := mocks.NewMockRdsAPI(ctrl)
+	c.EXPECT().StopDBCluster(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, in *rds.StopDBClusterInput, _ ...func(*rds.Options)) (*rds.StopDBClusterOutput, error) {
+			assert.Equal(t, "cluster", *in.DBClusterIdentifier)
+			return &rds.StopDBClusterOutput{}, nil
+		})
+	c.EXPECT().StartDBCluster(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, in *rds.StartDBClusterInput, _ ...func(*rds.Options)) (*rds.StartDBClusterOutput, error) {
+			assert.Equal(t, "cluster", *in.DBClusterIdentifier)
+			return &rds.StartDBClusterOutput{}, nil
+		})
+	tgt := &RdsClusterTarget{Client: c}
 
-	if err := tgt.Stop(context.Background(), "cluster", model.Config{}, model.Status{}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := tgt.Start(context.Background(), "cluster", model.Config{}, model.Status{}); err != nil {
-		t.Fatal(err)
-	}
-	if len(f.stopped) != 1 || f.stopped[0] != "cluster" {
-		t.Fatalf("stopped: %v", f.stopped)
-	}
-	if len(f.started) != 1 || f.started[0] != "cluster" {
-		t.Fatalf("started: %v", f.started)
-	}
+	require.NoError(t, tgt.Stop(context.Background(), "cluster", model.Config{}, model.Status{}))
+	_, err := tgt.Start(context.Background(), "cluster", model.Config{}, model.Status{})
+	require.NoError(t, err)
 }

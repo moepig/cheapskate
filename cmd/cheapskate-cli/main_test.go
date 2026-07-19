@@ -1,8 +1,10 @@
 package main
 
 import (
-	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // C-6: flag misuse must return an error from run() (ContinueOnError) rather than calling
@@ -21,12 +23,8 @@ func TestFlagMisuseReturnsErrorInsteadOfExiting(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			err := run(c.args)
-			if err == nil {
-				t.Fatalf("run(%v) = nil, want error", c.args)
-			}
-			if !strings.Contains(err.Error(), c.want) {
-				t.Errorf("run(%v) error = %q, want substring %q", c.args, err.Error(), c.want)
-			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), c.want)
 		})
 	}
 }

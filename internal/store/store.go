@@ -16,6 +16,8 @@ import (
 	"cheapskate/internal/model"
 )
 
+//go:generate go tool mockgen -destination ../mocks/store.go -package mocks -mock_names API=MockStoreAPI cheapskate/internal/store API
+
 // API is the subset of the DynamoDB client the store uses.
 type API interface {
 	Scan(ctx context.Context, in *dynamodb.ScanInput, opts ...func(*dynamodb.Options)) (*dynamodb.ScanOutput, error)

@@ -4,6 +4,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"cheapskate/internal/model"
 )
 
@@ -13,13 +16,9 @@ const tokyo = "Asia/Tokyo"
 func jst(t *testing.T, value string) time.Time {
 	t.Helper()
 	loc, err := time.LoadLocation(tokyo)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	ts, err := time.ParseInLocation("2006-01-02 15:04", value, loc)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	return ts.UTC()
 }
 
@@ -37,50 +36,38 @@ func businessHours() model.Config {
 func resolve(t *testing.T, cfg model.Config, o *model.Override, now time.Time) string {
 	t.Helper()
 	got, err := ResolveDesired(cfg, o, now, "UTC")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	return got
 }
 
 func TestDisabledReturnsEmpty(t *testing.T) {
 	cfg := model.Config{ResourceID: "rds-instance#db", Mode: model.ModeDisabled}
-	if got := resolve(t, cfg, nil, time.Now()); got != "" {
-		t.Fatalf("disabled must resolve to empty, got %q", got)
-	}
+	assert.Empty(t, resolve(t, cfg, nil, time.Now()), "disabled must resolve to empty")
 }
 
 func TestPinned(t *testing.T) {
 	cfg := model.Config{ResourceID: "rds-instance#db", Mode: model.ModePinned, Desired: model.DesiredStopped}
-	if got := resolve(t, cfg, nil, time.Now()); got != model.DesiredStopped {
-		t.Fatalf("got %q", got)
-	}
+	assert.Equal(t, model.DesiredStopped, resolve(t, cfg, nil, time.Now()))
 }
 
 func TestOverrideBeatsPinned(t *testing.T) {
 	now := time.Now()
 	cfg := model.Config{ResourceID: "rds-instance#db", Mode: model.ModePinned, Desired: model.DesiredStopped}
 	o := &model.Override{Desired: model.DesiredRunning, ExpiresAt: now.Add(time.Hour).Unix()}
-	if got := resolve(t, cfg, o, now); got != model.DesiredRunning {
-		t.Fatalf("unexpired override must win, got %q", got)
-	}
+	assert.Equal(t, model.DesiredRunning, resolve(t, cfg, o, now), "unexpired override must win")
 }
 
 func TestExpiredOverrideIgnored(t *testing.T) {
 	now := time.Now()
 	cfg := model.Config{ResourceID: "rds-instance#db", Mode: model.ModePinned, Desired: model.DesiredStopped}
 	o := &model.Override{Desired: model.DesiredRunning, ExpiresAt: now.Add(-time.Minute).Unix()}
-	if got := resolve(t, cfg, o, now); got != model.DesiredStopped {
-		t.Fatalf("expired override must be ignored, got %q", got)
-	}
+	assert.Equal(t, model.DesiredStopped, resolve(t, cfg, o, now), "expired override must be ignored")
 }
 
 func TestOverrideBeatsSchedule(t *testing.T) {
 	now := jst(t, "2026-07-15 12:00") // Wednesday, inside business hours
 	o := &model.Override{Desired: model.DesiredStopped, ExpiresAt: now.Add(time.Hour).Unix()}
-	if got := resolve(t, businessHours(), o, now); got != model.DesiredStopped {
-		t.Fatalf("override must beat schedule, got %q", got)
-	}
+	assert.Equal(t, model.DesiredStopped, resolve(t, businessHours(), o, now), "override must beat schedule")
 }
 
 func TestScheduleBusinessHours(t *testing.T) {
@@ -97,34 +84,27 @@ func TestScheduleBusinessHours(t *testing.T) {
 		{"2026-07-20 09:30", model.DesiredRunning}, // Monday morning
 	}
 	for _, tc := range cases {
-		if got := resolve(t, businessHours(), nil, jst(t, tc.at)); got != tc.want {
-			t.Errorf("%s: want %s, got %s", tc.at, tc.want, got)
-		}
+		assert.Equal(t, tc.want, resolve(t, businessHours(), nil, jst(t, tc.at)), tc.at)
 	}
 }
 
 func TestScheduleOnlyStopCron(t *testing.T) {
 	cfg := businessHours()
 	cfg.StartCron = ""
-	if got := resolve(t, cfg, nil, jst(t, "2026-07-15 12:00")); got != model.DesiredStopped {
-		t.Fatalf("stop-only schedule must resolve stopped, got %q", got)
-	}
+	assert.Equal(t, model.DesiredStopped, resolve(t, cfg, nil, jst(t, "2026-07-15 12:00")), "stop-only schedule must resolve stopped")
 }
 
 func TestScheduleOnlyStartCron(t *testing.T) {
 	cfg := businessHours()
 	cfg.StopCron = ""
-	if got := resolve(t, cfg, nil, jst(t, "2026-07-15 03:00")); got != model.DesiredRunning {
-		t.Fatalf("start-only schedule must resolve running, got %q", got)
-	}
+	assert.Equal(t, model.DesiredRunning, resolve(t, cfg, nil, jst(t, "2026-07-15 03:00")), "start-only schedule must resolve running")
 }
 
 func TestScheduleWithoutCronsErrors(t *testing.T) {
 	cfg := businessHours()
 	cfg.StartCron, cfg.StopCron = "", ""
-	if _, err := ResolveDesired(cfg, nil, time.Now(), "UTC"); err == nil {
-		t.Fatal("want error for schedule without crons")
-	}
+	_, err := ResolveDesired(cfg, nil, time.Now(), "UTC")
+	require.Error(t, err, "want error for schedule without crons")
 }
 
 func TestScheduleUsesDefaultTimezone(t *testing.T) {
@@ -133,35 +113,26 @@ func TestScheduleUsesDefaultTimezone(t *testing.T) {
 	// 03:00 UTC = 12:00 JST; with default UTC it is outside business hours.
 	now := time.Date(2026, 7, 15, 3, 0, 0, 0, time.UTC)
 	got, err := ResolveDesired(cfg, nil, now, "UTC")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != model.DesiredStopped {
-		t.Fatalf("UTC default: want stopped, got %q", got)
-	}
+	require.NoError(t, err)
+	assert.Equal(t, model.DesiredStopped, got, "UTC default")
+
 	got, err = ResolveDesired(cfg, nil, now, tokyo)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != model.DesiredRunning {
-		t.Fatalf("JST default: want running, got %q", got)
-	}
+	require.NoError(t, err)
+	assert.Equal(t, model.DesiredRunning, got, "JST default")
 }
 
 func TestInvalidTimezoneErrors(t *testing.T) {
 	cfg := businessHours()
 	cfg.Timezone = "Not/AZone"
-	if _, err := ResolveDesired(cfg, nil, time.Now(), "UTC"); err == nil {
-		t.Fatal("want error for invalid timezone")
-	}
+	_, err := ResolveDesired(cfg, nil, time.Now(), "UTC")
+	require.Error(t, err, "want error for invalid timezone")
 }
 
 func TestInvalidCronErrors(t *testing.T) {
 	cfg := businessHours()
 	cfg.StartCron = "not a cron"
-	if _, err := ResolveDesired(cfg, nil, jst(t, "2026-07-15 12:00"), "UTC"); err == nil {
-		t.Fatal("want error for invalid cron")
-	}
+	_, err := ResolveDesired(cfg, nil, jst(t, "2026-07-15 12:00"), "UTC")
+	require.Error(t, err, "want error for invalid cron")
 }
 
 // A-5: DESIGN.md's decision summary says a same-instant tie between start_cron and stop_cron resolves to stop (fail-safe/cheap). Both firing at the same wall-clock time is the only way to actually exercise the tie-break in fromSchedule's lastStart.After(*lastStop) check.
@@ -170,9 +141,7 @@ func TestSameInstantStartStopTieResolvesStopped(t *testing.T) {
 		ResourceID: "ecs#dev/api", Type: model.TypeEcsService, Mode: model.ModeSchedule,
 		StartCron: "0 9 * * *", StopCron: "0 9 * * *", Timezone: tokyo,
 	}
-	if got := resolve(t, cfg, nil, jst(t, "2026-07-15 09:00")); got != model.DesiredStopped {
-		t.Fatalf("same-instant tie must resolve stopped (fail-safe), got %q", got)
-	}
+	assert.Equal(t, model.DesiredStopped, resolve(t, cfg, nil, jst(t, "2026-07-15 09:00")), "same-instant tie must resolve stopped (fail-safe)")
 }
 
 // A-5: an override expiring at exactly `now` must be treated as already expired — schedule.go uses ExpiresAt > now.Unix(), a strict inequality, so the boundary instant itself must not win.
@@ -180,22 +149,16 @@ func TestOverrideExpiringExactlyNowIsExpired(t *testing.T) {
 	now := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
 	cfg := model.Config{ResourceID: "rds-instance#db", Mode: model.ModePinned, Desired: model.DesiredStopped}
 	o := &model.Override{Desired: model.DesiredRunning, ExpiresAt: now.Unix()}
-	if got := resolve(t, cfg, o, now); got != model.DesiredStopped {
-		t.Fatalf("override expiring exactly now must be ignored, got %q", got)
-	}
+	assert.Equal(t, model.DesiredStopped, resolve(t, cfg, o, now), "override expiring exactly now must be ignored")
 }
 
 // A-9: DST transitions must not break cron resolution. Only testing Asia/Tokyo (no DST) can't catch this; America/New_York observes DST, so exercise both the spring-forward gap and the fall-back overlap.
 func nyTime(t *testing.T, value string) time.Time {
 	t.Helper()
 	loc, err := time.LoadLocation("America/New_York")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	ts, err := time.ParseInLocation("2006-01-02 15:04", value, loc)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	return ts.UTC()
 }
 
@@ -217,9 +180,7 @@ func TestScheduleAcrossSpringForward(t *testing.T) {
 		{"2026-03-09 08:00", model.DesiredStopped}, // day after, before start
 	}
 	for _, tc := range cases {
-		if got := resolve(t, nyBusinessHours(), nil, nyTime(t, tc.at)); got != tc.want {
-			t.Errorf("%s: want %s, got %s", tc.at, tc.want, got)
-		}
+		assert.Equal(t, tc.want, resolve(t, nyBusinessHours(), nil, nyTime(t, tc.at)), tc.at)
 	}
 }
 
@@ -234,8 +195,6 @@ func TestScheduleAcrossFallBack(t *testing.T) {
 		{"2026-11-02 08:00", model.DesiredStopped}, // day after, before start
 	}
 	for _, tc := range cases {
-		if got := resolve(t, nyBusinessHours(), nil, nyTime(t, tc.at)); got != tc.want {
-			t.Errorf("%s: want %s, got %s", tc.at, tc.want, got)
-		}
+		assert.Equal(t, tc.want, resolve(t, nyBusinessHours(), nil, nyTime(t, tc.at)), tc.at)
 	}
 }

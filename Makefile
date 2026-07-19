@@ -4,10 +4,13 @@ TAG      ?= dev
 PLATFORM ?= linux/arm64
 ECR_REPO ?=
 
-.PHONY: build unit integration test lint fmt vet image push cli webconsole floci-up floci-down smoke
+.PHONY: build generate unit integration test lint fmt vet image push cli webconsole floci-up floci-down smoke
 
 build:
 	go build ./...
+
+generate:
+	go generate ./...
 
 cli:
 	go build -o bin/cheapskate-cli ./cmd/cheapskate-cli

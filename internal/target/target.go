@@ -7,6 +7,8 @@ import (
 	"cheapskate/internal/model"
 )
 
+//go:generate go tool mockgen -destination ../mocks/target.go -package mocks cheapskate/internal/target Target,RdsAPI,EcsAPI,AutoScalingAPI
+
 // Target abstracts one resource type.
 //
 // Stop is split in two so the caller can persist restore state (write-ahead) before anything in AWS actually changes: PrepareStop is read-only and returns the state to save, then Stop performs the mutation. This bounds the damage of a crash between the two — the worst case is a stale-but-safe saved value, never a lost one.
