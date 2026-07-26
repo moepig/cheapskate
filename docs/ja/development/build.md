@@ -1,40 +1,58 @@
 # ビルド
 
-前提: Go 1.26+。コンテナイメージには Docker(BuildKit)。
-
 ## バイナリ
 
 ```console
-make build       # go build ./... — 全体をコンパイル
-make cli         # bin/cheapskate-cli — オペレーター CLI
-make webconsole  # bin/webconsole — Web コンソール(ローカルモード)
+make build       # go build ./... の実行
+make cli         # bin/cheapskate-cli を作成
+make webconsole  # bin/webconsole を作成
 ```
 
 ## コンテナイメージ
 
-イメージは `public.ecr.aws/lambda/provided:al2023` 上に静的バイナリを 2 つ同梱します: `/var/runtime/bootstrap`(reconciler、デフォルトのエントリポイント)と `/var/runtime/webconsole`(オプションの Web コンソール関数で `ImageConfig` のエントリポイント上書きにより選択)。
+reconciler と Web コンソールは別々のイメージであり、バイナリを 1 つずつ含む。どちらも同じ `Dockerfile` から `--target` で選択してビルドする。
+
+| ターゲット | イメージ | バイナリ |
+| --- | --- | --- |
+| `reconciler` | `cheapskate-reconciler` | `./cmd/reconciler` |
+| `webconsole` | `cheapskate-webconsole` | `./cmd/webconsole` |
 
 ```console
-make image                                   # linux/arm64 の cheapskate:dev
+make image                                   # 両方、linux/arm64、タグ dev
+make image-reconciler                        # cheapskate-reconciler:dev のみ
+make image-webconsole                        # cheapskate-webconsole:dev のみ
 make image PLATFORM=linux/amd64 TAG=v0.1.0   # x86 版
 ```
 
-Dockerfile はホストプラットフォームから `GOARCH` でクロスコンパイルするため、x86 ホストでの arm64 イメージのビルド(またはその逆)にエミュレーションは不要です。
+ベースは `public.ecr.aws/lambda/provided:al2023` で、バイナリはどちらも `/var/runtime/bootstrap` として入るため、`ImageConfig.EntryPoint` による上書きを要しない。Web コンソールをデプロイしない場合は、reconciler だけをビルド・push すればよい。
 
-## イメージのスモークテスト
+Dockerfile はホストプラットフォームから `GOARCH` でクロスコンパイルするため、異アーキテクチャのビルドにエミュレーションを要しない。Go のビルドステージは 2 つのイメージで共有するので、両方ビルドしても依存のダウンロードは 1 回で済む。
 
-```console
-make floci-up   # ローカル AWS エミュレータを起動(初回のみ)
-make smoke      # イメージをビルドし、両エントリポイントを Lambda RIE 上で起動して呼び出す
-```
+### Lambda Web Adapter
 
-`make smoke`(`scripts/smoke.sh`)はイメージをビルドした後、`public.ecr.aws/lambda/provided:al2023` ベースイメージに同梱されている `aws-lambda-rie` の上で 2 回起動します: 1 回目はデフォルトのエントリポイント(`/var/runtime/bootstrap`、reconciler)、2 回目は本番の `ImageConfig.EntryPoint` 上書きを模して `/var/runtime/webconsole` に上書きしたエントリポイントです。それぞれを `curl` で呼び出しレスポンスを検証します(reconciler は Summary JSON、webconsole は HTTP 200)。これにより、デプロイ前にエントリポイントの破損やビルドタグ漏れによるハンドラ欠落に気づけます。AWS CLI と起動中のエミュレータ(`make floci-up`)が必要です。
+Web コンソールのイメージには、Lambda Web Adapter の実行ファイルが `/opt/extensions/lambda-adapter` として入る([../architecture/on_lambda.md](../architecture/on_lambda.md))。バージョンは `Dockerfile` で固定してある。go.mod の外にある唯一の実行時依存であるため、更新は手動となる。
 
-## 自分の ECR への push
+## イメージのテスト
 
 ```console
-aws ecr create-repository --repository-name cheapskate   # 初回のみ
-make push ECR_REPO=<account>.dkr.ecr.<region>.amazonaws.com/cheapskate TAG=v0.1.0
+make image-test   # 両イメージをビルドし、それぞれ Lambda RIE 上で起動して呼び出す
 ```
 
-`make push` は `docker build`、`docker login`(`aws ecr get-login-password` 経由)、`docker push` をまとめたものです。イメージのプラットフォームは Lambda 関数のアーキテクチャと一致させてください(`arm64` ↔ `linux/arm64`)。
+イメージの破損やハンドラの欠落をデプロイ前に検出する。必要なのは docker だけであり、エミュレータと使い捨ての state テーブルはテストと一緒に立ち上がる。検証内容は [test.md](test.md)。
+
+## ECR への push
+
+リポジトリはイメージごとに 1 つ作成する。
+
+```console
+aws ecr create-repository --repository-name cheapskate-reconciler   # 初回のみ
+aws ecr create-repository --repository-name cheapskate-webconsole   # 初回のみ(Web コンソールをデプロイする場合)
+make push \
+  ECR_REPO_RECONCILER=<account>.dkr.ecr.<region>.amazonaws.com/cheapskate-reconciler \
+  ECR_REPO_WEBCONSOLE=<account>.dkr.ecr.<region>.amazonaws.com/cheapskate-webconsole \
+  TAG=v0.1.0
+```
+
+`make push` は両イメージについて `docker build`、`docker login`、`docker push` を実行する。片方だけの場合は `make push-reconciler` / `make push-webconsole` を使い、対応する `ECR_REPO_*` だけを指定する。
+
+イメージのプラットフォームは、Lambda 関数のアーキテクチャと一致させる(`arm64` ↔ `linux/arm64`)。

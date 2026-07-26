@@ -1,25 +1,47 @@
 # 自分の AWS アカウントへのホスティング
 
-IaC テンプレートは配布していません。このページが、自前でリソースを作成するための完全な契約(コントラクト)です。cheapskate が依存する設定値・IAM ポリシー・ペイロードはすべてここに記載しています。命名やツール選択(Terraform、CDK、CloudFormation、コンソール、CLI)は自由です。実行例は任意の IaC に 1:1 で読み替えられる AWS CLI で示し、プレースホルダにはアカウント `123456789012`、リージョン `ap-northeast-1` を使います。
+IaC テンプレートは配布しない。このページに、作成するリソースの仕様をすべて記載する。ツール(Terraform / CDK / CloudFormation / コンソール / CLI)と命名は自由である。実行例は AWS CLI で示す。プレースホルダはアカウント `123456789012`、リージョン `ap-northeast-1` とする。
 
-作成するもの: DynamoDB テーブル、reconciler Lambda(コンテナイメージ)とその実行ロール、定期実行トリガー、RDS イベント用 EventBridge ルール。オプションで SNS トピック、ロググループ、Web コンソール。
+作成するもの:
+
+| 節 | リソース | 必須 |
+|---|---|---|
+| §1 | コンテナイメージ(ECR) | 必須 |
+| §2 | DynamoDB state テーブル | 必須 |
+| §3 | SNS トピックと監視 | オプション |
+| §4 | Lambda 実行ロール | 必須 |
+| §5 | Reconciler Lambda 関数 | 必須 |
+| §6 | 定期 reconcile トリガー | 必須 |
+| §7 | EventBridge ルール(RDS 自動起動) | 必須 |
+| §9 | Web コンソール | オプション |
+
+用語は [concepts.md](concepts.md)、環境変数の一覧は [config.md](config.md)、作成後の設定操作は [operations.md](operations.md)。
 
 ## 1. コンテナイメージのビルドと push
 
-イメージは公開レジストリから pull されることはありません。このリポジトリからビルドし、自分のアカウントの ECR リポジトリに push します:
+reconciler とオプションの Web コンソールは別々のイメージであり、バイナリを 1 つずつ含む。どちらも自分でビルドし、自分のアカウントの ECR に push する。
 
 ```console
-aws ecr create-repository --repository-name cheapskate   # 初回のみ
-make push ECR_REPO=123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/cheapskate TAG=v0.1.0
+aws ecr create-repository --repository-name cheapskate-reconciler   # 初回のみ
+aws ecr create-repository --repository-name cheapskate-webconsole   # 初回のみ(§9 を使う場合)
+make push \
+  ECR_REPO_RECONCILER=123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/cheapskate-reconciler \
+  ECR_REPO_WEBCONSOLE=123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/cheapskate-webconsole \
+  TAG=v0.1.0
 ```
 
-デフォルトのプラットフォームは `linux/arm64`(どのホストでもエミュレーションなしでクロスコンパイル)。x86 が必要なら `make push PLATFORM=linux/amd64 ...` と Lambda アーキテクチャ `x86_64` を使ってください。関数からは push した URI(できれば digest 指定)を参照します。詳細は [../development/build.md](../development/build.md)。
+Web コンソールを使わない場合は `make push-reconciler ECR_REPO_RECONCILER=... TAG=v0.1.0` だけでよい。Lambda 関数からは push した URI を参照する。digest 指定を推奨する。
+
+既定のプラットフォームは `linux/arm64` である。x86 の場合は `make push PLATFORM=linux/amd64 ...` とし、Lambda アーキテクチャを `x86_64` にする。
 
 ## 2. DynamoDB state テーブル
 
-- パーティションキー: `pk`(String)。ソートキー・GSI なし。
-- 属性 `expires_at` で TTL を有効化(`override#` アイテムが使用)。
-- 課金モードは任意。トラフィックは極小なのでオンデマンド推奨。
+| 項目 | 値 |
+|---|---|
+| パーティションキー | `pk`(String) |
+| ソートキー / GSI | なし |
+| TTL | 属性 `expires_at` で有効化する |
+| 課金モード | 任意(オンデマンド推奨) |
 
 ```console
 aws dynamodb create-table --table-name cheapskate-state \
@@ -30,9 +52,11 @@ aws dynamodb update-time-to-live --table-name cheapskate-state \
   --time-to-live-specification "Enabled=true,AttributeName=expires_at"
 ```
 
-## 3. SNS トピック(オプション)
+## 3. SNS トピックと監視(オプション)
 
-通知はアクションが実行されたか失敗した場合にのみ送信されます。任意のトピックで構いません(関数は `sns:Publish` しか呼びません)。トピック(と環境変数 `NOTIFICATION_TOPIC_ARN`)を省略すると通知は無効になります。
+### SNS トピック
+
+アクションの実行時と失敗時に通知を送る先である。関数が呼ぶ API は `sns:Publish` のみとなる。トピックと環境変数 `NOTIFICATION_TOPIC_ARN` を省略すると通知は無効になる。
 
 ```console
 aws sns create-topic --name cheapskate-notifications
@@ -40,9 +64,32 @@ aws sns subscribe --topic-arn arn:aws:sns:ap-northeast-1:123456789012:cheapskate
   --protocol email --notification-endpoint ops@example.com
 ```
 
+届く通知は 3 種類である。件名は `[cheapskate] <種別>: <グループ名>/<リソース ID>`、本文は JSON オブジェクト 1 つとなる。
+
+| 種別 | 送信される契機 |
+| --- | --- |
+| `start` / `stop` | リソースの起動・停止を実行したとき |
+| `error` | 失敗を記録したとき。同一エラーの継続中は再送されない |
+| `recovered` | 記録済みのエラーが解消したとき |
+
+### メトリクス
+
+reconciler は毎サイクル、次の 4 つのメトリクスを出力する。名前空間は `METRICS_NAMESPACE`(既定 `cheapskate`)、次元なし、単位は Count である。`PutMetricData` を呼ばず CloudWatch Logs 経由で生成されるため、追加の IAM 権限を要しない。
+
+| メトリクス | 意味 |
+| --- | --- |
+| `ReconciledResources` | そのサイクルで処理したリソース件数 |
+| `ReconcileActions` | 実行した start/stop の件数 |
+| `ReconcileErrors` | リソース単位・グループ単位の失敗件数 |
+| `ReconcileAborted` | サイクル自体が立ち上がらなかったとき 1、通常は 0 |
+
+この 4 本はカスタムメトリクスとして課金される(合計で月 1 ドル強)。不要なら `METRICS_ENABLED=false` で発行を止められる([config.md](config.md))。
+
+通知とは別に、失敗の検知には Lambda の `Errors` メトリクスへのアラームを設定する。トピックとアラームのどちらも用意しないと、全リソースが失敗し続けても何も鳴らない。アラームの設定例は [troubleshooting.md](troubleshooting.md)。
+
 ## 4. Lambda 実行ロール
 
-信頼ポリシーは `lambda.amazonaws.com`。以下のポリシーをアタッチします(これで全部です — これ以外の API は呼びません):
+信頼ポリシーは `lambda.amazonaws.com` とする。アタッチするポリシーは次のとおりであり、これ以外の API は呼ばない。
 
 ```json
 {
@@ -59,15 +106,25 @@ aws sns subscribe --topic-arn arn:aws:sns:ap-northeast-1:123456789012:cheapskate
       "Resource": "arn:aws:logs:ap-northeast-1:123456789012:log-group:/aws/lambda/*"
     },
     {
-      "Sid": "State",
+      "Sid": "StateRead",
       "Effect": "Allow",
-      "Action": [
-        "dynamodb:Scan",
-        "dynamodb:GetItem",
-        "dynamodb:PutItem",
-        "dynamodb:UpdateItem"
-      ],
+      "Action": ["dynamodb:Scan", "dynamodb:GetItem"],
       "Resource": "arn:aws:dynamodb:ap-northeast-1:123456789012:table/cheapskate-state"
+    },
+    {
+      "Sid": "StateWriteStatusOnly",
+      "Effect": "Allow",
+      "Action": ["dynamodb:UpdateItem"],
+      "Resource": "arn:aws:dynamodb:ap-northeast-1:123456789012:table/cheapskate-state",
+      "Condition": {
+        "ForAllValues:StringLike": {"dynamodb:LeadingKeys": ["status#*"]}
+      }
+    },
+    {
+      "Sid": "TagDiscovery",
+      "Effect": "Allow",
+      "Action": ["tag:GetResources"],
+      "Resource": "*"
     },
     {
       "Sid": "RdsRead",
@@ -79,6 +136,12 @@ aws sns subscribe --topic-arn arn:aws:sns:ap-northeast-1:123456789012:cheapskate
       "Sid": "EcsRead",
       "Effect": "Allow",
       "Action": ["ecs:DescribeServices"],
+      "Resource": "*"
+    },
+    {
+      "Sid": "Ec2Read",
+      "Effect": "Allow",
+      "Action": ["ec2:DescribeInstances"],
       "Resource": "*"
     },
     {
@@ -98,7 +161,9 @@ aws sns subscribe --topic-arn arn:aws:sns:ap-northeast-1:123456789012:cheapskate
         "rds:StartDBInstance",
         "rds:StopDBCluster",
         "rds:StartDBCluster",
-        "ecs:UpdateService"
+        "ecs:UpdateService",
+        "ec2:StartInstances",
+        "ec2:StopInstances"
       ],
       "Resource": "*"
     },
@@ -112,11 +177,6 @@ aws sns subscribe --topic-arn arn:aws:sns:ap-northeast-1:123456789012:cheapskate
 }
 ```
 
-- `Describe*` と Application Auto Scaling の API はリソースレベル制限に対応していないため、そこは `"Resource": "*"` のままにします。
-- stop/start をオプトインしたリソースだけに制限するには、`Write` ステートメントに `"Condition": {"StringEquals": {"aws:ResourceTag/cheapskate:managed": "true"}}`(タグのキー/値は任意。値は配列にすると複数指定の OR になります)を追加し、管理対象の RDS/ECS リソースにそのタグを付けます。複数のタグのいずれかで許可したい場合は、タグごとに `Write` ステートメントを複製します(同一 `Condition` 内に複数キーを書くと AND になるため)。
-- 管理しないリソースタイプがある場合は、対応する Action を削除します(例: ECS を使わないなら `ecs:UpdateService` と `EcsRead` / `Autoscaling` ステートメント)。
-- トピックなしで運用する場合は `Notify` ステートメントを削除します。
-
 ```console
 aws iam create-role --role-name cheapskate-reconciler \
   --assume-role-policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"lambda.amazonaws.com"},"Action":"sts:AssumeRole"}]}'
@@ -124,27 +184,44 @@ aws iam put-role-policy --role-name cheapskate-reconciler \
   --policy-name cheapskate --policy-document file://policy.json
 ```
 
+削除してよいもの:
+
+- 管理しないリソースタイプの Action
+- SNS トピックを使わない場合の `Notify`
+
+### DynamoDB の権限を分けている理由
+
+reconciler が書くのは `status#` アイテムだけである。したがって `dynamodb:PutItem` は一切付与せず、`UpdateItem` も `dynamodb:LeadingKeys` 条件で `status#*` に閉じる。`Scan` は `LeadingKeys` 条件と併用できないため、読み取り専用の別ステートメントに分けてある。
+
+1 つにまとめる場合は条件なしの `["dynamodb:Scan", "dynamodb:GetItem", "dynamodb:UpdateItem"]` でよいが、関数からスケジュールを書き換えられないという保証は失われる。
+
+### Resource をワイルドカードにしている理由
+
+`tag:GetResources`、`Describe*`、Application Auto Scaling の API は、いずれもリソースレベル制限に非対応である。
+
+### 停止/起動の対象を絞る
+
+`Write` ステートメントに次の条件を追加し、管理対象のリソースにそのタグを付ける。タグのキーと値は任意である。
+
+```json
+"Condition": {"StringEquals": {"aws:ResourceTag/cheapskate:managed": "true"}}
+```
+
+値を配列にすると OR になる。複数タグの OR はステートメントを複製する。同一 `Condition` 内の複数キーは AND となる。
+
 ## 5. Reconciler Lambda 関数
 
-| 設定                  | 値                                                                |
-| --------------------- | ----------------------------------------------------------------- |
-| パッケージタイプ      | `Image`(§1 の URI)                                                |
-| アーキテクチャ        | `arm64`(または `x86_64` — イメージのプラットフォームと一致させる) |
-| メモリ / タイムアウト | 256 MB / 120 秒                                                   |
-| 予約同時実行数        | 1(reconcile の多重実行を防止)                                     |
-
-環境変数(これが完全な契約です — これ以外は読みません):
-
-| 変数                     | 必須   | 意味                                                |
-| ------------------------ | ------ | --------------------------------------------------- |
-| `STATE_TABLE_NAME`       | はい   | DynamoDB テーブル名                                 |
-| `NOTIFICATION_TOPIC_ARN` | いいえ | SNS トピック ARN。空/未設定で通知無効               |
-| `DEFAULT_TIMEZONE`       | いいえ | cron 評価に使う IANA タイムゾーン(デフォルト `UTC`) |
+| 設定 | 値 |
+| --- | --- |
+| パッケージタイプ | `Image`(§1 の URI) |
+| アーキテクチャ | `arm64`(または `x86_64` — イメージのプラットフォームと一致させる) |
+| メモリ / タイムアウト | 256 MB / 120 秒 |
+| 予約同時実行数 | 1(reconcile の多重実行を防止する) |
 
 ```console
 aws lambda create-function --function-name cheapskate-reconciler \
   --package-type Image \
-  --code ImageUri=123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/cheapskate:v0.1.0 \
+  --code ImageUri=123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/cheapskate-reconciler:v0.1.0 \
   --architectures arm64 --memory-size 256 --timeout 120 \
   --role arn:aws:iam::123456789012:role/cheapskate-reconciler \
   --environment "Variables={STATE_TABLE_NAME=cheapskate-state,NOTIFICATION_TOPIC_ARN=arn:aws:sns:ap-northeast-1:123456789012:cheapskate-notifications,DEFAULT_TIMEZONE=Asia/Tokyo}"
@@ -152,9 +229,9 @@ aws lambda put-function-concurrency --function-name cheapskate-reconciler \
   --reserved-concurrent-executions 1
 ```
 
-同一アカウントの ECR から pull する場合、リポジトリポリシーは不要です。関数を作成するプリンシパルにリポジトリへの `ecr:BatchGetImage` と `ecr:GetDownloadUrlForLayer` が必要です。
+同一アカウントの ECR から pull する場合、リポジトリポリシーを要しない。関数を作成するプリンシパルに `ecr:BatchGetImage` と `ecr:GetDownloadUrlForLayer` が必要となる。
 
-推奨: ロググループを自分で作成し、保持期間が Lambda デフォルトの「無期限」にならないようにします:
+ロググループは事前に作成し、保持期間を設定することを推奨する。Lambda の既定は無期限である。
 
 ```console
 aws logs create-log-group --log-group-name /aws/lambda/cheapskate-reconciler
@@ -163,10 +240,17 @@ aws logs put-retention-policy --log-group-name /aws/lambda/cheapskate-reconciler
 
 ## 6. 定期 reconcile トリガー
 
-ペイロード `{}` で N 分おき(5 分がよいデフォルト)に関数を呼び出します。EventBridge Scheduler を使う場合:
+ペイロード `{}` で N 分おきに関数を呼び出す(推奨 5 分)。EventBridge Scheduler の場合:
 
-- 実行ロール: 信頼ポリシーは `scheduler.amazonaws.com`。できれば `"Condition": {"StringEquals": {"aws:SourceAccount": "123456789012"}}` を付けます(confused deputy 対策)。権限は関数 ARN(qualifier を使うなら `<arn>:*` も)への `lambda:InvokeFunction`。
-- スケジュール: `rate(5 minutes)`、`FlexibleTimeWindow: OFF`、ターゲットは関数、`Input: {}`。
+| 項目 | 値 |
+| --- | --- |
+| 実行ロールの信頼ポリシー | `scheduler.amazonaws.com` |
+| 実行ロールの権限 | 関数 ARN への `lambda:InvokeFunction`(qualifier 使用時は `<arn>:*` も) |
+| スケジュール式 | `rate(5 minutes)` |
+| `FlexibleTimeWindow` | `OFF` |
+| ターゲット | 関数、`Input: {}` |
+
+confused deputy 対策として、信頼ポリシーへの `"Condition": {"StringEquals": {"aws:SourceAccount": "123456789012"}}` の追加を推奨する。
 
 ```console
 aws scheduler create-schedule --name cheapskate-reconcile \
@@ -175,28 +259,23 @@ aws scheduler create-schedule --name cheapskate-reconcile \
   --target '{"Arn":"arn:aws:lambda:ap-northeast-1:123456789012:function:cheapskate-reconciler","RoleArn":"arn:aws:iam::123456789012:role/cheapskate-scheduler","Input":"{}"}'
 ```
 
-従来の EventBridge ルールの `rate()` 式でも同等に動きます(その場合はロールの代わりに §7 と同様の Lambda リソースベースポリシーを使います)。
+EventBridge ルールの `rate()` 式でも動作する。その場合は、ロールの代わりに §7 と同様の Lambda リソースベースポリシーを使う。
 
-## 7. EventBridge ルール(RDS 自動起動のファストパス)
+## 7. EventBridge ルール(RDS 自動起動)
 
-AWS が停止中のインスタンス/クラスターを強制起動したとき、次のサイクルを待たずに即座に反応します。イベントパターン:
+停止中の RDS が AWS により自動起動されたとき、次の定期サイクルを待たずに reconcile をトリガーする。購読するのは起動の完了イベントだけである。自動起動の開始を知らせる `RDS-EVENT-0153` / `RDS-EVENT-0154` の時点ではリソースが `starting` で停止 API を呼べず、呼び出しが必ず空振りするためである。
 
 ```json
 {
   "source": ["aws.rds"],
   "detail-type": ["RDS DB Instance Event", "RDS DB Cluster Event"],
   "detail": {
-    "EventID": [
-      "RDS-EVENT-0154",
-      "RDS-EVENT-0153",
-      "RDS-EVENT-0088",
-      "RDS-EVENT-0151"
-    ]
+    "EventID": ["RDS-EVENT-0088", "RDS-EVENT-0151"]
   }
 }
 ```
 
-ターゲットは関数で、イベントは無加工で渡します。呼び出し許可は Lambda のリソースベースポリシーで与えます(ルールのターゲットに IAM ロールは関与しません):
+ターゲットは関数とし、イベントは無加工で渡す。呼び出し許可は Lambda のリソースベースポリシーで与える(ルールのターゲットに IAM ロールは使わない)。
 
 ```console
 aws events put-rule --name cheapskate-rds-events --event-pattern file://pattern.json
@@ -208,20 +287,43 @@ aws lambda add-permission --function-name cheapskate-reconciler \
   --source-arn arn:aws:events:ap-northeast-1:123456789012:rule/cheapskate-rds-events
 ```
 
-## 8. 呼び出しペイロード(リファレンス)
+## 8. 呼び出しペイロード
 
-- **定期 / 手動のフル reconcile**: `"source": "aws.rds"` を含まない任意の JSON オブジェクト — 標準形は `{}`。すべてのタグとそのメンバーを reconcile します。
-- **RDS イベント**: EventBridge イベントそのもの(`source: aws.rds`、`detail.SourceType: DB_INSTANCE|CLUSTER`、`detail.SourceIdentifier`)。そのリソース1件だけを reconcile し(同じタグの他メンバーには触れません)、未登録のリソースは無視します。
+任意の JSON オブジェクト(定期実行の `{}` も、RDS イベントも)がフル reconcile をトリガーする。ペイロードの内容によって処理の範囲が変わることはない。
 
 ## 9. Web コンソール(オプション)
 
-`cheapskate-cli` と同じ操作をブラウザから行うフロントエンドです。**アクセス制御は IP 許可リストのみで、ログインはありません。**許可 CIDR の内側にいる人は誰でも操作できます。この割り切りが合わない場合はこの節をスキップしてください。デプロイせずローカルでテーブルに対して動かすこともできます([../development/run_local.md](../development/run_local.md))。
+`cheapskate-cli` と同じ操作をブラウザから行う。アクセス制御は IP 許可リストのみであり、ログインは無い。許可 CIDR 内の全員が操作できる。デプロイせず、ローカルで動かすこともできる。
 
-構成要素:
+### Lambda 関数
 
-- **同じイメージからのもう 1 つの Lambda**。エントリポイントを `ImageConfig.EntryPoint: ["/var/runtime/webconsole"]` で上書きします。128 MB / 29 秒で十分です。環境変数: `STATE_TABLE_NAME`、`DEFAULT_TIMEZONE`、および `BASE_PATH`(ブラウザから見えるパスプレフィックス = 下記 API のステージ名 `/<stage>`)。
-- **実行ロール**: state テーブルへの `dynamodb:Scan/GetItem/PutItem/DeleteItem` と §4 と同じ `Logs` ステートメントのみ。RDS/ECS の権限は意図的に持たせません。
-- **API Gateway REST API**(v1 — HTTP API にはリソースポリシーがないため)。ルートリソースと `{proxy+}` の両方に Lambda への `ANY` プロキシ統合を張り、`apigateway.amazonaws.com` への Lambda permission を付与します。アクセス制御はリソースポリシーだけです:
+§1 で push した `cheapskate-webconsole` イメージを使う別関数とする。専用イメージであるため `ImageConfig.EntryPoint` の上書きを要しない。128 MB / 29 秒。環境変数は [config.md](config.md)(`BASE_PATH` は下記ステージ名 `/<stage>`)。イベントを HTTP に変換する Lambda Web Adapter はイメージに同梱されており、レイヤーの追加も設定も要しない。
+
+### 実行ロール
+
+state テーブルへの `dynamodb:Scan/GetItem/PutItem/DeleteItem`、`tag:GetResources`、現在の状態を表示するための下記の読み取り専用 `Describe*`、§4 と同じ `Logs` のみを付与する。RDS/ECS/EC2 の制御系権限は意図的に付与しない。`dynamodb:UpdateItem` も同じく付与しない(`status#` レコードを書ける唯一の経路であるため)。
+
+```json
+{
+  "Sid": "LiveStateRead",
+  "Effect": "Allow",
+  "Action": [
+    "rds:DescribeDBInstances",
+    "rds:DescribeDBClusters",
+    "ecs:DescribeServices",
+    "ec2:DescribeInstances"
+  ],
+  "Resource": "*"
+}
+```
+
+コンソールから AWS へ一切問い合わせない場合、このステートメントを外してよい。その場合は現在の状態の列が行ごとに access-denied を表示するだけで、ページの他の部分はそのまま動く。管理しないリソースタイプの Action も個別に削除してよい。
+
+`tag:GetResources` が無い場合、グループページは検出エラーを表示する。コンソール自体は動作する。
+
+### API Gateway REST API(v1)
+
+ルートリソースと `{proxy+}` の両方に Lambda への `ANY` プロキシ統合を張り、`apigateway.amazonaws.com` への Lambda permission を付与する。アクセス制御は次のリソースポリシーで行う。
 
 ```json
 {
@@ -248,11 +350,4 @@ aws lambda add-permission --function-name cheapskate-reconciler \
 }
 ```
 
-`BASE_PATH` と一致する名前のステージ(例: ステージ `console`、`BASE_PATH=/console`)にデプロイします。入口は `https://<api-id>.execute-api.<region>.amazonaws.com/console/` です。
-
-## 10. デプロイの検証
-
-1. 稼働中の開発用 RDS インスタンスをタグに追加して pin する(`cheapskate-cli add --tag dev --type rds-instance --name <id>` の後 `cheapskate-cli pin --tag dev stopped`、[operations.md](operations.md) 参照)→ 1 インターバル以内に `stopping` へ遷移し、`status#` アイテムに `last_action: stop` が記録されること。
-2. コンソールから手動で起動する → 1 インターバル以内に再び停止されること(ドリフト補正)。
-3. `mode: schedule` のタグに ECS サービスを追加する → cron の境界で desiredCount が切り替わること(停止で 0、起動で `restore_count`)。
-4. 通知を設定している場合、各アクションで SNS メッセージが 1 通発行され、収束済みサイクルでは発行されないこと。
+`BASE_PATH` と同名のステージ(例: ステージ `console`、`BASE_PATH=/console`)にデプロイする。URL は `https://<api-id>.execute-api.<region>.amazonaws.com/console/` となる。
