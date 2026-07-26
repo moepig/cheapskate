@@ -1,0 +1,52 @@
+{{define "content"}}
+<h2>Diagnostics</h2>
+<p class="muted">
+  State-table inconsistencies and leftovers from half-finished work. Same checks as
+  <code>cheapskate-cli doctor</code>. Resources stuck mid-transition are reported after
+  {{.Doctor.StuckAfter}}.
+</p>
+
+{{if .Doctor.Report.Blocked}}
+<p class="err">
+  Orphaned resource status records were <strong>not</strong> checked this run, so none can be
+  listed or pruned:
+  <br>{{range .Doctor.Report.Blocked}}&bull; {{.}}<br>{{end}}
+</p>
+{{end}}
+
+<div class="table-wrap">
+<table>
+  <tr><th>Finding</th><th>Group</th><th>Resource</th><th>Detail</th><th>Record</th></tr>
+  {{range .Doctor.Report.Findings}}
+  <tr>
+    <td><strong>{{.Kind}}</strong>{{if .Prunable}}<br><span class="muted">prunable</span>{{end}}</td>
+    <td>{{with .Group}}<a href="{{$.Base}}/group?name={{.}}">{{.}}</a>{{else}}<span class="muted">-</span>{{end}}</td>
+    <td>{{with .Resource}}<code>{{.}}</code>{{else}}<span class="muted">-</span>{{end}}</td>
+    <td class="danger">{{.Detail}}</td>
+    <td>{{with .PK}}<code>{{.}}</code>{{else}}<span class="muted">-</span>{{end}}</td>
+  </tr>
+  {{else}}
+  <tr><td colspan="5" class="muted">Nothing to report — the state table is consistent.</td></tr>
+  {{end}}
+</table>
+</div>
+
+{{if .Doctor.Prunable}}
+<fieldset>
+  <legend class="danger">Prune</legend>
+  <p class="muted">
+    Deletes the {{.Doctor.Prunable}} record(s) marked <em>prunable</em> above: orphaned
+    <code>override#</code> and <code>status#</code> items whose group or resource no longer
+    exists. Group configuration, corrupt records, and overlapping selectors are never deleted —
+    those need a decision, not a cleanup. AWS resources are never touched.
+  </p>
+  <p class="muted">
+    The checks are re-run at the moment you press this, so anything that stopped being an orphan
+    in the meantime is left alone.
+  </p>
+  <form method="post" action="{{.Base}}/doctor">
+    <button class="danger">Prune {{.Doctor.Prunable}} record(s)</button>
+  </form>
+</fieldset>
+{{end}}
+{{end}}

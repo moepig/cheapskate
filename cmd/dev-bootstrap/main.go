@@ -1,6 +1,6 @@
-// dev-bootstrap creates the DynamoDB state table for `make dev`. It is idempotent (re-running it
-// against an existing table is a no-op) and is never built into the Lambda container image — the
-// Dockerfile builds only ./cmd/reconciler and ./cmd/webconsole.
+// `make dev` 向けに DynamoDB の state テーブルとダミーの ECS リソース（internal/devtools/devseed）を作る
+// 冪等であり、既存のフィクスチャに対して再実行してもタグの再適用以外は何も起きない
+// Lambda のコンテナイメージには決して含まれず、Dockerfile がビルドするのは ./cmd/reconciler と ./cmd/webconsole だけである
 package main
 
 import (
@@ -10,8 +10,11 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/ecs"
+	"github.com/aws/aws-sdk-go-v2/service/resourcegroupstaggingapi"
 
-	"cheapskate/internal/statetable"
+	"cheapskate/internal/devtools/devseed"
+	"cheapskate/internal/state"
 )
 
 func main() {
@@ -26,8 +29,13 @@ func main() {
 		log.Fatalf("load AWS config: %v", err)
 	}
 
-	if err := statetable.Create(ctx, dynamodb.NewFromConfig(cfg), table); err != nil {
+	if err := state.CreateTable(ctx, dynamodb.NewFromConfig(cfg), table); err != nil {
 		log.Fatalf("create state table %s: %v", table, err)
 	}
 	log.Printf("state table %s ready", table)
+
+	if err := devseed.Seed(ctx, ecs.NewFromConfig(cfg), resourcegroupstaggingapi.NewFromConfig(cfg)); err != nil {
+		log.Fatalf("seed dummy ECS resources: %v", err)
+	}
+	log.Print("dummy ECS resources ready (cluster dev-cluster: api, worker, batch)")
 }

@@ -1,0 +1,123 @@
+{{define "content"}}
+<h2><strong>{{.Detail.Name}}</strong></h2>
+<div class="table-wrap">
+<table class="kv">
+  <tr><th>Mode</th><td>{{.Detail.Group.Mode}}</td></tr>
+  <tr><th>Config</th><td>{{groupDesc .Detail.Group}}</td></tr>
+  <tr><th>Selector</th><td>{{selDesc .Detail.Group}}</td></tr>
+  <tr><th>Override</th><td>{{with ovDesc .Detail.Override}}{{.}}{{else}}<span class="muted">-</span>{{end}}</td></tr>
+  {{if .Detail.Err}}<tr><th>Error</th><td class="danger">{{.Detail.Err}}</td></tr>{{end}}
+  {{if .Detail.Status.LastError}}<tr><th>Last error</th><td class="danger">{{.Detail.Status.LastError}} at {{.Detail.Status.LastErrorAt}}</td></tr>{{end}}
+</table>
+</div>
+
+<h2>Resources</h2>
+{{if .Detail.DiscoverErr}}
+<p class="err">discover error: {{.Detail.DiscoverErr}}</p>
+{{else}}
+<div class="table-wrap">
+<table>
+  <tr><th>Type</th><th>Name</th><th>Tag config</th><th>Current state</th><th>Transitioning since</th><th>Last action</th><th>Observed (at last action)</th><th>Last error</th></tr>
+  {{range .Detail.Resources}}
+  <tr>
+    <td>{{.Resource.Type}}</td>
+    <td><code>{{.Resource.Ref}}</code></td>
+    <td>{{cfgDesc .Resource}}</td>
+    <td>{{liveDesc .}}</td>
+    <td>{{with .Status.TransitioningSince}}{{.}}{{else}}<span class="muted">-</span>{{end}}</td>
+    <td>{{with actDesc .Status}}{{.}}{{else}}<span class="muted">-</span>{{end}}</td>
+    <td>{{with .Status.ObservedState}}{{.}}{{else}}<span class="muted">-</span>{{end}}</td>
+    <td>{{with .Status.LastError}}<span class="danger">{{.}}</span>{{else}}<span class="muted">-</span>{{end}}</td>
+  </tr>
+  {{else}}
+  <tr><td colspan="8" class="muted">No matching resources{{if .Detail.Group.TagKey}} (nothing currently tagged {{.Detail.Group.TagKey}}={{.Detail.Group.TagValue}}){{end}}.</td></tr>
+  {{end}}
+</table>
+</div>
+{{end}}
+
+<fieldset>
+  <legend>Selector</legend>
+  <p class="muted">Which resources this group matches, by tag and resource type.</p>
+  <form method="post" action="{{.Base}}/op">
+    <input type="hidden" name="action" value="set-selector">
+    <input type="hidden" name="group" value="{{.Detail.Name}}">
+    <p><label>Tag key <input name="tag_key" value="{{.Detail.Group.TagKey}}"></label>
+       <label>Tag value <input name="tag_value" value="{{.Detail.Group.TagValue}}"></label></p>
+    <p>
+      {{range $.Types}}
+      <label class="check"><input type="checkbox" name="types" value="{{.}}"{{if contains $.Detail.Group.Types .}} checked{{end}}> {{.}}</label>
+      {{end}}
+    </p>
+    <button class="primary">Save selector</button>
+  </form>
+</fieldset>
+
+<fieldset>
+  <legend>Override</legend>
+  <p class="muted">Temporarily force the desired state until a specific date/time, then expires automatically. Takes precedence over both Pin and Schedule (but not over a disabled group). Applies to every matched resource.</p>
+  <form method="post" action="{{.Base}}/op">
+    <input type="hidden" name="action" value="override">
+    <input type="hidden" name="group" value="{{.Detail.Name}}">
+    <p><label>Desired
+       <select name="desired"><option>running</option><option>stopped</option></select></label>
+       <label>Until ({{.TZName}})
+       <input type="datetime-local" name="until" value="{{.DefaultUntil}}" required></label></p>
+    <button class="primary">Apply</button>
+  </form>
+  {{if .Detail.Override}}
+  <form class="inline" method="post" action="{{.Base}}/op">
+    <input type="hidden" name="action" value="clear-override">
+    <input type="hidden" name="group" value="{{.Detail.Name}}">
+    <button>Clear override</button>
+  </form>
+  {{end}}
+</fieldset>
+
+<fieldset>
+  <legend>Pin</legend>
+  <p class="muted">Fix the desired state, taking priority over Schedule; existing cron settings are kept, not cleared. A temporary Override, or disabling the group, still takes priority over Pin. Applies to every matched resource.</p>
+  <form method="post" action="{{.Base}}/op">
+    <input type="hidden" name="action" value="pin">
+    <input type="hidden" name="group" value="{{.Detail.Name}}">
+    <p><label>Desired
+       <select name="desired"><option>stopped</option><option>running</option></select></label></p>
+    <button class="primary">Pin</button>
+  </form>
+  {{if eq .Detail.Group.Mode "pinned"}}
+  <form class="inline" method="post" action="{{.Base}}/op">
+    <input type="hidden" name="action" value="unpin">
+    <input type="hidden" name="group" value="{{.Detail.Name}}">
+    <button>Release pin</button>
+  </form>
+  {{end}}
+</fieldset>
+
+<fieldset>
+  <legend>Schedule</legend>
+  <p class="muted">Automatically start and stop this group's resources at the times below, each given as a 5-field cron schedule. Applies to every matched resource.</p>
+  <form method="post" action="{{.Base}}/op">
+    <input type="hidden" name="action" value="schedule">
+    <input type="hidden" name="group" value="{{.Detail.Name}}">
+    <p><label>Start at (cron) <input name="start" value="{{.Detail.Group.StartCron}}" placeholder="0 9 * * 1-5"></label>
+       <label>Stop at (cron) <input name="stop" value="{{.Detail.Group.StopCron}}" placeholder="0 20 * * 1-5"></label>
+       <label>Timezone <input name="timezone" value="{{.Detail.Group.Timezone}}" placeholder="Asia/Tokyo"></label></p>
+    <button class="primary">Save schedule</button>
+  </form>
+</fieldset>
+
+<fieldset>
+  <legend class="danger">Danger zone</legend>
+  <p class="muted">Irreversible actions that stop managing or delete this group.</p>
+  <form class="inline" method="post" action="{{.Base}}/op">
+    <input type="hidden" name="action" value="disable">
+    <input type="hidden" name="group" value="{{.Detail.Name}}">
+    <button>Disable (keep config, stop managing)</button>
+  </form>
+  <form class="inline" method="post" action="{{.Base}}/op">
+    <input type="hidden" name="action" value="remove-group">
+    <input type="hidden" name="group" value="{{.Detail.Name}}">
+    <button class="danger">Remove group (delete group, override, status)</button>
+  </form>
+</fieldset>
+{{end}}

@@ -1,0 +1,40 @@
+{{define "content"}}
+<div class="table-wrap">
+<table>
+  <tr><th>Group</th><th>Mode</th><th>Config</th><th>Selector</th><th>Override</th><th>Last error</th></tr>
+  {{range .Rows}}
+  <tr>
+    <td><a href="{{$.Base}}/group?name={{.Name}}"><strong>{{.Name}}</strong></a></td>
+    {{if .Err}}
+    <td colspan="5" class="danger">error: {{.Err}}</td>
+    {{else}}
+    <td>{{.Group.Mode}}</td>
+    <td>{{groupDesc .Group}}</td>
+    <td>{{selDesc .Group}}</td>
+    <td>{{with ovDesc .Override}}{{.}}{{else}}<span class="muted">-</span>{{end}}</td>
+    <td>{{with .Status.LastError}}<span class="danger">{{.}}</span>{{else}}<span class="muted">-</span>{{end}}</td>
+    {{end}}
+  </tr>
+  {{else}}
+  <tr><td colspan="6" class="muted">No groups yet. Create one below.</td></tr>
+  {{end}}
+</table>
+</div>
+
+<fieldset>
+  <legend>Create group</legend>
+  <p class="muted">Register a new group by defining its tag-based selector and resource types.</p>
+  <form method="post" action="{{.Base}}/op">
+    <input type="hidden" name="action" value="set-selector">
+    <p><label>Group <input name="group" placeholder="dev" required></label></p>
+    <p><label>Tag key <input name="tag_key" placeholder="cheapskate:group"></label>
+       <label>Tag value <input name="tag_value" placeholder="dev"></label></p>
+    <p>
+      {{range .Types}}
+      <label class="check"><input type="checkbox" name="types" value="{{.}}"> {{.}}</label>
+      {{end}}
+    </p>
+    <button class="primary">Create</button>
+  </form>
+</fieldset>
+{{end}}

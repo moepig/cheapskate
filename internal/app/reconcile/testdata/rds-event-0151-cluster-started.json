@@ -1,0 +1,19 @@
+{
+  "version": "0",
+  "id": "844e2571-85d4-695f-b930-0153b71dcb42",
+  "detail-type": "RDS DB Cluster Event",
+  "source": "aws.rds",
+  "account": "123456789012",
+  "time": "2026-07-15T00:00:00Z",
+  "region": "ap-northeast-1",
+  "resources": ["arn:aws:rds:ap-northeast-1:123456789012:cluster:dev-aurora"],
+  "detail": {
+    "EventCategories": ["notification"],
+    "SourceType": "CLUSTER",
+    "SourceArn": "arn:aws:rds:ap-northeast-1:123456789012:cluster:dev-aurora",
+    "Date": "2026-07-15T00:00:00.000Z",
+    "Message": "DB cluster started.",
+    "SourceIdentifier": "dev-aurora",
+    "EventID": "RDS-EVENT-0151"
+  }
+}
