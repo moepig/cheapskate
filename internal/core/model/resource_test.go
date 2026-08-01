@@ -113,7 +113,7 @@ func TestResourceConfigReadsDeclaredTagsOnly(t *testing.T) {
 		},
 	}
 	assert.Equal(t, []ConfigValue{
-		{Name: "desired_count", Label: "desired count", Value: "2"},
+		{Name: "desired_count", Label: "desired", Value: "2"},
 		{Name: "min", Label: "scaling min", Value: "1"},
 		{Name: "max", Label: "scaling max", Value: "3"},
 	}, r.Config(), "宣言の順に、宣言されたタグだけを返す")

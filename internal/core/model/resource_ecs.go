@@ -30,7 +30,7 @@ var ecsServiceType = TypeInfo{
 	RefHint: "the ecs service ARN may still use the old short format (no cluster name); enable long ARN " +
 		"format with `aws ecs put-account-setting-default --name serviceLongArnFormat --value enabled`",
 	ConfigTags: []ConfigTag{
-		{Key: EcsDesiredCountTagKey, Name: "desired_count", Label: "desired count"},
+		{Key: EcsDesiredCountTagKey, Name: "desired_count", Label: "desired"},
 		{Key: EcsScalingMinTagKey, Name: "min", Label: "scaling min"},
 		{Key: EcsScalingMaxTagKey, Name: "max", Label: "scaling max"},
 	},

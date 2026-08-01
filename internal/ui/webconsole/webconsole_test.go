@@ -138,12 +138,12 @@ func TestDescribeResourceConfig(t *testing.T) {
 			model.Resource{Type: model.TypeEcsService, Tags: map[string]string{
 				model.EcsDesiredCountTagKey: "2", model.EcsScalingMinTagKey: "1", model.EcsScalingMaxTagKey: "3",
 			}},
-			"desired count: 2<br>scaling min: 1<br>scaling max: 3",
+			"desired: 2<br>scaling min: 1<br>scaling max: 3",
 		},
 		{
 			"ecs-service with only desired count",
 			model.Resource{Type: model.TypeEcsService, Tags: map[string]string{model.EcsDesiredCountTagKey: "5"}},
-			"desired count: 5",
+			"desired: 5",
 		},
 	}
 	for _, tc := range cases {
