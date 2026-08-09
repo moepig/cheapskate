@@ -4,12 +4,14 @@
 
 ## reconcile ループのリソース
 
+reconcile ループを構成するリソースと、その間のデータの流れを図示すると、次の図のようになる。
+
 ```mermaid
 flowchart LR
     ops["cheapskate-cli / IaC /
     aws dynamodb put-item"]
 
-    subgraph account["自分の AWS アカウント"]
+    subgraph account["AWS アカウント"]
         sched["EventBridge Scheduler
         rate(5 minutes)"]
         schedrole["実行ロール
@@ -67,6 +69,8 @@ flowchart LR
     fn --> logs
 ```
 
+図中の各リソースの役割と、必須かどうかを、以下にまとめる。
+
 | リソース | 役割 | 必須 |
 |---|---|---|
 | DynamoDB state テーブル | 望ましい状態(`group#`/`override#`)と reconciler が書く実行結果(`status#`)を保持する唯一の永続ストア | 必須 |
@@ -81,12 +85,14 @@ flowchart LR
 
 ## Web コンソールのリソース
 
+Web コンソールを構成するリソースと、ブラウザからの到達経路を図示すると、次の図のようになる。
+
 ```mermaid
 flowchart LR
     user(["ブラウザ
     許可 CIDR 内"])
 
-    subgraph account["自分の AWS アカウント"]
+    subgraph account["AWS アカウント"]
         apigw["API Gateway REST API (v1)
         ルート + {proxy+} を ANY プロキシ統合"]
         policy["リソースポリシー
@@ -117,6 +123,8 @@ flowchart LR
     fn --> logs
 ```
 
+図中の各リソースの役割を、以下にまとめる。
+
 | リソース | 役割 |
 |---|---|
 | API Gateway REST API(v1) | ブラウザからの唯一の入口。IP 制限に必要なリソースポリシーが HTTP API(v2)に無いため v1 を使う |
@@ -130,6 +138,6 @@ flowchart LR
 
 ## 2 系統の関係
 
-共有リソースは DynamoDB state テーブルのみであり、互いの書き込み対象は重ならない([database.md](database.md) の読み書きマトリクス)。
+共有リソースは DynamoDB state テーブルのみであり、互いの書き込み対象は重ならない。詳細は、[database.md](database.md) の読み書きマトリクスを参照。
 
 Reconciler Lambda と Webconsole Lambda は別イメージ・別関数・別実行ロールであり、ビルドからデプロイまで独立して行える。Web コンソールを構築しない場合は `cheapskate-cli` が同じ役割を担う。アクセス経路が異なるだけで、書き込むアイテムの形は同じである。

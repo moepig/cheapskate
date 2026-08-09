@@ -1,8 +1,8 @@
-# 自分の AWS アカウントへのホスティング
+# AWS アカウントへのホスティング
 
-IaC テンプレートは配布しない。このページに、作成するリソースの仕様をすべて記載する。ツール(Terraform / CDK / CloudFormation / コンソール / CLI)と命名は自由である。実行例は AWS CLI で示す。プレースホルダはアカウント `123456789012`、リージョン `ap-northeast-1` とする。
+IaC テンプレートは配布しない。本ドキュメントは、作成する AWS リソースの仕様をすべて記載する。使用するツール(Terraform、CDK、CloudFormation、マネジメントコンソール、CLI)と命名は任意である。実行例は AWS CLI で示し、プレースホルダはアカウント `123456789012`、リージョン `ap-northeast-1` とする。
 
-作成するもの:
+作成するリソースは次のとおりである。
 
 | 節 | リソース | 必須 |
 |---|---|---|
@@ -15,18 +15,16 @@ IaC テンプレートは配布しない。このページに、作成するリ�
 | §7 | EventBridge ルール(RDS 自動起動) | 必須 |
 | §9 | Web コンソール | オプション |
 
-用語は [concepts.md](concepts.md)、環境変数の一覧は [config.md](config.md)、作成後の設定操作は [operations.md](operations.md)。
-
 ## 1. コンテナイメージの ECR への配置
 
-reconciler とオプションの Web コンソールは別々のイメージであり、バイナリを 1 つずつ含む。Lambda が pull できるのは ECR のみであるから、以下のいずれの方法でも、最終的に自分のアカウントの ECR へ置く。
+reconciler とオプションの Web コンソールは別々のイメージであり、バイナリを 1 つずつ含む。Lambda が pull できるのは ECR のみであるから、以下のいずれの方法でも、最終的にイメージを ECR へ配置する。
 
 ```console
 aws ecr create-repository --repository-name cheapskate-reconciler   # 初回のみ
 aws ecr create-repository --repository-name cheapskate-webconsole   # 初回のみ(§9 を使う場合)
 ```
 
-### リリース済みイメージをコピーする
+### リリース済みイメージの複製
 
 リリースごとに、両方のイメージが `linux/amd64` と `linux/arm64` 向けに GHCR へ公開される。`--platform` で関数が動作する 1 アーキテクチャを選ぶため、ECR に置かれるのは単一アーキテクチャのイメージとなる。
 
@@ -37,7 +35,9 @@ docker tag ghcr.io/moepig/cheapskate-reconciler:v0.1.0 123456789012.dkr.ecr.ap-n
 docker push 123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/cheapskate-reconciler:v0.1.0
 ```
 
-### ソースからビルドする
+### ソースからのビルド
+
+`make push` が、両イメージのビルドから ECR への push までを行う。
 
 ```console
 make push \
@@ -46,11 +46,13 @@ make push \
   TAG=v0.1.0
 ```
 
-Web コンソールを使わない場合は `make push-reconciler ECR_REPO_RECONCILER=... TAG=v0.1.0` だけでよい。Lambda 関数からは push した URI を参照する。digest 指定を推奨する。
+Web コンソールを使わない場合は `make push-reconciler ECR_REPO_RECONCILER=... TAG=v0.1.0` で足りる。Lambda 関数からは push した URI を参照する。参照は digest 指定を推奨する。
 
-既定のプラットフォームは `linux/arm64` である。x86 の場合は `make push PLATFORM=linux/amd64 ...` とし、Lambda アーキテクチャを `x86_64` にする。
+既定のプラットフォームは `linux/arm64` である。x86 を使う場合は `make push PLATFORM=linux/amd64 ...` とし、Lambda アーキテクチャを `x86_64` とする。
 
 ## 2. DynamoDB state テーブル
+
+テーブルに要求する定義を、以下に示す。
 
 | 項目 | 値 |
 |---|---|
@@ -72,7 +74,7 @@ aws dynamodb update-time-to-live --table-name cheapskate-state \
 
 ### SNS トピック
 
-アクションの実行時と失敗時に通知を送る先である。関数が呼ぶ API は `sns:Publish` のみとなる。トピックと環境変数 `NOTIFICATION_TOPIC_ARN` を省略すると通知は無効になる。
+アクションの実行時と失敗時に通知を送る先である。関数が呼ぶ API は `sns:Publish` のみである。トピックと環境変数 `NOTIFICATION_TOPIC_ARN` を省略した場合、通知は無効となる。
 
 ```console
 aws sns create-topic --name cheapskate-notifications
@@ -80,7 +82,7 @@ aws sns subscribe --topic-arn arn:aws:sns:ap-northeast-1:123456789012:cheapskate
   --protocol email --notification-endpoint ops@example.com
 ```
 
-届く通知は 3 種類である。件名は `[cheapskate] <種別>: <グループ名>/<リソース ID>`、本文は JSON オブジェクト 1 つとなる。
+通知は 3 種類である。件名は `[cheapskate] <種別>: <グループ名>/<リソース ID>`、本文は JSON オブジェクト 1 つである。種別と送信の契機を、以下に示す。
 
 | 種別 | 送信される契機 |
 | --- | --- |
@@ -90,7 +92,7 @@ aws sns subscribe --topic-arn arn:aws:sns:ap-northeast-1:123456789012:cheapskate
 
 ### メトリクス
 
-reconciler は毎サイクル、次の 4 つのメトリクスを出力する。名前空間は `METRICS_NAMESPACE`(既定 `cheapskate`)、次元なし、単位は Count である。`PutMetricData` を呼ばず CloudWatch Logs 経由で生成されるため、追加の IAM 権限を要しない。
+reconciler は毎サイクル、4 つのメトリクスを出力する。名前空間は `METRICS_NAMESPACE`(既定 `cheapskate`)、次元なし、単位は Count である。`PutMetricData` を呼ばず CloudWatch Logs 経由で生成されるため、追加の IAM 権限を要しない。出力するメトリクスを、以下に示す。
 
 | メトリクス | 意味 |
 | --- | --- |
@@ -99,9 +101,14 @@ reconciler は毎サイクル、次の 4 つのメトリクスを出力する。
 | `ReconcileErrors` | リソース単位・グループ単位の失敗件数 |
 | `ReconcileAborted` | サイクル自体が立ち上がらなかったとき 1、通常は 0 |
 
-この 4 本はカスタムメトリクスとして課金される(合計で月 1 ドル強)。不要なら `METRICS_ENABLED=false` で発行を止められる([config.md](config.md))。
+この 4 本はカスタムメトリクスとして課金される(合計で月 1 ドル強)。不要であれば `METRICS_ENABLED=false` で発行を止められる。
 
-通知とは別に、失敗の検知には Lambda の `Errors` メトリクスへのアラームを設定する。トピックとアラームのどちらも用意しないと、全リソースが失敗し続けても何も鳴らない。アラームの設定例は [troubleshooting.md](troubleshooting.md)。
+### 失敗検知のアラーム
+
+通知とは別に、失敗の検知には Lambda の `Errors` メトリクスへのアラームを設定する。設定するアラームの具体例と、それぞれが何を捉えるかは、[troubleshooting.md](troubleshooting.md) の障害の検知を参照。
+
+> [!WARNING]
+> SNS トピックと `Errors` アラームのいずれも用意しない場合、全リソースが失敗し続けても検知経路が存在しない。少なくとも一方を設定すること。
 
 ## 4. Lambda 実行ロール
 
@@ -193,6 +200,8 @@ reconciler は毎サイクル、次の 4 つのメトリクスを出力する。
 }
 ```
 
+このポリシーをロールへ適用する手順を、以下に示す。
+
 ```console
 aws iam create-role --role-name cheapskate-reconciler \
   --assume-role-policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"lambda.amazonaws.com"},"Action":"sts:AssumeRole"}]}'
@@ -200,10 +209,7 @@ aws iam put-role-policy --role-name cheapskate-reconciler \
   --policy-name cheapskate --policy-document file://policy.json
 ```
 
-削除してよいもの:
-
-- 管理しないリソースタイプの Action
-- SNS トピックを使わない場合の `Notify`
+削除してよい記述は、管理しないリソースタイプの Action と、SNS トピックを使わない場合の `Notify` である。
 
 ### DynamoDB の権限を分けている理由
 
@@ -215,17 +221,19 @@ reconciler が書くのは `status#` アイテムだけである。したがっ�
 
 `tag:GetResources`、`Describe*`、Application Auto Scaling の API は、いずれもリソースレベル制限に非対応である。
 
-### 停止/起動の対象を絞る
+### 停止/起動の対象を絞る方法
 
-`Write` ステートメントに次の条件を追加し、管理対象のリソースにそのタグを付ける。タグのキーと値は任意である。
+`Write` ステートメントに次の条件を追加し、管理対象のリソースに同じタグを付与する。タグのキーと値は任意である。
 
 ```json
 "Condition": {"StringEquals": {"aws:ResourceTag/cheapskate:managed": "true"}}
 ```
 
-値を配列にすると OR になる。複数タグの OR はステートメントを複製する。同一 `Condition` 内の複数キーは AND となる。
+値を配列にすると OR 条件となる。複数タグの OR はステートメントを複製して表現する。同一 `Condition` 内の複数キーは AND となる。
 
 ## 5. Reconciler Lambda 関数
+
+関数に要求する設定を、以下に示す。
 
 | 設定 | 値 |
 | --- | --- |
@@ -233,6 +241,8 @@ reconciler が書くのは `status#` アイテムだけである。したがっ�
 | アーキテクチャ | `arm64`(または `x86_64` — イメージのプラットフォームと一致させる) |
 | メモリ / タイムアウト | 256 MB / 120 秒 |
 | 予約同時実行数 | 1(reconcile の多重実行を防止する) |
+
+関数に設定する環境変数の一覧と既定値は [config.md](config.md) にある。
 
 ```console
 aws lambda create-function --function-name cheapskate-reconciler \
@@ -245,7 +255,8 @@ aws lambda put-function-concurrency --function-name cheapskate-reconciler \
   --reserved-concurrent-executions 1
 ```
 
-同一アカウントの ECR から pull する場合、リポジトリポリシーを要しない。関数を作成するプリンシパルに `ecr:BatchGetImage` と `ecr:GetDownloadUrlForLayer` が必要となる。
+> [!NOTE]
+> 同一アカウントの ECR から pull する場合、リポジトリポリシーを要しない。ただし、関数を作成するプリンシパルには `ecr:BatchGetImage` と `ecr:GetDownloadUrlForLayer` が必要である。
 
 ロググループは事前に作成し、保持期間を設定することを推奨する。Lambda の既定は無期限である。
 
@@ -256,7 +267,7 @@ aws logs put-retention-policy --log-group-name /aws/lambda/cheapskate-reconciler
 
 ## 6. 定期 reconcile トリガー
 
-ペイロード `{}` で N 分おきに関数を呼び出す(推奨 5 分)。EventBridge Scheduler の場合:
+ペイロード `{}` で N 分おきに関数を呼び出す(推奨は 5 分)。EventBridge Scheduler を使う場合の設定を、以下に示す。
 
 | 項目 | 値 |
 | --- | --- |
@@ -279,7 +290,7 @@ EventBridge ルールの `rate()` 式でも動作する。その場合は、ロ�
 
 ## 7. EventBridge ルール(RDS 自動起動)
 
-停止中の RDS が AWS により自動起動されたとき、次の定期サイクルを待たずに reconcile をトリガーする。購読するのは起動の完了イベントだけである。自動起動の開始を知らせる `RDS-EVENT-0153` / `RDS-EVENT-0154` の時点ではリソースが `starting` で停止 API を呼べず、呼び出しが必ず空振りするためである。
+停止中の RDS が AWS により自動起動されたとき、次の定期サイクルを待たずに reconcile をトリガーする。購読するのは起動の完了イベントだけである。自動起動の開始を知らせる `RDS-EVENT-0153` / `RDS-EVENT-0154` の時点ではリソースが `starting` であり停止 API を呼べないため、その時点での呼び出しは必ず空振りするためである。
 
 ```json
 {
@@ -291,7 +302,7 @@ EventBridge ルールの `rate()` 式でも動作する。その場合は、ロ�
 }
 ```
 
-ターゲットは関数とし、イベントは無加工で渡す。呼び出し許可は Lambda のリソースベースポリシーで与える(ルールのターゲットに IAM ロールは使わない)。
+ターゲットは関数とし、イベントは無加工で渡す。呼び出し許可は Lambda のリソースベースポリシーで与える。ルールのターゲットに IAM ロールは使わない。
 
 ```console
 aws events put-rule --name cheapskate-rds-events --event-pattern file://pattern.json
@@ -305,19 +316,22 @@ aws lambda add-permission --function-name cheapskate-reconciler \
 
 ## 8. 呼び出しペイロード
 
-任意の JSON オブジェクト(定期実行の `{}` も、RDS イベントも)がフル reconcile をトリガーする。ペイロードの内容によって処理の範囲が変わることはない。
+任意の JSON オブジェクトがフル reconcile をトリガーする。定期実行の `{}` も RDS イベントも同様である。ペイロードの内容によって処理の範囲が変わることはない。
 
 ## 9. Web コンソール(オプション)
 
-`cheapskate-cli` と同じ操作をブラウザから行う。アクセス制御は IP 許可リストのみであり、ログインは無い。許可 CIDR 内の全員が操作できる。デプロイせず、ローカルで動かすこともできる。
+`cheapskate-cli` と同じ操作をブラウザから行うためのコンポーネントである。デプロイせずローカルで動かすこともできる。
+
+> [!WARNING]
+> アクセス制御は IP 許可リストのみであり、ログインは無い。許可 CIDR 内の全員が操作できる。この条件が受け入れられない場合は、本節を構築しないこと。
 
 ### Lambda 関数
 
-§1 で push した `cheapskate-webconsole` イメージを使う別関数とする。専用イメージであるため `ImageConfig.EntryPoint` の上書きを要しない。128 MB / 29 秒。環境変数は [config.md](config.md)(`BASE_PATH` は下記ステージ名 `/<stage>`)。イベントを HTTP に変換する Lambda Web Adapter はイメージに同梱されており、レイヤーの追加も設定も要しない。
+§1 で push した `cheapskate-webconsole` イメージを使う別関数とする。専用イメージであるため `ImageConfig.EntryPoint` の上書きを要しない。メモリとタイムアウトは 128 MB / 29 秒とする。環境変数の一覧は [config.md](config.md) にあり、`BASE_PATH` には下記ステージ名 `/<stage>` を設定する。イベントを HTTP に変換する Lambda Web Adapter はイメージに同梱されており、レイヤーの追加も設定も要しない。
 
 ### 実行ロール
 
-state テーブルへの `dynamodb:Scan/GetItem/PutItem/DeleteItem`、`tag:GetResources`、現在の状態を表示するための下記の読み取り専用 `Describe*`、§4 と同じ `Logs` のみを付与する。RDS/ECS/EC2 の制御系権限は意図的に付与しない。`dynamodb:UpdateItem` も同じく付与しない(`status#` レコードを書ける唯一の経路であるため)。
+state テーブルへの `dynamodb:Scan/GetItem/PutItem/DeleteItem`、`tag:GetResources`、現在の状態を表示するための下記の読み取り専用 `Describe*`、および §4 と同じ `Logs` のみを付与する。RDS/ECS/EC2 の制御系権限は付与しない。`dynamodb:UpdateItem` も付与しない。これは `status#` レコードを書ける唯一の経路であるためである。
 
 ```json
 {
@@ -333,7 +347,7 @@ state テーブルへの `dynamodb:Scan/GetItem/PutItem/DeleteItem`、`tag:GetRe
 }
 ```
 
-コンソールから AWS へ一切問い合わせない場合、このステートメントを外してよい。その場合は現在の状態の列が行ごとに access-denied を表示するだけで、ページの他の部分はそのまま動く。管理しないリソースタイプの Action も個別に削除してよい。
+コンソールから AWS へ一切問い合わせない場合、このステートメントは不要である。その場合、現在の状態の列が行ごとに access-denied を表示するだけであり、ページの他の部分は動作する。管理しないリソースタイプの Action も個別に削除してよい。
 
 `tag:GetResources` が無い場合、グループページは検出エラーを表示する。コンソール自体は動作する。
 
@@ -367,3 +381,7 @@ state テーブルへの `dynamodb:Scan/GetItem/PutItem/DeleteItem`、`tag:GetRe
 ```
 
 `BASE_PATH` と同名のステージ(例: ステージ `console`、`BASE_PATH=/console`)にデプロイする。URL は `https://<api-id>.execute-api.<region>.amazonaws.com/console/` となる。
+
+## 10. 設定の投入
+
+以上でリソースの作成は完了する。この時点では state テーブルが空であり、reconciler は毎サイクル何も操作しない。管理対象を決めるには、グループの設定レコードを追加し、対象の AWS リソースにセレクタのタグを付与する。詳細は、[operations.md](operations.md) の追加、および [resource_tag.md](resource_tag.md) のセレクタのタグを参照。
