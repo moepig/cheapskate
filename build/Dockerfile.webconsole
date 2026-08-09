@@ -1,0 +1,23 @@
+# Release image for the web console, built by goreleaser (see .goreleaser.yaml).
+#
+# The context here is a goreleaser build directory holding the already cross-compiled binaries, not
+# the repository, so this file only assembles — the compile flags live in .goreleaser.yaml. The
+# root Dockerfile is the one that builds from source, for local builds and the image tests; the
+# runtime stage below must stay in step with its `webconsole` target, adapter version included.
+FROM public.ecr.aws/awsguru/aws-lambda-adapter:1.1.0 AS lambda-adapter
+
+FROM public.ecr.aws/lambda/provided:al2023
+# Lambda's init starts every executable under /opt/extensions before invoking the function.
+COPY --from=lambda-adapter /lambda-adapter /opt/extensions/lambda-adapter
+# goreleaser lays the binaries out per platform, as <goos>/<goarch>/<name>, because buildx builds
+# every platform of the manifest from this one file. TARGETPLATFORM is what selects among them.
+ARG TARGETPLATFORM
+COPY $TARGETPLATFORM/bootstrap /var/runtime/bootstrap
+# The adapter connects to AWS_LWA_PORT; the server reads PORT. Both are set here so the image
+# carries its own contract. Not 8080: the Runtime Interface Emulator binds that port when this
+# image is run as a Lambda locally (tests/image), and the two would collide.
+ENV PORT=8000 AWS_LWA_PORT=8000
+# Readiness is "the port is open", not "GET / answers". The default HTTP check would make every
+# cold start render the group list, and that reads DynamoDB.
+ENV AWS_LWA_READINESS_CHECK_PROTOCOL=tcp
+CMD ["handler"]

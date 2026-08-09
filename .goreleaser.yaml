@@ -1,0 +1,123 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+version: 2
+
+project_name: cheapskate
+
+# What a release consists of: the two Lambda container images on ghcr.io (multi-arch, amd64 and
+# arm64), and the configuration CLI as per-platform archives on the GitHub release. Lambda pulls
+# images only from ECR, so the published images are a distribution point, not a deploy target —
+# copying them into a repository in your own account is still part of setup (docs/*/usage/setup.md).
+#
+# Images are assembled from binaries goreleaser cross-compiles here, using build/Dockerfile.*. The
+# root Dockerfile keeps compiling from source for local builds and the image tests; the build flags
+# below mirror it.
+
+before:
+  hooks:
+    - go mod download
+
+builds:
+  # Both Lambda binaries are named bootstrap, the path provided.al2023 executes. Each build gets
+  # its own directory under dist/, so the shared name is not a collision.
+  - id: reconciler
+    main: ./cmd/reconciler
+    binary: bootstrap
+    env: [CGO_ENABLED=0]
+    # aws-lambda-go serves the deprecated RPC protocol unless this tag drops it.
+    tags: [lambda.norpc]
+    flags: [-trimpath]
+    ldflags: ["-s -w"]
+    goos: [linux]
+    goarch: [amd64, arm64]
+
+  # No lambda.norpc: the web console links no Lambda runtime library at all — the Lambda Web
+  # Adapter in the image speaks the Runtime API on its behalf.
+  - id: webconsole
+    main: ./cmd/webconsole
+    binary: bootstrap
+    env: [CGO_ENABLED=0]
+    flags: [-trimpath]
+    ldflags: ["-s -w"]
+    goos: [linux]
+    goarch: [amd64, arm64]
+
+  # The CLI runs on an operator's machine, not on Lambda, hence the wider platform matrix.
+  - id: cheapskate-cli
+    main: ./cmd/cheapskate-cli
+    binary: cheapskate-cli
+    env: [CGO_ENABLED=0]
+    flags: [-trimpath]
+    ldflags: ["-s -w"]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+
+# Only the CLI is archived; the Lambda binaries are released as images instead.
+archives:
+  - id: cheapskate-cli
+    ids: [cheapskate-cli]
+    name_template: "{{ .ProjectName }}-cli_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files: [README.md]
+
+# One multi-arch tag per image, built and pushed by buildx in a single step. An empty tag is
+# ignored, which is how `latest` stops at the last stable release instead of following a
+# prerelease tag such as v1.0.0-rc.1.
+dockers_v2:
+  - id: reconciler
+    ids: [reconciler]
+    images: ["ghcr.io/moepig/cheapskate-reconciler"]
+    tags:
+      - "{{ .Version }}"
+      - "{{ if not .Prerelease }}latest{{ end }}"
+    dockerfile: build/Dockerfile.reconciler
+    platforms: [linux/amd64, linux/arm64]
+    labels:
+      org.opencontainers.image.title: cheapskate-reconciler
+      org.opencontainers.image.description: cheapskate reconcile loop, as a Lambda container image
+      org.opencontainers.image.source: https://github.com/moepig/cheapskate
+      org.opencontainers.image.version: "{{ .Version }}"
+      org.opencontainers.image.revision: "{{ .FullCommit }}"
+      org.opencontainers.image.created: "{{ .Date }}"
+      org.opencontainers.image.licenses: MIT
+
+  - id: webconsole
+    ids: [webconsole]
+    images: ["ghcr.io/moepig/cheapskate-webconsole"]
+    tags:
+      - "{{ .Version }}"
+      - "{{ if not .Prerelease }}latest{{ end }}"
+    dockerfile: build/Dockerfile.webconsole
+    platforms: [linux/amd64, linux/arm64]
+    labels:
+      org.opencontainers.image.title: cheapskate-webconsole
+      org.opencontainers.image.description: cheapskate web console, as a Lambda container image
+      org.opencontainers.image.source: https://github.com/moepig/cheapskate
+      org.opencontainers.image.version: "{{ .Version }}"
+      org.opencontainers.image.revision: "{{ .FullCommit }}"
+      org.opencontainers.image.created: "{{ .Date }}"
+      org.opencontainers.image.licenses: MIT
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude: ["^docs:", "^test:", "^chore:", "^ci:", "Merge pull request"]
+
+release:
+  prerelease: auto
+  footer: |
+    ## Container images
+
+    ```
+    ghcr.io/moepig/cheapskate-reconciler:{{ .Version }}
+    ghcr.io/moepig/cheapskate-webconsole:{{ .Version }}
+    ```
+
+    Lambda pulls images from ECR only — copy them into a repository in your own account
+    (see `docs/en/usage/setup.md`).

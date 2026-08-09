@@ -1,0 +1,13 @@
+# Release image for the reconciler, built by goreleaser (see .goreleaser.yaml).
+#
+# The context here is a goreleaser build directory holding the already cross-compiled binaries, not
+# the repository, so this file only assembles — the compile flags live in .goreleaser.yaml. The
+# root Dockerfile is the one that builds from source, for local builds and the image tests; the
+# runtime stage below must stay in step with its `reconciler` target.
+FROM public.ecr.aws/lambda/provided:al2023
+# goreleaser lays the binaries out per platform, as <goos>/<goarch>/<name>, because buildx builds
+# every platform of the manifest from this one file. TARGETPLATFORM is what selects among them.
+ARG TARGETPLATFORM
+COPY $TARGETPLATFORM/bootstrap /var/runtime/bootstrap
+# provided.al2023 runs /var/runtime/bootstrap; the CMD is unused but required to be non-empty by some tooling.
+CMD ["handler"]

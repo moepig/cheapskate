@@ -1,0 +1,78 @@
+name: test
+
+# The whole test suite, as one callable unit. Both the CI workflow and the release workflow call
+# it, so a release runs exactly the checks a pull request runs — nothing releases untested.
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  # gofmt + go vet, including the `integration` and `image` build tags, which the default vet skips.
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - run: make lint
+
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - run: make unit
+
+  # Starts the AWS emulator (Floci) through testcontainers-go, which needs only the runner's
+  # docker daemon; the emulator itself spawns RDS/ECS containers through the mounted socket.
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - run: make integration
+
+  # Builds both images from the root Dockerfile and drives them through the Runtime Interface
+  # Emulator. Slower than the rest (~90s of image build before the first assertion).
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - run: make image-test
+
+  # goreleaser only ever runs in Actions, so a mistake in the release path would otherwise surface
+  # for the first time on a tag, after the release is already unstoppable. This job runs it here
+  # instead, on every pull request.
+  goreleaser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # goreleaser refuses to run on a shallow clone
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          version: "~> v2"
+          args: check
+      # `check` only validates the config; it never builds, so it cannot see a broken
+      # build/Dockerfile.*. A snapshot does the real thing — cross-compiles every target and builds
+      # both images from the release Dockerfiles — and pushes nothing. Note that it has to be
+      # `--snapshot` rather than `--skip=publish`: dockers_v2 builds and pushes in one step, so
+      # skipping publishing would skip the image build too, which is the part worth testing.
+      - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          version: "~> v2"
+          args: release --snapshot --clean
