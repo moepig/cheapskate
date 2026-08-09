@@ -1,70 +1,83 @@
 # Testing
 
+This document covers the test layers, what each layer covers and how it runs, and where the test code lives.
+
+The `make` targets that serve as entry points are given below.
+
 ```console
 make unit         # AWS-free unit tests (go test ./...)
-make integration  # tests tagged `integration`; needs Docker (below)
+make integration  # tests tagged `integration`; needs Docker
 make test         # both
-make image-test   # tests tagged `image`; drives the built container images (below)
-make lint         # gofmt + go vet (with the integration and image tags)
+make image-test   # tests tagged `image`; drives the built container images from outside
+make lint         # gofmt + go vet (with the integration and image tags) + cross-compilation
 ```
 
-## Where a test goes
+## Test layers
 
-If the subject is a Go package, the test sits next to that package. If the subject is something assembled — a wired-up system, a built image — it goes under `tests/`. Whether it talks to a real emulator is not the criterion; that is a means, not a subject.
+The tests fall into four layers by the granularity of their subject. What each layer covers and how it runs are collected below.
+
+| Layer | Subject | Means |
+|---|---|---|
+| Unit (`make unit`) | Desired-state resolution, configuration validation, convergence decisions, restoring ECS values from tags, ARN parsing | Time is injected as an argument. AWS clients are narrow interfaces plus mocks |
+| Integration (`make integration`) | The store's real DynamoDB calls and each CLI command, plus the reconcile flow wired to real adapters | The local emulator |
+| Image (`make image-test`) | That a built image starts and responds as a Lambda runtime, handling of real event payloads, responses through the Lambda Web Adapter | The Runtime Interface Emulator |
+| Acceptance (real AWS) | The 7-day auto-start, transition timing, the RDS Stop/Start APIs, real Auto Scaling behaviour | A deployment to a dev account |
+
+The acceptance layer stands apart because the emulator reproduces neither the RDS Stop/Start APIs nor the Application Auto Scaling API. For the full extent of what cannot be reproduced and the substitutes used in the lower layers, see [../architecture/emulation_local.md](../architecture/emulation_local.md).
+
+## Where the tests live
+
+If the subject is a Go package, the test sits next to that package. If the subject is something assembled, it goes under `tests/`. Whether a real emulator is involved is not a criterion.
+
+The subject and build tag for each location are collected below.
 
 | Location | Subject | Tag |
 |---|---|---|
-| `internal/**/*_test.go` | that package's contract — including the `internal/state` and `internal/ui/cli` integration tests, whose subject is still one package's contract with a real DynamoDB behind it | none / `integration` |
-| `tests/system/` | the reconcile loop wired to the real adapters (state, aws/compute, aws/sns) — the test assembles by hand what `internal/wire` assembles in production | `integration` |
-| `tests/image/` | the built container image itself | `image` |
+| `internal/**/*_test.go` | That package's contract. Integration tests against real DynamoDB live here too | none / `integration` |
+| `tests/system/` | The reconcile loop wired to real adapters; the test assembles the wiring `internal/wire` does in production | `integration` |
+| `tests/image/` | The built container images themselves | `image` |
 
-Nothing under `tests/` imports the thing it drives, so it belongs to no package inside it. Each directory's `doc.go` (no build tag) states its remit.
+Everything under `tests/` is a black-box test that imports nothing from its subject and belongs to no package. A `doc.go` in each directory (with no build tag) states what that directory is for.
 
-## Integration tests and the local emulator
+## Integration tests
 
-Integration tests run against **Floci**, a local AWS emulator, started automatically via [testcontainers-go](https://golang.testcontainers.org/) — just run `make integration` (or `go test -tags integration ./...`) with Docker running. No `docker compose` step and no pre-existing container are required.
+These run against the local AWS emulator. testcontainers-go starts it automatically, so nothing has to be prepared as long as Docker is running.
 
-- Wiring lives in `internal/devtools/emutest`: the first test to need it starts a Floci container named `cheapskate-itest-floci`, and every other test — in that binary, in the other packages' binaries running alongside it, and in later runs — reuses that same container. Tests namespace the resources they create, so sharing is safe.
-- The container is deliberately left running instead of being reaped: `go test ./...` runs one binary per package but all of them share a single testcontainers session, and Ryuk prunes that session's containers as soon as its client count drops to zero — the first binary to finish would take the emulator out from under the ones still running. Ryuk is therefore disabled for it; `make floci-down` removes the container (and the RDS/ECS containers Floci spawns).
-- `make integration` picks up both the package-level integration tests under `internal/` and `tests/system/`: neither needs more than the emulator, and neither builds an image.
-- Floci mounts the docker socket because its RDS/ECS emulation runs real containers.
-- Floci's Resource Groups Tagging API (`tag:GetResources`) support is limited, so integration tests never rely on it for group-membership discovery: they inject a hand-written stub `discover.Discoverer` into `reconcile.Deps`/`ops` instead of the real `discover.TaggingDiscoverer`. Only DynamoDB (state table) reads/writes go through Floci for real.
+`make integration` runs both the per-package integration tests and `tests/system/`. Both need only the emulator and no image build.
 
-## Image tests (`image` tag)
+The container is reused rather than discarded when the tests end. `make floci-down` deletes it, along with the RDS/ECS containers the emulator started.
 
-`make image-test` (= `go test -tags image ./tests/image/`) is the only layer that tests the **built artifact** rather than the packages inside it: it builds both the reconciler and the webconsole image, starts each under the Lambda Runtime Interface Emulator that ships in the `provided:al2023` base image, and invokes it over HTTP. The Lambda handler, the JSON request/response contract, the `lambda.norpc` build tag and the Lambda Web Adapter bundled into the image are only exercised here — unit and integration tests both call the package directly. It lives in `tests/` rather than `internal/` for the same reason: it imports nothing from the images it drives, so it belongs to no package inside them. The RIE is how an image is driven, not what is being tested — the harness that owns it lives in `harness_test.go`, and what each image must do lives in its own file. (`tests/image/doc.go` carries no build tag, so the package is never empty when `image` is off.)
+## Image tests
 
-What it sends, against a throwaway state table so the expected responses are fixed.
+`make image-test` is the only layer whose subject is a build artifact rather than a package. It builds both images, starts each on the Runtime Interface Emulator bundled in the base image, and invokes it over HTTP.
 
-Reconciler (`reconciler_test.go`):
+The Lambda handler, the JSON input/output contract, the `lambda.norpc` build tag, and the bundled Lambda Web Adapter are on the path in this layer alone. The RIE is a means rather than a subject, so the harness that holds it lives in `harness_test.go` and the checks themselves live in a file per image.
 
-- `{}` — the periodic and manual payload ([setup.md](../usage/setup.md) §8) → a Summary with nothing reconciled
-- every `internal/app/reconcile/testdata/rds-event-*.json`, verbatim, as EventBridge delivers it → a Summary, plus one `event-received` line with `source: aws.rds` per fixture in the container's log. The response alone would only show the payload was accepted, not that it was understood as an RDS event
-- `[]` — not an object at all → the handler must fail with `unmarshal event` rather than treat it as an empty event and reconcile anyway
+The state table is a disposable empty one in each case, which keeps the expected responses fixed.
 
-Web console (`webconsole_test.go`):
+The payloads sent to the reconciler and what is expected of them are as follows.
 
-- a `GET /` proxy event from an API Gateway REST API (v1, the production setup) → an HTTP 200 proxy response. That means the adapter started as an extension, rebuilt the event into a loopback HTTP request, and turned the response back into the event's response shape; a missing extension or a port mismatch fails right here
-- the same event with a `x-amzn-request-context` header the client forged → the `client` in the console's log is the event's `requestContext.identity.sourceIp`, and the forged IP appears nowhere in the log. With an IP allowlist as the only access control, the IP worth logging is the one that was actually matched against it ([../architecture/web_console.md](../architecture/web_console.md), Japanese). That the adapter overwrites the header can only be confirmed through the image
+| Payload | Expectation |
+|---|---|
+| `{}` | A Summary with zero resources |
+| Every file matching `internal/app/reconcile/testdata/rds-event-*.json` (exactly as EventBridge delivers them) | The Summary, plus one `event-received` line in the container log per fixture |
+| `[]` (a payload that is not an object) | Not taken as an empty event; unmarshalling fails |
 
-It sits on its own build tag rather than `integration` because it builds the images first: about 90 seconds cold, a few seconds once Docker's layer cache is warm. The Dockerfile's `COPY . .` means any changed file in the repo — documentation included — invalidates that cache, so expect the slow path more often than a Go-only view of the tree would suggest. Nothing else is needed — Floci and the state table come up with the test, through the same `internal/devtools/emutest` helper the integration tests use, and the container reaches the emulator over `host.docker.internal`.
+The payloads sent to webconsole and what is expected of them are as follows.
 
-The build shells out to `docker build`, deliberately: the `Dockerfile` is BuildKit-only (`# syntax` directive, `FROM --platform=$BUILDPLATFORM`, `TARGETOS`/`TARGETARCH`), and testcontainers-go's own image build goes through the legacy `/build` API, which has none of those. Going through the CLI also means the test builds exactly what `make image-reconciler` / `make image-webconsole` builds.
+| Payload | Expectation |
+|---|---|
+| An API Gateway REST API (v1) `GET /` proxy event | An HTTP 200 proxy response, showing that the adapter started as an extension, turned the event into HTTP over the loopback, and turned the response back into the event's response format |
+| The same event with a spoofed `x-amzn-request-context` added by the client | The `client` in the log comes from the event's `requestContext`, and the spoofed IP appears nowhere in the log |
+
+The tag is separate from `integration` because the images have to be built first. Through `COPY . .` in the `Dockerfile`, a change to any single file in the repository invalidates the layer cache.
+
+The image build is delegated to `docker build` rather than testcontainers-go on account of BuildKit. For the reasoning, see how the image build is handled in [../architecture/emulation_local.md](../architecture/emulation_local.md).
 
 ## Fixtures
 
-RDS event samples used by the reconciler tests are in `internal/app/reconcile/testdata/`; they double as reference payloads for the EventBridge rule pattern (verify changes with `aws events test-event-pattern`), and `make image-test` replays every one of them against the built image. A new fixture is picked up automatically — the test globs the directory.
+The sample RDS events live in `internal/app/reconcile/testdata/` and double as the reference payloads for the EventBridge rule pattern. Validate changes with `aws events test-event-pattern`. `make image-test` globs that directory, so adding a fixture automatically runs it against the images too.
 
 ## Mocks
 
-Tests use [testify](https://github.com/stretchr/testify) assertions, with two kinds of test double split by layer.
-
-**Generated (gomock), at the AWS SDK boundary.** Each package declaring an SDK-client interface generates its doubles into a `mocks/` subpackage next to it (`//go:generate` directives live next to the interface): `internal/state`, `internal/aws/compute`, `internal/aws/tagging`, `internal/aws/sns`, and `internal/devtools/devseed`. These interfaces are wide and their argument types are fat, so generation earns its keep; `-typed` makes the `EXPECT()` recorders type-checked, so a wrong `Return`/`DoAndReturn` signature is a compile error rather than a runtime failure. `internal/state/mocks/dynastore.go` is hand-written, not generated — it wires the generated `MockAPI` to an in-memory table so tests can `Seed`/`Item`/`FailOn`/`SetScanPageSize` against it the same way the store's real Scan/GetItem/PutItem/UpdateItem/DeleteItem behave.
-
-**Hand-written, at the application's own ports.** `internal/app/port/porttest` holds plain doubles for `Discoverer`/`Target`/`Describer`/`Notifier`, shared by `internal/app/{reconcile,groups}` and `internal/ui/*`. Those ports are seven small methods over cheapskate's own `model` types, and their tests want stateful behavior (canned observations, recorded stop/start calls) rather than per-call expectations — a generated mock only ever got wrapped in a double like these, so there is nothing to generate here.
-
-```console
-make generate     # go generate ./... — regenerate every package's mocks/ after changing an interface
-```
-
-Generated files are committed (there is no CI to regenerate them), so run `make generate` and include the diff whenever you add or change a mocked interface method.
+Assertions use testify. Test doubles come in two forms: generated at the AWS SDK boundary, and hand-written for the application-layer ports. For the criteria for choosing between them, the generation steps, and how to write a hand-written double, see [mock.md](mock.md).

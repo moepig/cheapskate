@@ -1,56 +1,71 @@
 # Building
 
-Prerequisites: Go 1.26+; Docker (BuildKit) for the container image.
+This document covers building the binaries and the container images, and pushing to ECR. Every entry point is a `make` target.
 
 ## Binaries
 
+Three targets wrap `go build`.
+
 ```console
-make build       # go build ./... — compile everything
-make cli         # bin/cheapskate-cli — the operator CLI
-make webconsole  # bin/webconsole — the web console (local mode)
+make build       # runs go build ./...
+make cli         # produces bin/cheapskate-cli
+make webconsole  # produces bin/webconsole
 ```
 
 ## Container images
 
-The reconciler and the web console are **separate images**, one binary each, both from the same `Dockerfile` via a `--target`. Each ships its binary as `/var/runtime/bootstrap` on `public.ecr.aws/lambda/provided:al2023`, so neither function needs an `ImageConfig` entrypoint override. The web console is optional: if you don't deploy it, build and push only the reconciler.
+The reconciler and the web console are separate images, each carrying one binary. Both are built from the same `Dockerfile`, selected with `--target`.
+
+The build targets for the images and the binary each carries are collected below.
 
 | Target | Image | Binary |
-|---|---|---|
+| --- | --- | --- |
 | `reconciler` | `cheapskate-reconciler` | `./cmd/reconciler` |
 | `webconsole` | `cheapskate-webconsole` | `./cmd/webconsole` |
 
-The web console image carries one more executable: the [Lambda Web Adapter](https://github.com/awslabs/aws-lambda-web-adapter), as `/opt/extensions/lambda-adapter`. The console itself is a plain HTTP server that knows nothing about Lambda; the extension does the translating between invocations and HTTP. Its version is pinned in the `Dockerfile` — the one runtime dependency outside go.mod, and it moves by Dependabot's docker updates rather than with the Go modules ([release.md](release.md)).
+Examples of running the build are given below.
 
 ```console
-make image                                   # both, linux/arm64, tag "dev"
+make image                                   # both, linux/arm64, tag dev
 make image-reconciler                        # cheapskate-reconciler:dev only
 make image-webconsole                        # cheapskate-webconsole:dev only
-make image PLATFORM=linux/amd64 TAG=v0.1.0   # x86 variant
+make image PLATFORM=linux/amd64 TAG=v0.1.0   # the x86 build
 ```
 
-The Dockerfile cross-compiles via `GOARCH` from the host platform, so building arm64 images on x86 hosts (and vice versa) needs no emulation. The Go build stage is shared, so building both costs one dependency download.
+The base image is `public.ecr.aws/lambda/provided:al2023`. Both binaries are placed as `/var/runtime/bootstrap`, so no `ImageConfig.EntryPoint` override is needed. Without the web console, only the reconciler has to be built and pushed.
+
+The Dockerfile cross-compiles from the host platform through `GOARCH`, so building for another architecture needs no emulation. The Go build stage is shared between the two images, so building both downloads the dependencies once.
+
+### Lambda Web Adapter
+
+The web console image carries the Lambda Web Adapter executable as `/opt/extensions/lambda-adapter`, pinned to a version in the `Dockerfile`. It is the only runtime dependency outside go.mod, and it is updated through Dependabot's docker updates rather than with the Go modules.
+
+For how the adapter converts invocation events into HTTP, and where the application depends on it, see [../architecture/on_lambda.md](../architecture/on_lambda.md). For how a Dependabot update reaches a release, see the dependency updates section in [release.md](release.md).
 
 ## Testing the images
 
+Before deploying, confirm that the built images start as Lambda runtimes.
+
 ```console
-make image-test   # build both images, boot each under the Lambda RIE, and invoke it
+make image-test   # builds both images, starts each on the Lambda RIE, and invokes it
 ```
 
-Both images are run under `aws-lambda-rie` (bundled in the `public.ecr.aws/lambda/provided:al2023` base image) and invoked over HTTP, so a broken image or a build tag that silently drops a handler is caught before deploy. The reconciler gets the real EventBridge payloads; the web console gets an API Gateway proxy event, which takes it through the Lambda Web Adapter, so a missing extension or a port mismatch fails the same way — that case also asserts the logged client IP is the event's `sourceIp` and not a forged header. Docker is the only prerequisite: the emulator and a throwaway state table come up with the test.
+This catches a corrupt image or a missing handler. All it needs is docker; the emulator and a disposable state table come up alongside the tests. For the payloads sent and the responses expected, see the image tests section in [test.md](test.md).
 
-See [test.md](test.md) for the breakdown.
+## Pushing to ECR
 
-## Pushing to your ECR
-
-One repository per image:
+Create one repository per image. Creating them through to pushing is shown below.
 
 ```console
-aws ecr create-repository --repository-name cheapskate-reconciler   # once
-aws ecr create-repository --repository-name cheapskate-webconsole   # once, only if you deploy the console
+aws ecr create-repository --repository-name cheapskate-reconciler   # first time only
+aws ecr create-repository --repository-name cheapskate-webconsole   # first time only (when deploying the web console)
 make push \
   ECR_REPO_RECONCILER=<account>.dkr.ecr.<region>.amazonaws.com/cheapskate-reconciler \
   ECR_REPO_WEBCONSOLE=<account>.dkr.ecr.<region>.amazonaws.com/cheapskate-webconsole \
   TAG=v0.1.0
 ```
 
-`make push` wraps `docker build`, `docker login` (via `aws ecr get-login-password`), and `docker push` for both images; `make push-reconciler` and `make push-webconsole` do one each, and only the corresponding `ECR_REPO_*` needs to be set. The image platform must match the Lambda function's architecture (`arm64` ↔ `linux/arm64`).
+`make push` runs `docker build`, `docker login`, and `docker push` for both images. For one of them, use `make push-reconciler` or `make push-webconsole` and give only the matching `ECR_REPO_*`.
+
+> [!IMPORTANT]
+> Match the image's platform to the Lambda function's architecture (`arm64` ↔ `linux/arm64`). A mismatched image is rejected when the function is created or updated.

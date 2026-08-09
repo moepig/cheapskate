@@ -1,38 +1,67 @@
 # Running locally
 
-## Quick start: `make dev`
+This document covers running cheapskate in a development environment. There are two routes: starting everything at once with `make dev`, and starting the components individually. Both connect to Floci, the local AWS emulator.
+
+## make dev
+
+This goes from the emulator through to seeding sample data in one step.
 
 ```console
-make dev       # floci + state table + a sample "dev" group (selector + schedule) + web console
+make dev       # emulator + state table + sample group + web console
+make dev-down  # stops the emulator
 ```
 
-This starts Floci (`docker compose`), waits for it to be healthy, creates a `cheapskate-dev` state table and dummy ECS resources (via `cmd/dev-bootstrap`, idempotently — safe to re-run; see below), seeds a sample group through the real `cheapskate-cli` (so the seed commands double as usage examples), and runs the web console in the foreground on `http://127.0.0.1:8080/`. Everything runs via `go run`, so code changes are picked up on the next request or the next `make dev`.
+`scripts/dev.sh` runs the following in order.
 
-Ctrl-C stops the console; `make dev-down` stops Floci. **Dummy ECS data**: `internal/devtools/devseed` creates an ECS cluster (`dev-cluster`) with three services — `api` and `worker` tagged `cheapskate:group=dev` (matching the seeded "dev" group's selector), and `worker` also carrying the ECS scaling tags (`cheapskate/desired-count`, `cheapskate/scaling-min`, `cheapskate/scaling-max`) so they're visible in the group page/`cheapskate-cli show` resource view; `batch` is left untagged to show what a non-matching resource looks like. Tags are applied via an explicit `resourcegroupstaggingapi.TagResources` call, not ECS's own `--tags`, because Floci does not reflect create-time service tags into `tag:GetResources` on its own.
+1. Starts the emulator with `docker compose up -d` and waits for the health check
+2. Creates the state table `cheapskate-dev` with `go run ./cmd/dev-bootstrap`
+3. Seeds the sample group `dev` through `cheapskate-cli`
+4. Creates dummy ECS resources
+5. Starts the web console in the foreground at `http://127.0.0.1:8080/`
 
-**Caveat**: there are no dummy RDS or EC2 resources, and Floci's Resource Groups Tagging API (`tag:GetResources`) support for those is otherwise limited, so the "dev" group's RDS/EC2 rows will likely still show nothing beyond the two ECS services, or an inline discover error. That's expected: the console/CLI are built to degrade gracefully instead of failing (see [../usage/operations.md](../usage/operations.md)). The integration tests (`make integration`) inject a stub `Discoverer` instead of depending on Floci's Tagging API support, and are the better way to exercise the full reconcile loop end to end.
+Every step goes through `go run`, so a code change takes effect on the next request or the next run. Ctrl-C stops the web console, and `make dev-down` stops the emulator.
 
-## Manual, per-component setup
+The only things matching the sample group's selector are the dummy ECS services. Types other than ECS yield either an empty resource list or a discovery error.
 
-All components can also run individually, either against the local emulator (Floci, `make floci-up`, endpoint `http://localhost:4566`) or against a real AWS account using your own credentials. To target the emulator, export:
+Since the web console holds the foreground, using `cheapskate-cli` from another shell means giving it the endpoint and credentials. An example is given below.
 
 ```console
 export AWS_ENDPOINT_URL=http://localhost:4566
 export AWS_REGION=ap-northeast-1 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test
+export CHEAPSKATE_TABLE=cheapskate-dev
+
+go run ./cmd/cheapskate-cli list
 ```
 
-Create a state table first (same schema as production — see `docs/en/usage/setup.md` §2); `go run ./cmd/dev-bootstrap` (with `CHEAPSKATE_TABLE` set) creates it, or the same `aws dynamodb create-table` command from setup.md works directly against Floci.
+> [!WARNING]
+> Run without these and it tries to reach real AWS rather than the emulator. With valid credentials, it operates on the resources in that account.
+
+## Starting the components individually
+
+Each component can connect to the local emulator or to real AWS. Using the emulator, the settings are as follows.
+
+```console
+make floci-up
+export AWS_ENDPOINT_URL=http://localhost:4566
+export AWS_REGION=ap-northeast-1 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test
+```
+
+There are no dummy resources for types other than ECS because of what the emulator reproduces. For why switching the endpoint takes nothing but `AWS_ENDPOINT_URL`, the extent of the AWS APIs that cannot be reproduced, and the substitutes for them, see [../architecture/emulation_local.md](../architecture/emulation_local.md).
+
+Create the state table beforehand: set `CHEAPSKATE_TABLE` and run `go run ./cmd/dev-bootstrap`.
 
 ### Web console
 
-Plain HTTP server in local mode; no Lambda involved:
+Give it the state table name through the environment and start it.
 
 ```console
 CHEAPSKATE_TABLE=cheapskate-state go run ./cmd/webconsole          # http://127.0.0.1:8080/
-go run ./cmd/webconsole -addr 127.0.0.1:9090                       # different port
+go run ./cmd/webconsole -addr 127.0.0.1:9090                       # a different port
 ```
 
 ### cheapskate-cli
+
+Likewise give it the state table name and run a subcommand.
 
 ```console
 export CHEAPSKATE_TABLE=cheapskate-state
@@ -43,7 +72,7 @@ go run ./cmd/cheapskate-cli pin --group dev stopped
 
 ### Reconciler
 
-The reconciler is a Lambda entrypoint, so it runs inside the container image via the Runtime Interface Emulator that ships with the `provided:al2023` base image:
+The reconciler is a Lambda entrypoint, so it runs inside a container through the Runtime Interface Emulator. Building the image and starting it is shown below.
 
 ```console
 make image-reconciler
@@ -53,13 +82,15 @@ docker run --rm -p 9000:8080 \
   -e AWS_ENDPOINT_URL=http://host.docker.internal:4566 \
   -e AWS_REGION=ap-northeast-1 -e AWS_ACCESS_KEY_ID=test -e AWS_SECRET_ACCESS_KEY=test \
   cheapskate-reconciler:dev
+```
 
-# in another shell — `{}` triggers a full reconcile:
+Invocations go into the running container over HTTP from another shell.
+
+```console
+# `{}` triggers a full reconcile
 curl -d '{}' http://localhost:9000/2015-03-31/functions/function/invocations
 ```
 
-(`host.docker.internal` lets the container reach Floci on the host; against real AWS, drop `AWS_ENDPOINT_URL` and pass real credentials instead.)
+`host.docker.internal` is how the container reaches the emulator on the host. To run against real AWS, drop `AWS_ENDPOINT_URL` and supply real credentials.
 
-`make image-test` (the `image` tag) automates exactly this and feeds the image the real EventBridge payloads from `testdata` — see [test.md](test.md).
-
-Alternatively, the integration tests (`make integration`) exercise the full reconcile loop against Floci without running the image — usually the faster feedback loop.
+`make image-test` automates the same startup and invocation and feeds it the real events from `testdata`. To exercise the reconcile loop alone, the integration tests (`make integration`) suffice and need no image build. For what each covers, see the test layers in [test.md](test.md).

@@ -1,45 +1,61 @@
 # Releases and dependency updates
 
-goreleaser is never run locally: on every pull request CI validates `.goreleaser.yaml` with `goreleaser check` and then builds a snapshot, which exercises the whole release path — every cross-compiled target and both images — without pushing anything. The workflows that run all of this are described in [github-actions.md](github-actions.md).
+This document covers how a release is cut, what a release produces, and the reasoning behind the dependency-update settings.
+
+goreleaser is never run locally. CI validates `.goreleaser.yaml` with `goreleaser check` on every pull request, and on a pull request touching the release path it also runs a snapshot build. The latter really does produce every cross-compilation target and both images, so it exercises the whole path while pushing nothing.
 
 ## Cutting a release
+
+A release starts from pushing a tag.
 
 ```console
 git tag v0.1.0
 git push origin v0.1.0
 ```
 
-The tag is the version: goreleaser derives it, and a semver prerelease (`v0.1.0-rc.1`) marks the GitHub release as a prerelease and holds back the `latest` image tag. The full test suite runs first, on the tagged commit, and a failure anywhere in it leaves the tag without a release.
+The version is the tag itself, which goreleaser derives from it. For a semver prerelease (`v0.1.0-rc.1`), the GitHub release is created as a prerelease and the images' `latest` tags do not move. The whole test suite runs first, against the tagged commit, and if any of it fails no release is created for that tag.
 
-What a release produces:
+A release produces the following.
 
-| Artifact | Where | Tags |
+| Artifact | Destination | Tags |
 |---|---|---|
-| `cheapskate-reconciler` image | `ghcr.io/moepig/cheapskate-reconciler` | version, `latest` |
-| `cheapskate-webconsole` image | `ghcr.io/moepig/cheapskate-webconsole` | version, `latest` |
-| `cheapskate-cli` archives | GitHub release | — |
+| The `cheapskate-reconciler` image | `ghcr.io/moepig/cheapskate-reconciler` | The version, `latest` |
+| The `cheapskate-webconsole` image | `ghcr.io/moepig/cheapskate-webconsole` | The version, `latest` |
+| The `cheapskate-cli` archives | The GitHub release | — |
 
-Both images are multi-arch (`linux/amd64`, `linux/arm64`). They are assembled by buildx from binaries goreleaser cross-compiles, using `build/Dockerfile.reconciler` and `build/Dockerfile.webconsole` — the root `Dockerfile` is the one that compiles from source, and it stays the source of truth for local builds and the image tests ([build.md](build.md)). The runtime stages are duplicated between the two, so a change to a base image, an `ENV`, or the Lambda Web Adapter version has to be made in both places.
+Both images are multi-architecture (`linux/amd64`, `linux/arm64`). buildx assembles the binaries goreleaser cross-compiled, through `build/Dockerfile.reconciler` and `build/Dockerfile.webconsole`. What builds from source is the `Dockerfile` at the repository root, and that is the authoritative one for local builds and the image tests. For building locally, see the container images section in [build.md](build.md).
 
-Pushing to GHCR uses the workflow's `GITHUB_TOKEN` with `packages: write`; no secret needs to be configured.
+> [!IMPORTANT]
+> The release Dockerfiles and the root `Dockerfile` have overlapping runtime stages. A change to the base image, an `ENV`, or the Lambda Web Adapter version has to be made in both.
 
-One manual step is needed after the very first release, once per image. A newly created GHCR package is private regardless of the repository's visibility — packages inherit a linked repository's access permissions, but not its visibility — so an anonymous `docker pull` of it fails. Set each package to public under the repository's Packages page (package settings → Change visibility). Later releases push to the package that already exists and keep whatever visibility it has.
+Pushing to GHCR uses the workflow's `GITHUB_TOKEN` (`packages: write`). There is no secret to configure.
+
+> [!IMPORTANT]
+> After the first release, each image needs one manual step, once. A freshly created GHCR package is private regardless of the repository's visibility, and an unauthenticated `docker pull` fails against it, because a package inherits the linked repository's permissions rather than its visibility. Change each package to public from the repository's Packages (package settings → Change visibility).
+
+Later releases push to the existing package, so the visibility is preserved.
 
 ## Dependency updates
 
-Dependabot opens weekly pull requests (`.github/dependabot.yml`) for Go modules, Actions, and the base images of the root and release Dockerfiles. Updates are grouped so that a set that always moves together — the AWS SDK modules, the Actions, the images — arrives as one pull request. Each of them is gated by `ci.yml`, image tests included.
+Dependabot opens pull requests weekly (`.github/dependabot.yml`), covering Go modules, Actions, and the base images in the root and release Dockerfiles. Things that always move together (the AWS SDK modules, the Actions, the images) are grouped into one pull request each. All of them are checked by `ci.yml`, image tests included.
 
-The Lambda Web Adapter is pinned by tag in the web console Dockerfiles and is covered by the docker updates; unlike the Go dependencies it is not in `go.mod`, so nothing else would notice it moving.
+The Lambda Web Adapter is pinned by tag in the web console's Dockerfile and is covered by the docker updates. Unlike the Go dependencies it does not appear in `go.mod`, so without this nothing would notice its version moving.
 
-### Release age
+### Days since release
 
-Every ecosystem sets `cooldown.default-days: 7`, so Dependabot will not propose a version until it has been public for a week. A compromised release is usually found and yanked within days, and a week of distance costs nothing here — these updates merge themselves, so no review stands between a bad publish and `main`. Dependabot applies a 3-day cooldown even when unconfigured; 7 is the deliberate version of that. Security updates are exempt from cooldown by design, so a known CVE is still proposed immediately.
+Every ecosystem is configured with `cooldown.default-days: 7`, so Dependabot does not propose a version until a week after its publication. These updates are merged automatically, leaving no human between a malicious publication and `main`. A poisoned release is usually found and pulled within a few days, so keeping a week's distance costs little. Dependabot applies a 3-day cooldown even unconfigured; 7 days is that value deliberately extended.
+
+> [!NOTE]
+> Security updates are exempt from the cooldown. An update for a known CVE is proposed regardless of how recently it was published.
 
 ### Auto-merge
 
-`dependabot-auto-merge.yml` runs on every Dependabot pull request and, for patch and minor updates, calls `gh pr merge --auto`. Major updates are left alone: a human reads them. The condition is an allowlist of the two update types rather than "anything that is not major", so a bump whose type cannot be determined stops as well. For a grouped pull request the metadata reports the highest bump in the group, so a single major among ten patches holds the whole group back.
+`dependabot-auto-merge.yml` runs on each of Dependabot's pull requests and calls `gh pr merge --auto` for patch and minor updates. Major updates are excluded and read by a human. The condition is an allowlist of two update types rather than "anything that is not major", so an update whose type could not be determined stops here too. On a grouped pull request the metadata reports the largest update type in the group, so ten patches with one major among them hold the whole group back.
 
-The workflow never merges anything itself. `--auto` records the intent and GitHub performs the merge once the required checks pass, which means the branch protection rule on `main` is what actually gates this. Two repository settings have to be in place, or auto-merge is either impossible or unguarded:
+The workflow itself merges nothing. `--auto` records the intent, and GitHub performs the merge once the required checks pass, which makes branch protection on `main` the real gate. The repository settings this depends on are given below.
 
-- Settings → General → Allow auto-merge, enabled. Without it `gh pr merge --auto` fails.
-- A branch protection rule (or ruleset) on `main` requiring the `ci.yml` checks, selected by the names those checks carry ([github-actions.md](github-actions.md)). Without required checks, `--auto` merges the pull request the moment it is set, and the tests become decorative.
+- Enable Settings → General → Allow auto-merge. Disabled, `gh pr merge --auto` fails
+- Require the `ci.yml` checks in branch protection (or a ruleset) on `main`. For which check names to select, see the check names section in [github-actions.md](github-actions.md)
+
+> [!WARNING]
+> With no required checks configured, a pull request is merged the moment `--auto` is set. The tests act as no gate at all, and dependency updates reach `main` unchecked.
