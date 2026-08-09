@@ -13,7 +13,7 @@ RDS インスタンス / Aurora クラスター / ECS サービス / EC2 イン�
 
 構成: コントロールプレーンは 5 分間隔の Lambda 1 つと DynamoDB 1 テーブル。
 
-配布形態: ソースコードのみ。IaC テンプレート・公開コンテナイメージは提供しない。イメージ(reconciler 用とオプションの Web コンソール用の 2 つ)は各自ビルドして自分の ECR に push し、AWS リソースは自前の IaC または手動で作成する([usage/setup.md](usage/setup.md))。
+配布形態: リリースごとに、2 つのイメージ(reconciler 用とオプションの Web コンソール用)を `ghcr.io/moepig/cheapskate-reconciler` と `ghcr.io/moepig/cheapskate-webconsole` へ公開する。Lambda が pull できるのは ECR のみであるから、公開イメージのコピーか各自のビルドにより、自分の ECR へ置く。IaC テンプレートは提供せず、AWS リソースは自前の IaC または手動で作成する([usage/setup.md](usage/setup.md))。
 
 ## ドキュメント
 
@@ -45,6 +45,8 @@ Development — cheapskate 自体の開発:
 - [development/test.md](development/test.md) — ユニット/統合テストと lint
 - [development/mock.md](development/mock.md) — モックの生成方法と使い分け
 - [development/run_local.md](development/run_local.md) — ローカル実行
+- [development/github-actions.md](development/github-actions.md) — CI、リリース、Dependabot の各ワークフロー
+- [development/release.md](development/release.md) — リリースの手順と依存の更新
 
 ## ライセンス
 

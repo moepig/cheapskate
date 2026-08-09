@@ -4,13 +4,29 @@ No IaC template is distributed; this page is the complete contract for creating 
 
 Resources to create: a DynamoDB table, the reconciler Lambda (container image) with its execution role, a periodic trigger, an EventBridge rule for RDS events, and optionally an SNS topic, a log group, and the web console.
 
-## 1. Build and push the container images
+## 1. Get the container images into your ECR
 
-The reconciler and the optional web console are separate images, one binary each, and neither is pulled from a public registry — build them from this repository and push them to ECR repositories in your own account:
+The reconciler and the optional web console are separate images, one binary each. Lambda pulls images from ECR only, so both routes below end at a repository in your own account:
 
 ```console
 aws ecr create-repository --repository-name cheapskate-reconciler   # once
 aws ecr create-repository --repository-name cheapskate-webconsole   # once, only for §9
+```
+
+### Copy a released image
+
+Every release publishes both images to GHCR for `linux/amd64` and `linux/arm64`. `--platform` picks the one architecture your function runs, so what lands in ECR is a single-architecture image:
+
+```console
+aws ecr get-login-password | docker login --username AWS --password-stdin 123456789012.dkr.ecr.ap-northeast-1.amazonaws.com
+docker pull --platform linux/arm64 ghcr.io/moepig/cheapskate-reconciler:v0.1.0
+docker tag ghcr.io/moepig/cheapskate-reconciler:v0.1.0 123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/cheapskate-reconciler:v0.1.0
+docker push 123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/cheapskate-reconciler:v0.1.0
+```
+
+### Build from source
+
+```console
 make push \
   ECR_REPO_RECONCILER=123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/cheapskate-reconciler \
   ECR_REPO_WEBCONSOLE=123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/cheapskate-webconsole \

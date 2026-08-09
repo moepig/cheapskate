@@ -7,7 +7,7 @@ Keep RDS instances and Aurora clusters **stopped beyond the 7-day auto-start lim
 - Cron-based schedules (e.g. weekdays 09:00–20:00) use the same reconcile loop, so schedules and keep-stopped pinning can never conflict.
 - Cost of the control plane: well under $1/month (one Lambda on a 5-minute loop).
 
-cheapskate is distributed as **source code only** — there is no CloudFormation/Terraform template, module, or public container image to consume. You build the images (one for the reconciler, one for the optional web console), push them to your own ECR, and create the (few) AWS resources with your own IaC or by hand; [usage/setup.md](usage/setup.md) specifies everything needed.
+There is no CloudFormation/Terraform template or module to consume. Each release publishes the two container images (one for the reconciler, one for the optional web console) to GHCR; since Lambda pulls images from ECR only, you copy the one you need into your own ECR — or build it yourself — and create the (few) AWS resources with your own IaC or by hand. [usage/setup.md](usage/setup.md) specifies everything needed.
 
 ## Architecture
 
@@ -79,6 +79,8 @@ Development — working on cheapskate itself:
 - [development/build.md](development/build.md) — building binaries and the container images
 - [development/test.md](development/test.md) — unit/integration tests and lint
 - [development/run_local.md](development/run_local.md) — running the reconciler and web console locally
+- [development/github-actions.md](development/github-actions.md) — the CI, release, and Dependabot workflows
+- [development/release.md](development/release.md) — cutting a release and dependency updates
 
 ## License
 

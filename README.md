@@ -7,7 +7,7 @@ Keep RDS instances and Aurora clusters **stopped beyond the 7-day auto-start lim
 - Cron-based schedules (e.g. weekdays 09:00–20:00) use the same reconcile loop, so schedules and keep-stopped pinning can never conflict.
 - Cost of the control plane: well under $1/month (one Lambda on a 5-minute loop).
 
-cheapskate is distributed as **source code only** — no IaC templates or public images. The docs specify everything needed to host it with your own IaC or by hand.
+Each release publishes the two Lambda container images to `ghcr.io/moepig/cheapskate-reconciler` and `ghcr.io/moepig/cheapskate-webconsole`. Lambda pulls images from ECR only, so hosting starts by copying one into your own account — or by building it from this repository. No IaC templates are distributed; the docs specify everything needed to create the resources with your own IaC or by hand.
 
 ## Documentation
 

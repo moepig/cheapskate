@@ -19,7 +19,7 @@ The reconciler and the web console are **separate images**, one binary each, bot
 | `reconciler` | `cheapskate-reconciler` | `./cmd/reconciler` |
 | `webconsole` | `cheapskate-webconsole` | `./cmd/webconsole` |
 
-The web console image carries one more executable: the [Lambda Web Adapter](https://github.com/awslabs/aws-lambda-web-adapter), as `/opt/extensions/lambda-adapter`. The console itself is a plain HTTP server that knows nothing about Lambda; the extension does the translating between invocations and HTTP. Its version is pinned in the `Dockerfile` — it is the one runtime dependency outside go.mod, so updating it is a manual step.
+The web console image carries one more executable: the [Lambda Web Adapter](https://github.com/awslabs/aws-lambda-web-adapter), as `/opt/extensions/lambda-adapter`. The console itself is a plain HTTP server that knows nothing about Lambda; the extension does the translating between invocations and HTTP. Its version is pinned in the `Dockerfile` — the one runtime dependency outside go.mod, and it moves by Dependabot's docker updates rather than with the Go modules ([release.md](release.md)).
 
 ```console
 make image                                   # both, linux/arm64, tag "dev"

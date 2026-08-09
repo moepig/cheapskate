@@ -17,13 +17,29 @@ IaC テンプレートは配布しない。このページに、作成するリ�
 
 用語は [concepts.md](concepts.md)、環境変数の一覧は [config.md](config.md)、作成後の設定操作は [operations.md](operations.md)。
 
-## 1. コンテナイメージのビルドと push
+## 1. コンテナイメージの ECR への配置
 
-reconciler とオプションの Web コンソールは別々のイメージであり、バイナリを 1 つずつ含む。どちらも自分でビルドし、自分のアカウントの ECR に push する。
+reconciler とオプションの Web コンソールは別々のイメージであり、バイナリを 1 つずつ含む。Lambda が pull できるのは ECR のみであるから、以下のいずれの方法でも、最終的に自分のアカウントの ECR へ置く。
 
 ```console
 aws ecr create-repository --repository-name cheapskate-reconciler   # 初回のみ
 aws ecr create-repository --repository-name cheapskate-webconsole   # 初回のみ(§9 を使う場合)
+```
+
+### リリース済みイメージをコピーする
+
+リリースごとに、両方のイメージが `linux/amd64` と `linux/arm64` 向けに GHCR へ公開される。`--platform` で関数が動作する 1 アーキテクチャを選ぶため、ECR に置かれるのは単一アーキテクチャのイメージとなる。
+
+```console
+aws ecr get-login-password | docker login --username AWS --password-stdin 123456789012.dkr.ecr.ap-northeast-1.amazonaws.com
+docker pull --platform linux/arm64 ghcr.io/moepig/cheapskate-reconciler:v0.1.0
+docker tag ghcr.io/moepig/cheapskate-reconciler:v0.1.0 123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/cheapskate-reconciler:v0.1.0
+docker push 123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/cheapskate-reconciler:v0.1.0
+```
+
+### ソースからビルドする
+
+```console
 make push \
   ECR_REPO_RECONCILER=123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/cheapskate-reconciler \
   ECR_REPO_WEBCONSOLE=123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/cheapskate-webconsole \

@@ -30,7 +30,7 @@ Dockerfile はホストプラットフォームから `GOARCH` でクロスコ�
 
 ### Lambda Web Adapter
 
-Web コンソールのイメージには、Lambda Web Adapter の実行ファイルが `/opt/extensions/lambda-adapter` として入る([../architecture/on_lambda.md](../architecture/on_lambda.md))。バージョンは `Dockerfile` で固定してある。go.mod の外にある唯一の実行時依存であるため、更新は手動となる。
+Web コンソールのイメージには、Lambda Web Adapter の実行ファイルが `/opt/extensions/lambda-adapter` として入る([../architecture/on_lambda.md](../architecture/on_lambda.md))。バージョンは `Dockerfile` で固定してある。go.mod の外にある唯一の実行時依存であり、更新は Go モジュールとは別に Dependabot の docker 更新で行う([release.md](release.md))。
 
 ## イメージのテスト
 
