@@ -11,6 +11,20 @@ The implementation described here rests on four principles. Each is given below.
 | Dynamic discovery through AWS tags | A group holds its configuration and a selector (a tag key/value plus the target resource types), and membership is resolved through the Resource Groups Tagging API on every reconcile. The source of truth is the current value of the AWS tags; individual resources are never registered |
 | Images and binaries as the only artifacts | Every release publishes container images to GHCR and CLI archives to the GitHub release. No IaC template is distributed, and no particular means of creating the AWS resources is prescribed |
 
+## Components
+
+There are three executables. Where each runs and what it does are given below.
+
+| Component | Runs on | Role |
+|---|---|---|
+| reconciler | Lambda | The reconcile loop. The only component that starts or stops AWS resources |
+| `cheapskate-cli` | A local machine | Entering and inspecting group configuration, and diagnosing the state table. Nothing is deployed to AWS for it |
+| Web console | Lambda (optional) | The same operations as the CLI, from a browser. The reconcile loop is complete without it |
+
+None of the three calls another. They meet only through the state table, and the items the reconciler writes never overlap with those the configuration side writes.
+
+For the design of `cheapskate-cli` see [cheapskate-cli.md](cheapskate-cli.md), and for that of the web console see [web_console.md](web_console.md).
+
 ## Data model
 
 The state lives in a single DynamoDB table. There are three kinds of item; their contents and writers are given below.
@@ -201,6 +215,8 @@ The reconciler and the web console are separate images. Both are based on `publi
 They are kept separate because their lifecycles are independent. The web console is opt-in, and skipping it means pushing one image instead of two. A change to the console does not move the reconciler's image digest, so no unnecessary redeployment reaches the mandatory component.
 
 Both images run on Lambda, but their routes to the runtime differ. The reconciler registers a Go handler directly, while the web console goes through the bundled Lambda Web Adapter. For details, see the integration summary in [on_lambda.md](on_lambda.md).
+
+`cheapskate-cli` gets no image, since it does not run on Lambda. It is distributed as an archive per operating system.
 
 ## Dependencies
 

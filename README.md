@@ -13,7 +13,9 @@ RDS instances and Aurora clusters that AWS force-starts are detected through the
 
 Composition: the control plane is one Lambda on a 5-minute interval plus one DynamoDB table, which costs well under $1/month.
 
-Distribution: each release publishes two images, one for the reconciler and one for the optional web console, to `ghcr.io/moepig/cheapskate-reconciler` and `ghcr.io/moepig/cheapskate-webconsole`. Lambda can pull images from ECR only, so an image reaches ECR either as a copy of the published one or as a local build. No IaC template is distributed; the AWS resources are created by hand or with whatever IaC is already in use.
+Configuration: groups are created and inspected with `cheapskate-cli`, a command-line tool that runs on your own machine and talks to the DynamoDB table — nothing has to be deployed to AWS for it. An optional web console offers the same operations from a browser.
+
+Distribution: each release publishes two images, one for the reconciler and one for the optional web console, to `ghcr.io/moepig/cheapskate-reconciler` and `ghcr.io/moepig/cheapskate-webconsole`, plus the `cheapskate-cli` archives on the GitHub release. Lambda can pull images from ECR only, so an image reaches ECR either as a copy of the published one or as a local build. No IaC template is distributed; the AWS resources are created by hand or with whatever IaC is already in use.
 
 ## Documentation
 
