@@ -1,0 +1,45 @@
+version: 2
+
+# A version that has only just been published is the one most likely to be a compromised release,
+# and the window between a bad publish and its discovery is measured in days. `cooldown` is the
+# minimum age a release must reach before Dependabot will propose it — Dependabot applies 3 days
+# even unconfigured, and 7 is set here because these updates merge themselves
+# (.github/workflows/dependabot-auto-merge.yml), so nothing else would slow a bad one down.
+# Security updates ignore cooldown, which is the point: a known CVE should not wait a week.
+updates:
+  # The AWS SDK ships one module per service and releases them together, so ungrouped they would
+  # produce a dozen pull requests a week that always land as one bump.
+  - package-ecosystem: gomod
+    directory: "/"
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      aws-sdk:
+        patterns:
+          - "github.com/aws/*"
+      minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # Base images: the root Dockerfile (Go toolchain, Lambda base, Lambda Web Adapter) and the
+  # release Dockerfiles under build/ that goreleaser uses.
+  - package-ecosystem: docker
+    directories: ["/", "/build"]
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      images:
+        patterns: ["*"]

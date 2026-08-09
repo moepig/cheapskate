@@ -1,0 +1,40 @@
+name: dependabot-auto-merge
+
+# Merges Dependabot's low-risk pull requests without a human.
+#
+# This workflow never merges anything itself: `gh pr merge --auto` only records the intent, and
+# GitHub holds the merge until every required status check passes. The safety of the whole thing
+# therefore rests on branch protection for `main` requiring the `ci.yml` checks — without that,
+# `--auto` merges as soon as it is set. See docs/en/development/release.md.
+on: pull_request
+
+permissions:
+  contents: read
+
+jobs:
+  auto-merge:
+    # Anyone can open a pull request; only Dependabot's own get this treatment. The check is on the
+    # pull request author rather than on `github.actor`, which a re-run by a human would change.
+    if: github.event.pull_request.user.login == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # queue the merge
+      pull-requests: write # set auto-merge on the pull request
+    steps:
+      # Of the actions used in this repository, this is the one that runs in a job holding a
+      # write token, which is where the SHA pin below earns its keep.
+      - id: meta
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # An allowlist rather than "not major", so anything unrecognised stops here instead of
+      # merging by default. For a grouped pull request the metadata reports the highest bump in
+      # the group, so one major among ten patches holds the whole group back for review.
+      - if: >
+          steps.meta.outputs.update-type == 'version-update:semver-patch' ||
+          steps.meta.outputs.update-type == 'version-update:semver-minor'
+        run: gh pr merge --auto --squash "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
