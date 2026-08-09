@@ -8,7 +8,7 @@ PLATFORM            ?= linux/arm64
 ECR_REPO_RECONCILER ?=
 ECR_REPO_WEBCONSOLE ?=
 
-.PHONY: build generate unit integration test lint fmt vet cli webconsole \
+.PHONY: build generate unit integration test lint fmt vet crosscompile cli webconsole \
 	image image-reconciler image-webconsole push push-reconciler push-webconsole \
 	floci-up floci-down image-test dev dev-down
 
@@ -42,7 +42,14 @@ vet:
 	go vet -tags integration ./...
 	go vet -tags image ./...
 
-lint: fmt vet
+# The CLI is released for darwin and windows as well, but everything else here runs on linux, so a
+# platform-specific break would otherwise surface for the first time during a release build. One
+# arch per OS is enough: what differs between them is the OS, not the word size.
+crosscompile:
+	GOOS=darwin GOARCH=arm64 go build -o /dev/null ./cmd/cheapskate-cli
+	GOOS=windows GOARCH=amd64 go build -o /dev/null ./cmd/cheapskate-cli
+
+lint: fmt vet crosscompile
 
 image: image-reconciler image-webconsole
 

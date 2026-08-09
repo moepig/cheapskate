@@ -16,3 +16,49 @@ concurrency:
 jobs:
   test:
     uses: ./.github/workflows/test.yml
+
+  # The release path — .goreleaser.yaml and the Dockerfiles under build/ — is otherwise exercised
+  # for real only on a tag, which is far too late to learn that it is broken. A snapshot builds
+  # every cross-compiled target and both images without pushing anything, which is what catches a
+  # mistake there; `goreleaser check` validates the config but never builds.
+  #
+  # It is also the slowest thing in CI by some distance, and only a change to those files can break
+  # it, so the build runs only when one of them changed. The job itself always runs rather than
+  # being filtered away with `on.paths`: a required check that never starts leaves a pull request
+  # waiting for it forever, so this one always reports and skips the expensive steps instead.
+  release-snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # goreleaser refuses to run on a shallow clone
+      - id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          # A push to main is the merge of a pull request this job already checked.
+          if [ "$EVENT" != "pull_request" ]; then
+            echo "affected=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if git diff --name-only "$BASE" HEAD |
+             grep -qE '^(\.goreleaser\.yaml|Dockerfile|go\.mod|go\.sum)$|^build/'; then
+            echo "affected=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "affected=false" >> "$GITHUB_OUTPUT"
+            echo "Release path untouched; snapshot build skipped." >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - if: steps.scope.outputs.affected == 'true'
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - if: steps.scope.outputs.affected == 'true'
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      # `--snapshot` rather than `--skip=publish`: dockers_v2 builds and pushes in one step, so
+      # skipping publication would skip the image build too, which is the part worth testing.
+      - if: steps.scope.outputs.affected == 'true'
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          version: "~> v2"
+          args: release --snapshot --clean
