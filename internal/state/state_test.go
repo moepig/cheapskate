@@ -42,7 +42,7 @@ func seedStatus(db *mocks.DynaStore, resourceID string, attrs map[string]types.A
 	db.Seed(item)
 }
 
-// ScanAll は 1 ページで済むと決めつけず、LastEvaluatedKey を使って Scan をページ送りしなければならない
+// ScanAll は LastEvaluatedKey を用いて Scan をページ送りしなければならない
 // 実テーブルの Scan は 1 回あたり 1MB で打ち切られるためである
 func TestScanAllPagesThroughScan(t *testing.T) {
 	db, st := newFixture(t)
@@ -77,9 +77,9 @@ func TestScanAllJoinsGroupOverrideGroupStatus(t *testing.T) {
 	assert.NoError(t, r.Err)
 }
 
-// リソース単位の平坦なステータスマップは resource_id をキーとし、どのグループとも独立に返る
-// store はリソースが今どのグループに属するか知りようがない（動的な探索が必要になる）
-// そのため結合は呼び出し側（internal/app/groups）に委ねる
+// リソース単位の平坦なステータスマップは resource_id をキーとし、グループとは独立に返る
+// store はリソースの所属グループを判定できない (動的な探索を要する)
+// したがって結合は呼び出し側である internal/app/groups が行う
 func TestScanAllReturnsFlatPerResourceStatuses(t *testing.T) {
 	db, st := newFixture(t)
 	now := time.Now()
@@ -97,7 +97,7 @@ func TestScanAllReturnsFlatPerResourceStatuses(t *testing.T) {
 	assert.Equal(t, model.ActionStart, res.Statuses["ecs-service#dev-cluster/api"].LastAction)
 }
 
-// あるグループの override が壊れていても、他のグループが一覧に出なくなってはならない
+// あるグループの override が壊れている場合も、他のグループを一覧から除外してはならない
 // scan を中断せず、その行の Err として現れなければならない
 func TestScanAllRecordsPerRowErrorForMalformedOverride(t *testing.T) {
 	db, st := newFixture(t)
@@ -121,7 +121,7 @@ func TestScanAllRecordsPerRowErrorForMalformedOverride(t *testing.T) {
 	assert.NoError(t, byName["fine"].Err, "unrelated row must be unaffected")
 }
 
-// unmarshal できない status#group#<name> アイテムが、他グループの scan を中断させてはならない
+// unmarshal できない status#group#<name> アイテムは、他グループの scan を中断させてはならない
 // そのグループの行の Err として現れなければならない
 func TestScanAllRecordsPerRowErrorForMalformedGroupStatus(t *testing.T) {
 	db, st := newFixture(t)
@@ -144,9 +144,9 @@ func TestScanAllRecordsPerRowErrorForMalformedGroupStatus(t *testing.T) {
 	assert.NoError(t, byName["fine"].Err, "unrelated row must be unaffected")
 }
 
-// unmarshal できない group# アイテムが、他グループの scan を中断させてはならない
+// unmarshal できない group# アイテムは、他グループの scan を中断させてはならない
 // その行の Err として現れ、かつ HasGroup は false のままでなければならない
-// 設定を読めていない以上「登録済みのグループ」として扱ってよい根拠がないためである
+// 設定を読めていない状態を、登録済みのグループとして扱う根拠が存在しないためである
 // doctor はこの組み合わせを corrupt-record として報告し、孤立判定を見送る
 func TestScanAllRecordsPerRowErrorForMalformedGroup(t *testing.T) {
 	db, st := newFixture(t)
@@ -170,8 +170,8 @@ func TestScanAllRecordsPerRowErrorForMalformedGroup(t *testing.T) {
 	assert.True(t, byName["fine"].HasGroup)
 }
 
-// pk を持たないアイテムはどの種別にも割り振れないので、行を作らず飛ばす
-// テーブルに手で入れられたものや、将来別の用途で置かれたものが scan を壊してはならない
+// pk を持たないアイテムは種別を判定できないため、行を作らずスキップする
+// 手作業により投入されたアイテム、および別の用途のアイテムが scan を失敗させてはならない
 func TestScanAllSkipsItemsWithoutPK(t *testing.T) {
 	db, st := newFixture(t)
 	db.Seed(map[string]types.AttributeValue{"note": s("hand-written row")})
@@ -185,9 +185,9 @@ func TestScanAllSkipsItemsWithoutPK(t *testing.T) {
 	assert.Empty(t, res.Statuses)
 }
 
-// 壊れたリソース単位（グループ以外）の status アイテムには、エラーを紐づける行が存在しない
-// リソースとグループの対応づけには、この scan ではなく動的な探索が必要になるためである
-// よって単に飛ばされ、他の行は影響を受けない
+// 壊れたリソース単位の status アイテムには、エラーを対応づける行が存在しない
+// リソースとグループの対応づけには、この scan ではなく動的な探索を要するためである
+// したがってスキップし、他の行は影響を受けない
 func TestScanAllSkipsMalformedPerResourceStatus(t *testing.T) {
 	db, st := newFixture(t)
 	now := time.Now()
@@ -303,9 +303,9 @@ func TestPutGroupPropagatesStoreError(t *testing.T) {
 	assert.ErrorIs(t, err, assert.AnError)
 }
 
-// 何も設定していない StatusPatch では UpdateItem を呼ばない
-// SET 句が空だと式が不正で UpdateItem 自体が失敗する
-// 定常状態で無駄な書き込みを出さない設計でもあるので、呼ばないことに意味がある
+// 属性を 1 つも設定していない StatusPatch では、UpdateItem を呼ばない
+// SET 句が空の場合、式が不正となり UpdateItem が失敗するためである
+// 定常状態における書き込みの抑制にも対応する
 func TestUpdateStatusWithEmptyPatchSkipsUpdate(t *testing.T) {
 	db, st := newFixture(t)
 	db.FailOn("update", statusKey("rds-instance#a"), assert.AnError) // 呼ばれたら気づけるようにしておく
@@ -316,8 +316,8 @@ func TestUpdateStatusWithEmptyPatchSkipsUpdate(t *testing.T) {
 	assert.Nil(t, db.Item(statusKey("rds-instance#a")), "何も書くものがなければアイテムを作ってはならない")
 }
 
-// 空文字を指すポインタは「その属性を消す」であり、nil の「触らない」とは別物である
-// clearRecoveredError がエラーを消すときに使う経路であり、ポインタにしている理由そのものにあたる
+// 空文字を指すポインタは属性の削除を表し、nil が表す変更なしとは異なる
+// clearRecoveredError がエラーを削除する際に用いる経路であり、ポインタとする根拠に該当する
 func TestUpdateStatusDistinguishesClearFromUntouched(t *testing.T) {
 	_, st := newFixture(t)
 	ctx := context.Background()
@@ -333,8 +333,8 @@ func TestUpdateStatusDistinguishesClearFromUntouched(t *testing.T) {
 	assert.Equal(t, model.ActionStop, got.LastAction, "パッチに含めなかった属性は触らない")
 }
 
-// 削除は pk を組み立てるだけの薄い操作だが、種別ごとに正しい接頭辞を選べていなければ消したはずのものが残り、消してはいけないものが消える
-// 4 種類が実際にそれぞれのアイテムだけを消すことを確かめる
+// 削除は pk の組み立てのみを行うが、種別ごとの接頭辞が正しくない場合、対象のアイテムが残り、対象外のアイテムが削除される
+// 4 種類がそれぞれ対象のアイテムのみを削除することを確かめる
 func TestDeletesTargetTheRightItem(t *testing.T) {
 	ctx := context.Background()
 	cases := map[string]struct {
@@ -349,7 +349,7 @@ func TestDeletesTargetTheRightItem(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			db, st := newFixture(t)
-			// 4 種すべてを投入し、狙ったものだけが消えることを確かめる
+			// 4 種すべてを投入し、対象のアイテムのみが削除されることを確かめる
 			seedGroup(db, "dev", model.ModePinned, model.DesiredStopped)
 			db.Seed(map[string]types.AttributeValue{"pk": s(overrideKey("dev")), "desired": s(model.DesiredRunning),
 				"expires_at": &types.AttributeValueMemberN{Value: "9999999999"}})
@@ -368,22 +368,22 @@ func TestDeletesTargetTheRightItem(t *testing.T) {
 	}
 }
 
-// 存在しないアイテムの削除はエラーにならない
-// doctor --prune は失敗したら再実行すればよい、という前提がこれに乗っている
+// 存在しないアイテムの削除はエラーとならない
+// doctor --prune の失敗時に再実行できるという前提が、この性質に依存する
 func TestDeleteIsIdempotent(t *testing.T) {
 	_, st := newFixture(t)
 	assert.NoError(t, st.DeleteGroup(context.Background(), "never-existed"))
 }
 
-// 生の pk を外へ出す唯一の経路であり、doctor が手作業の delete-item 用に画面へ出す文字列そのものである
-// キー構成を知るのはこのパッケージだけ、という原則の上に成り立っているので、items.go の接頭辞を変えたときにここが黙って食い違ってはならない
+// pk を外部へ渡す唯一の経路であり、doctor が手作業による delete-item のために表示する文字列に一致する
+// キー構成を本パッケージへ限定する前提の上に成立するため、items.go の接頭辞の変更時にここが不一致となってはならない
 func TestPKAccessorsMatchTheStoredKeys(t *testing.T) {
 	assert.Equal(t, "group#dev", GroupPK("dev"))
 	assert.Equal(t, "override#dev", OverridePK("dev"))
 	assert.Equal(t, "status#group#dev", GroupStatusPK("dev"))
 	assert.Equal(t, "status#rds-instance#dev-db", StatusPK("rds-instance#dev-db"))
 
-	// グループ単位のステータスは、合成リソース ID を通した status# アイテムでなければならない
+	// グループ単位のステータスは、合成リソース ID を用いた status# アイテムでなければならない
 	assert.Equal(t, StatusPK(model.GroupStatusID("dev")), GroupStatusPK("dev"))
 }
 

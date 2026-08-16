@@ -1,6 +1,6 @@
-// `make dev` 向けに DynamoDB の state テーブルとダミーの ECS リソース（internal/devtools/devseed）を作る
-// 冪等であり、既存のフィクスチャに対して再実行してもタグの再適用以外は何も起きない
-// Lambda のコンテナイメージには決して含まれず、Dockerfile がビルドするのは ./cmd/reconciler と ./cmd/webconsole だけである
+// `make dev` 向けに DynamoDB の state テーブルとダミーの ECS リソース (internal/devtools/devseed) を作成する
+// 冪等であり、既存のフィクスチャに対する再実行ではタグの再適用のみを行う
+// Lambda のコンテナイメージには含まれない。Dockerfile がビルドするのは ./cmd/reconciler と ./cmd/webconsole である
 package main
 
 import (

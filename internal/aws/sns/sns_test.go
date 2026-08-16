@@ -16,7 +16,7 @@ import (
 
 func TestSnsNotifierNoopWithoutTopicArn(t *testing.T) {
 	ctrl := gomock.NewController(t)
-	client := mocks.NewMockAPI(ctrl) // TopicArn が空なら何もしないため EXPECT はない
+	client := mocks.NewMockAPI(ctrl) // TopicArn が空なら何もしないため EXPECT は設定しない
 	n := &Notifier{Client: client, TopicArn: ""}
 
 	require.NoError(t, n.Publish(context.Background(), "subject", map[string]any{"a": 1}))
@@ -39,8 +39,8 @@ func TestSnsNotifierPublishesJsonPayload(t *testing.T) {
 	assert.Equal(t, n.TopicArn, *published.TopicArn)
 }
 
-// SNS の Subject は印字可能な ASCII かつ 100 文字以内でなければ、Publish 自体が InvalidParameter で失敗する
-// UTF-8 文字列を 99 バイトで切るとマルチバイト文字を分断しうるので、sanitizeSubject はそうしてはならない
+// SNS の Subject が印字可能な ASCII かつ 100 文字以内でない場合、Publish は InvalidParameter で失敗する
+// UTF-8 文字列を 99 バイトで切り詰めるとマルチバイト文字を分断しうるため、sanitizeSubject はバイト単位の切り詰めを行ってはならない
 func TestSanitizeSnsSubjectTruncatesAtLimit(t *testing.T) {
 	long := strings.Repeat("a", 150)
 	got := sanitizeSubject(long)
@@ -56,8 +56,8 @@ func TestSanitizeSnsSubjectReplacesNonAscii(t *testing.T) {
 }
 
 func TestSanitizeSnsSubjectTruncationDoesNotSplitMultibyteRune(t *testing.T) {
-	// 切り詰めの前にマルチバイト文字はすべて 1 バイトの '?' になる
-	// 分断すべきマルチバイト文字が残らないため、バイト境界での切り詰めは常に安全である
+	// 切り詰めの前に、マルチバイト文字はすべて 1 バイトの '?' となる
+	// 分断の対象となるマルチバイト文字が残らないため、バイト境界での切り詰めは常に安全である
 	subject := strings.Repeat("a", 95) + "日本語超過分"
 	got := sanitizeSubject(subject)
 	require.True(t, utf8.ValidString(got), "truncated subject is not valid UTF-8: %q", got)

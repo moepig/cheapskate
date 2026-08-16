@@ -7,24 +7,24 @@ import (
 	"strings"
 )
 
-// グループが管理する AWS リソースを選ぶ条件
-// TagKey=TagValue が付き、かつ種別が Types に含まれるリソースすべてが対象となる
-// 対象は reconcile 時に Resource Groups Tagging API 経由で動的に探索される
+// グループが管理する AWS リソースを選択する条件
+// TagKey=TagValue が付与され、かつ種別が Types に含まれるリソースのすべてが対象となる
+// 対象は reconcile 時に Resource Groups Tagging API を通じて動的に探索する
 type Selector struct {
 	TagKey   string
 	TagValue string
 	Types    []ResourceType // 重複除去・ソート済み
 }
 
-// セレクタに設定が一切ないか（作成直後で未設定のグループか）を報告する
+// セレクタが未設定かどうかを報告する
 func (s Selector) Empty() bool {
 	return s.TagKey == "" && s.TagValue == "" && len(s.Types) == 0
 }
 
-// セレクタが探索に使える状態かを検査する
-// 値が空のタグフィルタは意図的にサポートしない
-// Tagging API は Values を持たない TagFilter を「そのキーの任意の値」として扱う
-// この曖昧さを cheapskate のセレクタモデルへ持ち込む価値はない
+// セレクタが探索に使用可能かを検査する
+// 値が空のタグフィルタは受け付けない
+// Tagging API は Values を持たない TagFilter を、そのキーの任意の値として扱う
+// cheapskate のセレクタは、この解釈を採用しない
 func (s Selector) Validate() error {
 	if s.TagKey == "" {
 		return fmt.Errorf("selector tag key is required")
@@ -52,7 +52,7 @@ func (s Selector) Validate() error {
 	return nil
 }
 
-// 種別リストの重複を除去してソートし、その結果を返す
+// 種別リストの重複を除去してソートした結果を返す
 func normalizeTypes(types []ResourceType) []ResourceType {
 	out := slices.Clone(types)
 	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })

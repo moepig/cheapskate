@@ -1,9 +1,9 @@
 //go:build image
 
-// ビルド済みの reconciler イメージに、本番で EventBridge が届けるのと同じペイロードを投げる
+// ビルド済みの reconciler イメージへ、本番で EventBridge が送信するものと同じペイロードを投入する
 //
-// 検証するのはイメージの振る舞いであって、RIE でも testcontainers でもない（それらは動かすための道具）
-// パッケージの位置づけとハーネスの前提は doc.go と harness_test.go を参照
+// 検証の対象はイメージの振る舞いであり、RIE と testcontainers は実行の手段である
+// パッケージの位置づけとハーネスの前提は、doc.go と harness_test.go を参照
 //
 //	make image-test   # = go test -tags image -count=1 ./tests/image/
 package image
@@ -22,11 +22,11 @@ import (
 	"cheapskate/internal/devtools/emutest"
 )
 
-// イベントフィクスチャの位置（リポジトリルートから見た相対）
-// フィクスチャは単体テストと共用で、EventBridge ルールパターンの参照ペイロードも兼ねる
+// イベントフィクスチャの位置 (リポジトリルートからの相対)
+// フィクスチャは単体テストと共用であり、EventBridge ルールパターンの参照ペイロードを兼ねる
 const fixtureDir = repoRoot + "/internal/app/reconcile/testdata"
 
-// ハンドラが error を返したときに Lambda ランタイムが返すペイロード
+// ハンドラが error を返した場合に Lambda ランタイムが返すペイロード
 type lambdaError struct {
 	ErrorMessage string `json:"errorMessage"`
 	ErrorType    string `json:"errorType"`
@@ -34,13 +34,13 @@ type lambdaError struct {
 
 func TestReconcilerImageHandlesEventPayloads(t *testing.T) {
 	cfg := emutest.Config(t)
-	// 使い捨ての空テーブルなので、期待する応答は「グループなし = リソース 0 件」に固定できる
+	// 使い捨ての空テーブルであるため、期待する応答はグループなし、すなわちリソース 0 件に固定できる
 	table := emutest.CreateStateTable(t, cfg)
 
-	// 空テーブルへの {} は無害なので、そのまま warm up に使える（後段のログの数え上げにも影響しない）
+	// 空テーブルへの {} は状態を変更しないため、warm up に用いる (後続のログの集計にも影響しない)
 	reconciler := startUnderRIE(t, buildImage(t, "reconciler"), emulatorEnv(t, table), []byte("{}"))
 
-	// {} は定期トリガと手動実行のペイロードである（setup.md §8）
+	// {} は定期トリガと手動実行のペイロードである (setup.md §8)
 	t.Run("periodic payload", func(t *testing.T) {
 		var summary reconcile.Summary
 		require.NoError(t, json.Unmarshal(reconciler.invoke(t, []byte("{}")), &summary))
@@ -49,8 +49,8 @@ func TestReconcilerImageHandlesEventPayloads(t *testing.T) {
 		assert.Empty(t, summary.Errors)
 	})
 
-	// EventBridge が届けるイベント本体をそのまま送る
-	// glob なのでフィクスチャを増やせばここも自動で対象になる
+	// EventBridge が送信するイベント本体をそのまま投入する
+	// glob により取得するため、フィクスチャの追加は自動で対象となる
 	fixtures, err := filepath.Glob(filepath.Join(fixtureDir, "rds-event-*.json"))
 	require.NoError(t, err)
 	require.NotEmpty(t, fixtures, "no RDS event fixtures found in "+fixtureDir)
@@ -60,7 +60,7 @@ func TestReconcilerImageHandlesEventPayloads(t *testing.T) {
 			payload, err := os.ReadFile(fixture)
 			require.NoError(t, err)
 
-			// RDS イベントもフル reconcile を起こす（イベントが名指しするリソースだけを見に行くことはない）
+			// RDS イベントもフル reconcile を実行する (イベントが指定するリソースのみを対象とはしない)
 			var summary reconcile.Summary
 			require.NoError(t, json.Unmarshal(reconciler.invoke(t, payload), &summary))
 			assert.Equal(t, 0, summary.Reconciled)
@@ -68,15 +68,15 @@ func TestReconcilerImageHandlesEventPayloads(t *testing.T) {
 		})
 	}
 
-	// 応答だけでは「受理された」までしか分からない
-	// aws.rds のイベントとして解釈されたことは、ハンドラが残すログでしか確認できない
+	// 応答から判定できるのは、呼び出しの受理までである
+	// aws.rds のイベントとして解釈したことは、ハンドラが出力するログでのみ確認できる
 	t.Run("rds events were recognised", func(t *testing.T) {
 		assert.Equal(t, len(fixtures),
 			strings.Count(reconciler.logs(t), `"msg":"event-received","source":"aws.rds"`),
 			"expected one event-received log line per RDS fixture")
 	})
 
-	// オブジェクトですらないペイロードは、空のイベントとみなして reconcile を続けるのではなく失敗する
+	// JSON オブジェクトでないペイロードは、空のイベントとして reconcile を継続せず、失敗とする
 	t.Run("malformed payload", func(t *testing.T) {
 		var failure lambdaError
 		require.NoError(t, json.Unmarshal(reconciler.invoke(t, []byte("[]")), &failure))

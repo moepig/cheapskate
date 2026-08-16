@@ -1,4 +1,4 @@
-// reconciler の Lambda エントリポイント（コンテナイメージでのデプロイ）
+// reconciler の Lambda エントリポイント (コンテナイメージでのデプロイ)
 package main
 
 import (
@@ -27,16 +27,16 @@ const defaultMetricsNamespace = "cheapskate"
 
 // 環境変数から EMF メトリクスの発行設定を組み立てる
 //
-// 有効・無効（METRICS_ENABLED）と名前空間（METRICS_NAMESPACE）を別の変数にしているのは、1 つにまとめると「未設定なら既定の名前空間で有効、空文字列なら無効」という、未設定と空文字列で意味が変わる約束が必要になるためである
-// 他の環境変数はどれも両者を区別しないので、そこだけ規約が違うのは事故のもとになる
+// 有効・無効 (METRICS_ENABLED) と名前空間 (METRICS_NAMESPACE) を別の変数に分ける
+// 1 つにまとめると、未設定と空文字列で意味が変わる規約が必要になる
+// 他の環境変数は両者を区別しないため、この変数だけが異なる規約を持つことになる
 //
 // METRICS_ENABLED の既定は true である
-// EMF から生成されるメトリクスはカスタムメトリクスとして課金される（4 本で月 1 ドル強）ので、本体を月 1 ドル未満に収めたい利用者は明示的に切れる
-// 無効にしても失われるのは件数と推移だけで、失敗の検知そのものは Lambda 組み込みの Errors メトリクス（ハンドラが失敗件数に応じてエラーを返す）と SNS 通知が引き続き担う
+// EMF から生成されるメトリクスはカスタムメトリクスとして課金されるため、明示的に無効化できる
+// 無効化で失われるのは件数と推移であり、失敗の検知は Lambda 組み込みの Errors メトリクスと SNS 通知が担う
 //
 // 解釈できない METRICS_ENABLED は既定へ倒さず起動を失敗させる
-// "fasle" のような打ち間違いを黙って「有効」と読むと、切ったつもりの課金が続くことになる
-// 切れていないことに気づく手段が請求書しかないより、起動時に落ちるほうがよい
+// 既定へ倒すと、無効化したつもりの設定が有効なまま課金され、それを検知する手段が請求書だけになる
 func metricsEmitter(logger *slog.Logger) cloudwatch.Emitter {
 	namespace := os.Getenv("METRICS_NAMESPACE")
 	if namespace == "" {
@@ -70,7 +70,7 @@ func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	metrics := metricsEmitter(logger)
 	if !metrics.Enabled {
-		// 「メトリクスが出ていない」の原因を探させないため、コールドスタートごとに 1 行だけ残す
+		// メトリクスが出力されない原因を特定するため、コールドスタートごとに 1 行記録する
 		logger.Info("metrics-disabled", "reason", "METRICS_ENABLED is false")
 	}
 	deps := &reconcile.Deps{
@@ -86,8 +86,8 @@ func main() {
 		now := time.Now().UTC()
 		summary, err := reconcile.Run(ctx, raw, deps, now)
 		if err != nil {
-			// サイクル全体が立ち上がらなかった場合（payload 不正、Scan 失敗）
-			// 個々のリソースまで到達していないので、件数ではなく 1 本のフラグとして出す
+			// サイクル全体が開始できなかった場合である
+			// 個々のリソースへ到達していないため、件数ではなく 1 本のフラグとして出力する
 			metrics.Emit(now, []cloudwatch.Metric{{Name: "ReconcileAborted", Value: 1}})
 			return summary, err
 		}
@@ -97,11 +97,12 @@ func main() {
 			{Name: "ReconcileActions", Value: len(summary.Actions)},
 			{Name: "ReconcileErrors", Value: len(summary.Errors)},
 		})
-		// リソース単位・グループ単位の失敗も Lambda の Errors メトリクスへ乗せる
-		// Run 自身がここで中断しないのは意図どおりで、1 件の失敗が残りの収束を止めてはならない
-		// 失敗を握りつぶすかどうかと、握りつぶした結果を呼び出し側へ報告するかどうかは別の話である
+		// リソース単位・グループ単位の失敗を Lambda の Errors メトリクスへ反映する
+		// Run はこれらの失敗で中断しない
+		// 1 件の失敗が残りの収束を止めないことと、その結果を呼び出し側へ報告することは独立している
 		//
-		// EventBridge の非同期リトライで同じフル reconcile が最大 2 回追加で走るが、収束済みのリソースにはアクションが起きず、継続中のエラーは通知の重複排除に当たるので、通知が増えることもない
+		// EventBridge の非同期リトライにより同じフル reconcile が最大 2 回追加で実行される
+		// 収束済みのリソースにアクションは発生せず、継続中のエラーは通知の重複排除に該当するため、通知は増えない
 		if len(summary.Errors) > 0 {
 			return summary, fmt.Errorf("reconcile completed with %d resource-level error(s); see status# last_error and the SNS notifications", len(summary.Errors))
 		}

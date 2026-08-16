@@ -1,8 +1,8 @@
 // オプトインのブラウザ向けフロントエンドを提供する
 //
-// 実行形態によらず localhost にバインドした素の HTTP サーバひとつであり、Lambda 固有のコードは無い
-// Lambda 上（IP 制限付き API Gateway REST API の背後）では Lambda Web Adapter 拡張がランタイム API を代わりに話し、各呼び出しをこのサーバへの HTTP リクエストに変換する
-// つまりローカルで動かしているものと Lambda で動くものは同じ経路を通る（Dockerfile の webconsole ステージ）
+// 実行形態によらず localhost にバインドした単一の HTTP サーバであり、Lambda 固有のコードを持たない
+// Lambda 上 (IP 制限付き API Gateway REST API の背後) では、Lambda Web Adapter 拡張がランタイム API を処理し、各呼び出しをこのサーバへの HTTP リクエストへ変換する
+// ローカル実行と Lambda 実行は同一の経路を通る (Dockerfile の webconsole ステージ)
 package main
 
 import (
@@ -27,8 +27,8 @@ func main() {
 	addr := flag.String("addr", "127.0.0.1:8080", "listen address")
 	flag.Parse()
 
-	// reconciler と同じ JSON 形式で stderr に出す
-	// Lambda 上ではそのまま CloudWatch Logs に載り、フィールドで絞り込める
+	// reconciler と同じ JSON 形式で stderr へ出力する
+	// Lambda 上ではそのまま CloudWatch Logs へ取り込まれ、フィールドによる絞り込みが可能となる
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
 	table := os.Getenv("STATE_TABLE_NAME")
@@ -51,13 +51,13 @@ func main() {
 		fatal(logger, "load AWS config", "error", err.Error())
 	}
 	s := state.New(dynamodb.NewFromConfig(cfg), table)
-	// BASE_PATH はブラウザから見えるプレフィックス（API Gateway のステージ、例えば "/console"）である
-	// Lambda のプロキシイベントのパス自体にはそれが含まれずに届く
+	// BASE_PATH はブラウザから見えるパスの接頭辞であり、API Gateway のステージに対応する
+	// Lambda のプロキシイベントのパスには、この接頭辞が含まれない
 	base := os.Getenv("BASE_PATH")
 	handler := webconsole.New(s, wire.Discoverer(cfg), wire.Describers(cfg), base, loc, logger).Handler()
 
-	// コンテナでは待ち受けポートをイメージ側が決める（Dockerfile で PORT と AWS_LWA_PORT を揃えてある）
-	// アダプタはループバック経由で繋いでくるので、バインド先は常に 127.0.0.1 でよい
+	// コンテナでは待ち受けポートをイメージ側が決定する (Dockerfile で PORT と AWS_LWA_PORT を一致させる)
+	// アダプタはループバック経由で接続するため、バインド先は常に 127.0.0.1 とする
 	listen := *addr
 	if port := os.Getenv("PORT"); port != "" {
 		listen = net.JoinHostPort("127.0.0.1", port)
@@ -67,8 +67,8 @@ func main() {
 	fatal(logger, "http server stopped", "error", http.ListenAndServe(listen, handler).Error())
 }
 
-// 起動を継続できない失敗を 1 行残して終了する
-// slog に log.Fatal 相当がないため、ここで 1 か所に閉じ込めておく
+// 起動を継続できない失敗を 1 行記録して終了する
+// slog に log.Fatal 相当が存在しないため、この 1 か所へ集約する
 func fatal(logger *slog.Logger, msg string, args ...any) {
 	logger.Error(msg, args...)
 	os.Exit(1)

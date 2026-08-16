@@ -19,7 +19,7 @@ type Ec2API interface {
 }
 
 // EC2 インスタンスを管理する
-// ECS と違って desiredCount やスケーリングに相当するものがないため、Start は res.Tags を完全に無視する
+// desiredCount やスケーリングに相当する設定を持たないため、Start は res.Tags を参照しない
 type Ec2InstanceTarget struct {
 	Client Ec2API
 }
@@ -57,7 +57,7 @@ func (t *Ec2InstanceTarget) Start(ctx context.Context, res model.Resource) error
 
 // EC2 インスタンスの状態を cheapskate の Observation へ写像する
 // terminated は stopped ではなく not-found として報告する
-// terminated のインスタンスは Tagging API から 1 時間ほど見え続けるため、"stopped" 扱いにすると reconciler が亡骸を Start しようとする
+// terminated のインスタンスは Tagging API から 1 時間程度は返り続けるため、stopped として扱った場合、reconciler が終了済みのインスタンスに対して Start を試みる
 func ec2Observation(name ec2types.InstanceStateName) model.Observation {
 	switch name {
 	case ec2types.InstanceStateNameRunning:
@@ -72,7 +72,7 @@ func ec2Observation(name ec2types.InstanceStateName) model.Observation {
 }
 
 // err が EC2 の InvalidInstanceID.NotFound かどうかを報告する
-// EC2 には RDS の DBInstanceNotFoundFault のような型付きの not-found はなく、このコードを持つ汎用の smithy.APIError しかない
+// EC2 は RDS の DBInstanceNotFoundFault に相当する型付きの not-found を持たず、このコードを持つ smithy.APIError のみを返す
 func isEc2NotFound(err error) bool {
 	apiErr, ok := errors.AsType[smithy.APIError](err)
 	return ok && apiErr.ErrorCode() == "InvalidInstanceID.NotFound"

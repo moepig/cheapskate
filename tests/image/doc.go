@@ -1,18 +1,19 @@
 // Package image tests the container images cheapskate ships, from the outside.
 //
-// 対象はデプロイされる成果物そのものである
-// Lambda ハンドラ、JSON の入出力契約、ビルドタグ（lambda.norpc）、イメージの中身は、ここを通ってはじめて検証される（単体テストと統合テストはどちらもパッケージを直接呼ぶ）
-// webconsole イメージに同梱した Lambda Web Adapter 拡張も同じ理由でここにしか出てこない
-// あれは Lambda 側にしか存在せず、ハンドラを直接呼ぶテストはアダプタを通らないためである
+// 対象はデプロイする成果物そのものである
+// Lambda ハンドラ、JSON の入出力契約、ビルドタグ (lambda.norpc)、イメージの内容は、本パッケージのみが検証する
+// 単体テストと統合テストは、いずれもパッケージを直接呼ぶためである
+// webconsole イメージへ同梱した Lambda Web Adapter 拡張も、同じ理由により本パッケージのみが対象とする
+// この拡張は Lambda 側にのみ存在し、ハンドラを直接呼ぶテストはアダプタを経由しないためである
 //
-// そのため internal/ ではなくここに置いている
-// 中の何も import せず、HTTP で外から叩くだけなので、イメージに含まれるどのパッケージにも属さない
+// したがって internal/ ではなく本ディレクトリへ置く
+// 内部のパッケージを一切 import せず HTTP により外部から検証するため、イメージに含まれるいずれのパッケージにも属さない
 //
-// 動かすには Lambda ランタイムの代役が要る
-// ベースイメージ同梱の Runtime Interface Emulator（RIE, /usr/local/bin/aws-lambda-rie）を使うが、それは手段であって検証の対象ではない
-// 実際の Lambda と同じく /var/runtime/bootstrap を動かし、HTTP POST で呼び出す
+// 実行には Lambda ランタイムの代替を要する
+// ベースイメージへ同梱の Runtime Interface Emulator (RIE、/usr/local/bin/aws-lambda-rie) を用いるが、これは手段であり検証の対象ではない
+// 実際の Lambda と同じく /var/runtime/bootstrap を起動し、HTTP POST で呼び出す
 //
-// テスト本体は `image` ビルドタグの下にある（実行にイメージのビルドと docker が要るため）
-// このファイルにタグが無いのは、タグ無しでビルドしたときにパッケージが空にならないようにするためである
-// 空になると `go build ./...` や `go test ./...` が「Go のファイルが 1 つも無い」として失敗する
+// テスト本体は `image` ビルドタグの下に置く。実行にイメージのビルドと docker を要するためである
+// 本ファイルがタグを持たないのは、タグなしでビルドしたときにパッケージを空としないためである
+// パッケージが空の場合、`go build ./...` と `go test ./...` は Go のファイルが存在しないとして失敗する
 package image

@@ -1,5 +1,5 @@
 // 生成された MockAPI を裏で支える、手書きのインメモリ実装
-// 実装しているのは store が実際に発行する式の形だけである（begins_with の scan フィルタ、SET の更新式）
+// 実装しているのは store が実際に発行する式の形だけである(begins_with の scan フィルタ、SET の更新式)
 // 加えて、store の再試行やページングの経路を通すためのエラー注入と Scan のページ送りを持つ
 // 条件式や他の演算子を持たせず、あえてこの狭さに留めている
 // store がそれ以上を発行しないためであり、完全な DynamoDB エミュレータへ育てるのではなくこの状態を保つこと
@@ -39,9 +39,9 @@ func NewDynaStore(ctrl *gomock.Controller) (*MockAPI, *DynaStore) {
 	return m, st
 }
 
-// 指定した操作（"get"・"put"・"update"・"delete"・"scan"）の次に合致する呼び出しが err を返すようにする
+// 指定した操作("get"・"put"・"update"・"delete"・"scan")の次に合致する呼び出しが err を返すようにする
 // get/put/update/delete では pk がそのキーに限定し、"" を渡すとその操作の任意のキーに合致する
-// 一度発火したら自ら解除されるので、後続の呼び出し（直後の再試行など）に影響を与えず単発の失敗を注入できる
+// 一度発火したら自ら解除されるので、後続の呼び出し(直後の再試行など)に影響を与えず単発の失敗を注入できる
 func (f *DynaStore) FailOn(op, pk string, err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -52,7 +52,7 @@ func (f *DynaStore) FailOn(op, pk string, err error) {
 }
 
 // Scan が 1 回あたり最大 n 件だけ返すようにし、LastEvaluatedKey を報告して呼び出し側に残りのページ送りを強いる
-// 既定値の 0 は無制限（1 ページ）を意味する
+// 既定値の 0 は無制限(1 ページ)を意味する
 func (f *DynaStore) SetScanPageSize(n int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -83,7 +83,7 @@ func (f *DynaStore) Seed(item map[string]types.AttributeValue) {
 	f.items[pkOf(item)] = item
 }
 
-// 格納済みのアイテムを返す（存在しなければ nil）
+// 格納済みのアイテムを返す(存在しなければ nil)
 func (f *DynaStore) Item(pk string) map[string]types.AttributeValue {
 	f.mu.Lock()
 	defer f.mu.Unlock()

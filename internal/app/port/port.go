@@ -1,17 +1,17 @@
-// アプリケーション層が外界に求めるものをすべて宣言する
+// アプリケーション層が外界に求めるインターフェースをすべて宣言する
 // 実装は internal/aws 配下にあり、internal/wire がこれらのインターフェースへ束ねる
-// そのため internal/app が internal/aws をインポートすることはなく、依存の向きは内側を指す
-// アプリ層のテストに必要なのは porttest サブパッケージにある手書きのテストダブルだけで済む
+// internal/app は internal/aws をインポートせず、依存の向きは内側を指す
+// アプリ層のテストが必要とするテストダブルは、porttest サブパッケージにある
 //
-// state テーブルは意図的にポートにしていない
-// 差し替え可能な依存ではなく cheapskate に固有のものなので、internal/state はアプリ層の具体的な協働相手として扱う
-// テストではその下にある DynamoDB クライアントの側をモックする
+// state テーブルはポートとしない
+// 差し替え可能な依存ではなく cheapskate に固有であるため、internal/state をアプリ層の協働相手として扱う
+// テストでは、その下にある DynamoDB クライアントをモックする
 //
-// ただし「差し替えないこと」は「何でも呼べること」とは別である
-// state への窓口は利用側の各パッケージが自分の必要な範囲だけのインターフェースとして宣言する
-// （reconcile.Store・groups.Store・doctor.Store）
-// これにより reconciler は設定アイテムを書けず、設定フロントエンドはステータスを書けない、が構造として成り立つ
-// Target から Describer を絞り込んでいるのと同じ理由による（下の Describer を参照）
+// ただし、差し替えないことと、呼び出し範囲を限定しないことは独立している
+// state への参照は、利用側の各パッケージが必要な範囲のみのインターフェースとして宣言する
+// (reconcile.Store、groups.Store、doctor.Store)
+// これにより、reconciler は設定アイテムを書けず、設定フロントエンドはステータスを書けない
+// Target から Describer を絞り込む理由と同じである (下の Describer を参照)
 package port
 
 import (
@@ -33,16 +33,16 @@ type Target interface {
 	Describe(ctx context.Context, ref string) (model.Observation, error)
 	Stop(ctx context.Context, ref string) error
 	// res を再び起動する
-	// res.Tags は AWS リソース自身のタグから読んだターゲット固有の起動設定を運ぶ（ECS なら model.EcsDesiredCountTagKey など）
+	// res.Tags は、AWS リソース自身のタグから読んだ種別固有の起動設定を保持する
 	// cheapskate は停止時に状態を記録しないため、復元元となる保存済みの状態は存在しない
 	Start(ctx context.Context, res model.Resource) error
 }
 
-// 種別ごとの読み取り専用 Describe API 経由で、リソースの現在の状態を都度問い合わせる
-// 呼ぶ API は ec2:DescribeInstances、rds:DescribeDBInstances/DescribeDBClusters、ecs:DescribeServices
-// Target.Describe と同じ呼び出しだが Stop/Start を持たない
-// これにより読み取り専用のフロントエンド（webconsole、`cheapskate-cli show`）はコントロールプレーンを変更する経路を持たない
-// すべての Target がこのインターフェースをそのまま満たし、一方から他方へ絞り込むのは internal/wire である
+// 種別ごとの読み取り専用 Describe API を通じて、リソースの現在の状態を問い合わせる
+// 呼び出す API は ec2:DescribeInstances、rds:DescribeDBInstances/DescribeDBClusters、ecs:DescribeServices である
+// Target.Describe と同じ呼び出しであり、Stop/Start を持たない
+// これにより読み取り専用のフロントエンドは、コントロールプレーンを変更する経路を持たない
+// すべての Target がこのインターフェースを満たし、絞り込みは internal/wire が行う
 type Describer interface {
 	Describe(ctx context.Context, ref string) (model.Observation, error)
 }

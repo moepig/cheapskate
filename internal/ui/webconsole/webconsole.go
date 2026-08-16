@@ -1,9 +1,9 @@
 // internal/app/groups の設定操作に対する、任意導入のブラウザフロントエンド
-// サーバ側で HTML を描画し、JavaScript は使わない
-// cheapskate-cli と同じく、触れるのは DynamoDB のアイテムと読み取り専用の tag:GetResources API だけである
-// マッチしたリソースのライブな現在状態を表示するときは、種別ごとの読み取り専用 Describe API（port.Describer）も使う
-// Stop/Start を呼ぶことは決してない
-// アクセス制御（IP 許可リスト）はここではなく API Gateway のリソースポリシーにある
+// HTML はサーバ側で描画し、JavaScript を用いない
+// cheapskate-cli と同じく、操作対象は DynamoDB のアイテムと読み取り専用の tag:GetResources API に限る
+// 一致したリソースの現在状態を表示する場合は、種別ごとの読み取り専用 Describe API (port.Describer) も用いる
+// Stop/Start は呼ばない
+// アクセス制御である IP 許可リストは、本パッケージではなく API Gateway のリソースポリシーが担う
 package webconsole
 
 import (
@@ -29,16 +29,16 @@ import (
 var templateFS embed.FS
 
 // web console が state テーブルに求める範囲
-// 設定操作（groups.Store）と診断（doctor.Store）の必要分を合わせたもので、それ以上は含まない
-// とくに UpdateStatus がないので、コンソールから reconciler の監査証跡を書き換える経路は存在しない
+// 設定操作 (groups.Store) と診断 (doctor.Store) が必要とする範囲の和であり、それ以外を含まない
+// UpdateStatus を含まないため、コンソールから reconciler の監査証跡を書き換える経路は存在しない
 type Store interface {
 	groups.Store
 	doctor.Store
 }
 
 // web console を提供する
-// Base はブラウザから見た URL のパス接頭辞であり、API Gateway のステージ（"/console" など）にあたる
-// ローカルで動かすときは空になる
+// Base はブラウザから見た URL のパス接頭辞であり、API Gateway のステージに対応する
+// ローカル実行では空となる
 type Server struct {
 	store      Store
 	discoverer port.Discoverer
@@ -54,8 +54,8 @@ type Server struct {
 	now        func() time.Time
 }
 
-// log が nil なら何も出力しない
-// ログを渡さない選択を、Server 側の nil チェックではなく生成時に 1 回だけ解決しておく
+// log が nil の場合は何も出力しない
+// ログを渡さない場合の扱いを、Server 側の nil 検査ではなく生成時に 1 回で解決する
 func New(s Store, d port.Discoverer, describers map[model.ResourceType]port.Describer, base string, loc *time.Location, log *slog.Logger) *Server {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
@@ -108,14 +108,14 @@ func (s *Server) Handler() http.Handler {
 	return securityHeaders(s.logRequests(mux))
 }
 
-// リクエストの開始と完了を 1 本ずつ残す
+// リクエストの開始と完了を 1 行ずつ記録する
 //
-// 開始と完了を別の行にしているのは、完了しなかったリクエストを見つけられるようにするためである
-// Lambda のタイムアウトや実行時パニックで落ちた場合、残るのは request-start だけになる
-// 完了行しか出さないと、そもそも届いていなかったのか処理の途中で消えたのかが区別できない
+// 開始と完了を別の行とするのは、完了しなかったリクエストを検出するためである
+// Lambda のタイムアウトと実行時 panic により終了した場合、残るのは request-start のみとなる
+// 完了行のみを出力した場合、リクエストの未到達と処理中の終了を区別できない
 //
-// client はリクエスト元の IP である（clientIP を参照）
-// このコンソールに認証はなく、アクセス制御は IP 許可リストだけなので、誰が操作したのかを後から辿れる手がかりはこれしかない
+// client はリクエスト元の IP である (clientIP を参照)
+// このコンソールは認証を持たず、アクセス制御は IP 許可リストのみであるため、操作の主体を特定する情報はこれに限る
 func (s *Server) logRequests(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		attrs := []any{"method", r.Method, "path", r.URL.Path, "query", r.URL.RawQuery, "client", clientIP(r)}
@@ -129,8 +129,8 @@ func (s *Server) logRequests(next http.Handler) http.Handler {
 	})
 }
 
-// 実際に書いたステータスコードを覚えておくだけの ResponseWriter
-// WriteHeader を呼ばずに書き始めた場合、net/http と同じく 200 が既定になる
+// 書き込んだステータスコードを保持する ResponseWriter
+// WriteHeader を呼ばずに書き込みを開始した場合、net/http と同じく既定を 200 とする
 type statusRecorder struct {
 	http.ResponseWriter
 	status      int
@@ -151,17 +151,17 @@ func (w *statusRecorder) Write(b []byte) (int, error) {
 
 // リクエスト元の IP を返す
 //
-// X-Forwarded-For は見ない
-// API Gateway はクライアントが送ってきた X-Forwarded-For の「末尾に」観測した送信元 IP を追記するので、先頭に入っているのはクライアントが自由に書ける値である
-// 信用できるのは末尾側だが、そもそも読む必要がない
+// X-Forwarded-For は参照しない
+// API Gateway は、クライアントが送信した X-Forwarded-For の末尾へ観測した送信元 IP を追記するため、先頭の値はクライアントが任意に設定できる
+// 信頼できるのは末尾の値であるが、以下の理由により参照を要しない
 //
-// Lambda 上では Lambda Web Adapter が元の呼び出しイベントの requestContext を x-amzn-request-context ヘッダに JSON で載せてくる
-// そこにある sourceIp は API Gateway への TCP 接続元そのものであり、リソースポリシーの aws:SourceIp が許可リストの判定に使う値と同一である
-// アクセス制御が IP 許可リストだけである以上、ログに残すべきなのは「実際に許可判定された IP」であって、クライアントの自己申告ではない
-// このヘッダはアダプタが（クライアント由来の同名ヘッダを捨てて）差し替えるので詐称できない
-// RemoteAddr はアダプタからのループバック接続になるため、Lambda 上では手がかりにならない
+// Lambda 上では、Lambda Web Adapter が呼び出しイベントの requestContext を x-amzn-request-context ヘッダへ JSON として設定する
+// そこに含まれる sourceIp は API Gateway への TCP 接続元であり、リソースポリシーの aws:SourceIp が許可の判定に用いる値と同一である
+// アクセス制御が IP 許可リストのみであるため、記録すべきなのは許可の判定に用いた IP であり、クライアントが申告した値ではない
+// このヘッダはアダプタがクライアント由来の同名ヘッダを破棄して設定するため、詐称できない
+// RemoteAddr はアダプタからのループバック接続となるため、Lambda 上では送信元を示さない
 //
-// ローカル実行時はこのヘッダが無く、素の TCP 接続元になる（こちらはポートが付くので落とす）
+// ローカル実行ではこのヘッダが存在せず、TCP 接続元を用いる (ポート番号を除去する)
 func clientIP(r *http.Request) string {
 	if ip := sourceIP(r.Header.Get("X-Amzn-Request-Context")); ip != "" {
 		return ip
@@ -173,10 +173,10 @@ func clientIP(r *http.Request) string {
 }
 
 // アダプタが渡す requestContext の JSON から送信元 IP を取り出す
-// 読めない・入っていないときは空を返し、呼び出し側を RemoteAddr へ落とす
+// 読めない場合、および値が存在しない場合は空を返し、呼び出し側は RemoteAddr を用いる
 //
-// 場所はイベント形式によって違う: REST API(v1, 本番構成) は identity.sourceIp、HTTP API(v2) と Function URL は http.sourceIp である
-// 前者しか見ないと、トリガを差し替えたときに黙って client が変わるので両方拾う
+// 位置はイベント形式により異なる。REST API(v1、本番構成) は identity.sourceIp、HTTP API(v2) と Function URL は http.sourceIp である
+// 前者のみを参照した場合、トリガの変更により client の値が変化するため、両方を参照する
 func sourceIP(requestContext string) string {
 	if requestContext == "" {
 		return ""
@@ -223,8 +223,8 @@ type view struct {
 }
 
 // /doctor ページのデータ
-// Prunable を Report とは別に持たせているのは、テンプレート側で件数を数えさせないためである
-// 0 件なら prune のフォーム自体を出さない
+// Prunable を Report と別に持つのは、テンプレート側での件数の集計を避けるためである
+// 0 件の場合、prune のフォームを出力しない
 type doctorView struct {
 	Report     doctor.Report
 	Prunable   int
@@ -241,8 +241,8 @@ func newDoctorView(r doctor.Report, stuckAfter time.Duration) doctorView {
 	return v
 }
 
-// エラーを画面に返すと同時にログにも残す
-// 画面はブラウザを閉じれば消えるので、そこにしか出さなければ、あとから原因を追う手立てがなくなる
+// エラーを画面へ返すとともにログへ記録する
+// 画面の内容はブラウザの終了により失われるため、画面のみへ出力した場合、事後の原因の特定が不可能となる
 func (s *Server) fail(w http.ResponseWriter, r *http.Request, status int, msg string) {
 	s.log.Error("request-failed",
 		"method", r.Method, "path", r.URL.Path, "query", r.URL.RawQuery, "client", clientIP(r),
@@ -260,8 +260,8 @@ func (s *Server) view(r *http.Request) view {
 	}
 }
 
-// グループの mode 固有の設定を "ラベル: 値" の行として、1 属性 1 行で描画する
-// start/stop/timezone を 1 本の長い文字列へ詰め込むのを避けるためである
+// グループの mode 固有の設定を "ラベル: 値" の行として、1 属性につき 1 行で描画する
+// start/stop/timezone を単一の文字列へまとめることを避けるためである
 func describeGroup(item model.GroupSpec) template.HTML {
 	switch item.Mode {
 	case model.ModePinned:
@@ -283,8 +283,8 @@ func describeGroup(item model.GroupSpec) template.HTML {
 	}
 }
 
-// グループのセレクタを "ラベル: 値" の行として、1 属性 1 行で描画する
-// タグと types を 1 本の長い文字列へ詰め込むのを避けるためである
+// グループのセレクタを "ラベル: 値" の行として、1 属性につき 1 行で描画する
+// タグと types を単一の文字列へまとめることを避けるためである
 func describeSelector(item model.GroupSpec) template.HTML {
 	sel := item.Selector()
 	if sel.Empty() {
@@ -297,12 +297,12 @@ func describeSelector(item model.GroupSpec) template.HTML {
 	return template.HTML(strings.Join(lines, "<br>"))
 }
 
-// リソース自身のタグが担う、種別固有の設定を描画する
-// タグそのものを羅列するわけではなく、その種別が設定として意味を与えているタグだけを出す
-// 現時点で該当があるのは ecs-service のスケーリング設定だけで、他の種別は "-" になる
+// リソース自身のタグが保持する種別固有の設定を描画する
+// タグを列挙するのではなく、その種別が設定として意味を定義したタグのみを出力する
+// 該当を持たない種別は "-" を表示する
 //
-// どのタグが設定なのかを知っているのは種別の宣言（model.TypeInfo.ConfigTags）なので、ここには種別ごとの分岐がない
-// 別の種別にタグ由来の設定を加えるときも、この関数は変えずに宣言側へ足すことになる
+// 設定として扱うタグを定義するのは種別の宣言 (model.TypeInfo.ConfigTags) であるため、この関数は種別ごとの分岐を持たない
+// 別の種別へタグ由来の設定を追加する場合も、変更するのは宣言側であり、この関数は変更しない
 func describeResourceConfig(r model.Resource) template.HTML {
 	cfg := r.Config()
 	if len(cfg) == 0 {
@@ -315,10 +315,9 @@ func describeResourceConfig(r model.Resource) template.HTML {
 	return template.HTML(strings.Join(lines, "<br>"))
 }
 
-// 都度問い合わせたリソースの現在状態（ResourceRow.Live と LiveErr）を描画する
-// ECS サービスなら "running (desiredCount=2)" のようになる
-// compute.EcsServiceTarget.Describe が desired count をそのまま Observation.Detail へ入れるためである
-// 種別に Describer が結線されていなければ "-" を表示し、問い合わせが失敗していればそのエラーをその場に表示する
+// 問い合わせたリソースの現在状態 (ResourceRow.Live と LiveErr) を描画する
+// State に続けて Observation.Detail を表示する
+// 種別に Describer が結線されていない場合は "-" を表示し、問い合わせが失敗した場合はそのエラーを表示する
 func describeLive(row groups.ResourceRow) template.HTML {
 	if row.LiveErr != nil {
 		return template.HTML(`<span class="danger">` + template.HTMLEscapeString(row.LiveErr.Error()) + `</span>`)
@@ -345,8 +344,8 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 }
 
 // グループ 1 件の設定と、動的に探索したメンバーリソースを表示する
-// Discover の失敗（tag:GetResources 権限の不足など）は HTTP エラーではなくデータとしてその場に描画する
-// グループ自身の設定は依然として妥当で役に立つので、ページは 200 を返す
+// Discover の失敗は、HTTP エラーではなくデータとしてページ内へ描画する
+// グループの設定は探索に依存せず有効であるため、ページは 200 を返す
 func (s *Server) handleGroup(w http.ResponseWriter, r *http.Request) {
 	group := r.URL.Query().Get("name")
 	if err := model.ValidGroupName(group); err != nil {
@@ -364,9 +363,9 @@ func (s *Server) handleGroup(w http.ResponseWriter, r *http.Request) {
 	s.render(w, r, s.group, v)
 }
 
-// state テーブルの診断結果を表示する（読み取りのみ）
-// Discover の失敗は handleGroup と同じくデータとしてページ内に出す
-// 失敗したグループがあっても、他のグループについて分かったことは依然として役に立つためである
+// state テーブルの診断結果を表示する (読み取りのみ)
+// Discover の失敗は handleGroup と同じく、データとしてページ内へ出力する
+// 一部のグループが失敗した場合も、他のグループの診断結果は有効であるためである
 func (s *Server) handleDoctor(w http.ResponseWriter, r *http.Request) {
 	report, err := doctor.Run(r.Context(), s.store, s.discoverer, s.now(), doctor.Options{StuckAfter: s.stuckAfter})
 	if err != nil {
@@ -379,8 +378,8 @@ func (s *Server) handleDoctor(w http.ResponseWriter, r *http.Request) {
 }
 
 // 孤立レコードを削除する
-// 表示済みの結果に対してではなく、押された時点で診断をやり直してから削除する
-// ページを開いてからボタンを押すまでの間に孤立しなくなったレコード（タグを付け直した、グループを作り直した）を、古い画面を根拠に消してしまわないためである
+// 表示済みの結果ではなく、実行の時点で診断を再実行した結果に対して削除する
+// ページの表示から実行までの間に孤立しなくなったレコードを、過去の診断結果を根拠として削除しないためである
 func (s *Server) handleDoctorPrune(w http.ResponseWriter, r *http.Request) {
 	if !sameOrigin(r) {
 		s.fail(w, r, http.StatusForbidden, "cross-origin form submission rejected")
@@ -393,7 +392,7 @@ func (s *Server) handleDoctorPrune(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, target+"?err="+url.QueryEscape("doctor: "+err.Error()), http.StatusSeeOther)
 		return
 	}
-	// 個々の削除失敗は doctor.Run のエラーにならず finding に残るので、ここで数えて伝える
+	// 個々の削除の失敗は doctor.Run のエラーとならず finding に残るため、ここで集計して報告する
 	var failed int
 	for _, f := range report.Findings {
 		if f.PruneErr != "" {
@@ -514,8 +513,8 @@ func (s *Server) handleOp(w http.ResponseWriter, r *http.Request) {
 	if !strings.Contains(target, "?") {
 		sep = "?"
 	}
-	// 操作の失敗はリダイレクト先の画面にしか出ないので、ここで必ずログにも残す
-	// 成功も 1 行残す（このコンソールは設定を書き換える経路であり、誰が何を変えたのかを追えなければならない）
+	// 操作の失敗はリダイレクト先の画面にのみ現れるため、ここでログへ記録する
+	// 成功も 1 行記録する。このコンソールは設定を書き換える経路であり、変更の主体と内容を追跡できなければならないためである
 	if err != nil {
 		s.log.Error("operation-failed", "action", action, "group", group, "client", clientIP(r), "error", err.Error())
 		target += sep + "err=" + url.QueryEscape(err.Error())
@@ -527,8 +526,8 @@ func (s *Server) handleOp(w http.ResponseWriter, r *http.Request) {
 }
 
 // クロスサイトのフォーム送信を拒否する
-// 守るべきセッションはない（アクセス制御は IP 許可リストである）
-// それでも外部のページがオペレータのブラウザ経由で操作を走らせるのを防げる
+// 保護対象のセッションは存在しない (アクセス制御は IP 許可リストである)
+// 外部のページが、許可された IP のブラウザを経由して操作を実行することを防ぐためである
 func sameOrigin(r *http.Request) bool {
 	if site := r.Header.Get("Sec-Fetch-Site"); site != "" && site != "same-origin" && site != "none" {
 		return false

@@ -1,7 +1,7 @@
-// cmd/cheapskate-cli の背後にある、cheapskate の設定 CLI
+// cmd/cheapskate-cli の実装であり、cheapskate の設定 CLI である
 // DynamoDB の state テーブルにある group# と override# のアイテムを操作する
-// 読み取りには読み取り専用の tag:GetResources API を使い、`show` のリソース単位のライブ状態には種別ごとの読み取り専用 Describe API を使う
-// RDS/ECS/EC2 の Stop/Start コントロール API を自ら呼ぶことはない（それを行うのは reconciler の Lambda である）
+// 探索には読み取り専用の tag:GetResources API を用い、`show` のリソース単位の現在状態には種別ごとの読み取り専用 Describe API を用いる
+// RDS/ECS/EC2 の Stop/Start コントロール API は呼ばない。これを呼ぶのは reconciler の Lambda である
 package cli
 
 import (
@@ -76,40 +76,40 @@ stderr and exits 1. This usage text is the only non-JSON output (-h / -help).
 The table name comes from -table or the CHEAPSKATE_TABLE environment variable. AWS credentials/region use the standard SDK chain.
 `
 
-// プロセスのエントリポイントであり、args を実行して結果を出力と終了コードに変える
-// cmd/cheapskate-cli はこれを 1 行呼ぶだけである
+// プロセスのエントリポイントであり、args を実行し、結果を出力と終了コードへ変換する
+// cmd/cheapskate-cli はこれを呼ぶのみである
 func Main(args []string) {
 	if err := Run(args, os.Stdout); err != nil {
-		// -h/-help は失敗ではないので、usage テキストを返して 0 で終了する
-		// このテキストだけが JSON として出力されない唯一のものである
+		// -h/-help は失敗ではないため、usage テキストを返して 0 で終了する
+		// このテキストは、JSON として出力しない唯一の出力である
 		if errors.Is(err, flag.ErrHelp) {
 			fmt.Fprint(os.Stderr, Usage)
 			return
 		}
-		// エラーオブジェクトの書き出しまで失敗したら手立てはない
-		// それでも終了コードがそのことを伝える
+		// エラーオブジェクトの書き出しが失敗した場合、追加の報告手段は存在しない
+		// この場合も終了コードが失敗を伝える
 		_ = writeJSON(os.Stderr, errorOutput{Error: err.Error()})
 		os.Exit(1)
 	}
 }
 
-// 失敗時に必ず stderr へ出力される JSON オブジェクト
-// これにより、この CLI の出力を解析する側は、何かあったときに行の掻き取りへ切り替える必要がない
+// 失敗時に stderr へ出力する JSON オブジェクト
+// これにより、この CLI の出力を解析する側は、失敗時もテキストの解析へ切り替えずに済む
 type errorOutput struct {
 	Error string `json:"error"`
 }
 
-// v をコマンドの唯一のインデント付き JSON オブジェクトとして出力する
+// v を、コマンドが出力する唯一のインデント付き JSON オブジェクトとして出力する
 func writeJSON(w io.Writer, v any) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(v)
 }
 
-// 誤用を戻り値のエラーだけで報告するフラグセットを返す
-// flag 自身のテキスト出力（"flag provided but not defined" の行と usage の羅列）は破棄する
-// これによりこの CLI の JSON に混ざり込まない
-// -h/-help は従来どおり flag.ErrHelp を返し、main がそれに usage テキストで応じる
+// 誤用を戻り値のエラーとしてのみ報告するフラグセットを返す
+// flag 自身のテキスト出力は破棄する
+// これにより、この CLI の JSON 出力へ混入しない
+// -h/-help は flag.ErrHelp を返し、main が usage テキストで応答する
 func newFlagSet(name string) *flag.FlagSet {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -117,14 +117,14 @@ func newFlagSet(name string) *flag.FlagSet {
 }
 
 // cheapskate-cli が state テーブルに求める範囲
-// 設定操作（groups.Store）と診断（doctor.Store）の必要分を合わせたもので、それ以上は含まない
-// UpdateStatus がないので、CLI から reconciler の監査証跡を書き換える経路は存在しない
+// 設定操作 (groups.Store) と診断 (doctor.Store) が必要とする範囲の和であり、それ以外を含まない
+// UpdateStatus を含まないため、CLI から reconciler の監査証跡を書き換える経路は存在しない
 type store interface {
 	groups.Store
 	doctor.Store
 }
 
-// CLI の呼び出し 1 回を実行し、唯一の JSON 結果オブジェクトを out へ出力する
+// CLI の呼び出し 1 回を実行し、単一の JSON 結果オブジェクトを out へ出力する
 func Run(args []string, out io.Writer) error {
 	global := newFlagSet("cheapskate-cli")
 	table := global.String("table", os.Getenv("CHEAPSKATE_TABLE"), "DynamoDB state table name")
@@ -177,10 +177,9 @@ func Run(args []string, out io.Writer) error {
 	}
 }
 
-// args に対して fs を解析し、フラグでないトークンを位置引数として集める
-// これによりフラグと位置引数がどの順で現れてもよくなる
-// ここでの位置引数は常に "running" か "stopped" で、"-" で始まることはない
-// たとえば "pin --group dev stopped" と "pin stopped --group dev" のどちらも動く
+// args に対して fs を解析し、フラグでないトークンを位置引数として収集する
+// これにより、フラグと位置引数の順序を問わず解析できる
+// ここでの位置引数は常に "running" または "stopped" であり、"-" で始まることはない
 func parseInterleaved(fs *flag.FlagSet, args []string) ([]string, error) {
 	var pos []string
 	for {
@@ -195,9 +194,8 @@ func parseInterleaved(fs *flag.FlagSet, args []string) ([]string, error) {
 	}
 }
 
-// 出力されるグループ自身の設定
-// model.GroupSpec そのものではない
-// そのアイテムの "pk"（"group#dev"）は保存上の詳細であり、セレクタは 3 つ並んだ tag_* フィールドより入れ子のオブジェクト 1 つのほうが読みやすい
+// 出力するグループの設定であり、model.GroupSpec とは異なる
+// アイテムの "pk" は保存上の詳細であるため含めず、セレクタは 3 つの tag_* フィールドではなく入れ子のオブジェクトとして出力する
 type configJSON struct {
 	Mode      model.Mode         `json:"mode,omitempty"`
 	Desired   model.DesiredState `json:"desired,omitempty"`
@@ -214,16 +212,16 @@ type selectorJSON struct {
 }
 
 // 有効な override
-// ExpiresAt は保存アイテムの生の epoch 秒やローカル時刻の文字列ではなく RFC3339 の UTC とする
-// これにより機械的に比較でき、かつ曖昧さがない
+// ExpiresAt は、保存アイテムの epoch 秒でもローカル時刻の文字列でもなく、RFC3339 の UTC とする
+// これにより、機械的な比較が可能となり、解釈も一意に定まる
 type overrideJSON struct {
 	Desired   model.DesiredState `json:"desired"`
 	ExpiresAt string             `json:"expires_at"`
 }
 
-// list と show が出力するグループ 1 件で、設定に加えて併せて解決した override とグループ単位のステータスを持つ
-// Error はこのグループ単独の壊れたアイテムのエラーを運ぶ
-// その場合もグループは一覧に残り、オペレータが見て直せるようにする
+// list と show が出力するグループ 1 件であり、設定に加えて、解決済みの override とグループ単位のステータスを持つ
+// Error は、このグループの壊れたアイテムに対するエラーを保持する
+// この場合もグループを一覧に残す
 type groupJSON struct {
 	Name string `json:"name"`
 	configJSON
@@ -260,8 +258,8 @@ func cmdList(ctx context.Context, s store, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	// 決して nil にしない
-	// 空の一覧は null ではなく "groups": [] と出力しなければならない
+	// nil としない
+	// 空の一覧は null ではなく "groups": [] として出力しなければならない
 	groups := make([]groupJSON, 0, len(rows))
 	for _, row := range rows {
 		g := groupJSON{Name: row.Name, configJSON: newConfigJSON(row.Group), Override: newOverrideJSON(row.Override), Status: row.Status}
@@ -273,9 +271,8 @@ func cmdList(ctx context.Context, s store, out io.Writer) error {
 	return writeJSON(out, listOutput{Command: "list", Groups: groups})
 }
 
-// showResource と showOutput は cmdShow の JSON を形づくる
-// これによりグループの動的に探索されたメンバーリソースが、ステータスとともにその場で解決される
-// 「確認系コマンドはグループのマッチしたリソースを解決する」という要件に沿っている
+// showResource と showOutput は cmdShow の JSON を構成する
+// グループの動的に探索したメンバーリソースを、ステータスとともに解決した結果を保持する
 type showResource struct {
 	Type    model.ResourceType `json:"type"`
 	Ref     string             `json:"ref"`
@@ -286,8 +283,8 @@ type showResource struct {
 	Status  model.Status       `json:"status"`
 }
 
-// r のタグ由来の設定を JSON オブジェクトへ移し、設定がなければ nil を返す
-// どのタグが設定なのかを知っているのは種別の宣言（model.TypeInfo.ConfigTags）だけなので、ここは種別を見ない
+// r のタグ由来の設定を JSON オブジェクトへ変換する。設定が存在しない場合は nil を返す
+// 設定として扱うタグを定義するのは種別の宣言 (model.TypeInfo.ConfigTags) であるため、この関数は種別を参照しない
 func resourceConfig(r model.Resource) any {
 	cfg := r.Config()
 	if len(cfg) == 0 {
@@ -349,10 +346,10 @@ func cmdShow(ctx context.Context, s store, d port.Discoverer, describers map[mod
 	return writeJSON(w, out)
 }
 
-// グループを変更する各コマンドが出力する内容で、実行したコマンド、対象グループ、そのコマンドが確定させた設定を含む
-// 含めるのはそれらのフィールドだけである
-// 変更操作はグループ全体の読み直しではなく、自分が書いた内容を報告する
-// Created が現れるのは set-selector だけで、しかもグループがまだ存在しなかった場合に限る
+// グループを変更する各コマンドの出力であり、実行したコマンド、対象グループ、そのコマンドが確定した設定を含む
+// 含めるのはこれらのフィールドに限る
+// 変更操作は、グループ全体の再読み取りではなく、自身が書き込んだ内容を報告する
+// Created が現れるのは set-selector に限り、かつグループが存在しなかった場合に限る
 type mutationResult struct {
 	Command string `json:"command"`
 	Group   string `json:"group"`
@@ -527,8 +524,8 @@ func cmdOverride(ctx context.Context, s store, args []string, out io.Writer) err
 }
 
 // doctor の出力
-// findings は空でも null ではなく [] を出す（他のコマンドの groups / resources と同じ約束）
-// pruned は --prune を付けなかった場合も 0 として必ず出し、「消した/消していない」を読み手がフラグの有無ではなく出力そのものから判断できるようにする
+// findings は空の場合も null ではなく [] を出力する (他のコマンドの groups / resources と同じ規約である)
+// pruned は --prune を指定しない場合も 0 として出力する。削除の有無を、フラグの有無ではなく出力から判定できるようにするためである
 type doctorOutput struct {
 	Command  string              `json:"command"`
 	Findings []doctor.Finding    `json:"findings"`

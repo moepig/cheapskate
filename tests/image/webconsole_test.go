@@ -1,13 +1,13 @@
 //go:build image
 
-// ビルド済みの webconsole イメージに、本番で API Gateway が届けるのと同じプロキシイベントを投げる
+// ビルド済みの webconsole イメージへ、本番で API Gateway が送信するものと同じプロキシイベントを投入する
 //
-// コンソール本体は Lambda を知らない素の HTTP サーバで、イベントとの変換はイメージに同梱した
-// Lambda Web Adapter 拡張が行う（docs/ja/architecture/web_console.md）
-// その拡張は Lambda 側にしか無いので、ここが経路を通せる唯一の場所である
-// 単体テストと統合テストはサーバのハンドラを直接叩くため、アダプタを通らない
+// コンソール本体は Lambda を参照しない HTTP サーバであり、イベントとの変換はイメージへ同梱した
+// Lambda Web Adapter 拡張が行う (docs/ja/architecture/web_console.md)
+// この拡張は Lambda 側にのみ存在するため、本パッケージのみがこの経路を検証できる
+// 単体テストと統合テストはサーバのハンドラを直接呼ぶため、アダプタを経由しない
 //
-// パッケージの位置づけとハーネスの前提は doc.go と harness_test.go を参照
+// パッケージの位置づけとハーネスの前提は、doc.go と harness_test.go を参照
 //
 //	make image-test   # = go test -tags image -count=1 ./tests/image/
 package image
@@ -24,28 +24,28 @@ import (
 	"cheapskate/internal/devtools/emutest"
 )
 
-// API Gateway が実際に観測した接続元
-// リソースポリシーの aws:SourceIp が許可判定に使う値そのものであり、コンソールが残してよい唯一の IP である
+// API Gateway が観測した接続元
+// リソースポリシーの aws:SourceIp が許可の判定に用いる値であり、コンソールが記録してよい唯一の IP である
 const realSourceIP = "203.0.113.77"
 
-// クライアントが x-amzn-request-context ヘッダに自分で詰めてきた IP
-// ヘッダはクライアントが自由に書けるので、アダプタがイベント由来のもので上書きしなければログに漏れる
+// クライアントが x-amzn-request-context ヘッダへ設定した IP
+// このヘッダはクライアントが任意に設定できるため、アダプタがイベント由来の値で上書きしない場合、ログへ記録される
 const forgedSourceIP = "198.51.100.66"
 
-// warm up で使う IP
-// 上の 2 つと混ざらないよう別の網（TEST-NET-1）から取る
+// warm up で用いる IP
+// 上記の 2 つと区別するため、別の網 (TEST-NET-1) から選ぶ
 const warmupSourceIP = "192.0.2.1"
 
 func TestWebconsoleImageServesThroughTheLambdaWebAdapter(t *testing.T) {
 	cfg := emutest.Config(t)
-	// 使い捨ての空テーブルであり、グループが 0 件でも一覧ページは描ける
+	// 使い捨ての空テーブルであり、グループが 0 件の場合も一覧ページを描画できる
 	table := emutest.CreateStateTable(t, cfg)
 
 	console := startUnderRIE(t, buildImage(t, "webconsole"), emulatorEnv(t, table),
 		proxyEvent(t, warmupSourceIP, nil))
 
-	// アダプタが拡張として起動し、イベントをループバック越しの HTTP に変換し、応答をプロキシレスポンスに戻せていること
-	// 拡張の入れ忘れやポートの食い違いは、すべてここで落ちる
+	// アダプタが拡張として起動し、イベントをループバック経由の HTTP へ変換し、応答をプロキシレスポンスへ戻すことを確かめる
+	// 拡張の欠落とポートの不一致は、いずれも本テストで検出する
 	t.Run("proxy event reaches the server", func(t *testing.T) {
 		var resp events.APIGatewayProxyResponse
 		require.NoError(t, json.Unmarshal(
@@ -53,8 +53,8 @@ func TestWebconsoleImageServesThroughTheLambdaWebAdapter(t *testing.T) {
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 	})
 
-	// 応答だけでは、どちらの IP を見たのかは分からない
-	// アダプタがクライアント由来のヘッダを捨ててイベントの requestContext に差し替えたことは、コンソールが残すログでしか確認できない
+	// 応答からは、参照した IP を判定できない
+	// アダプタがクライアント由来のヘッダを破棄し、イベントの requestContext へ差し替えたことは、コンソールが出力するログでのみ確認できる
 	t.Run("logs the request context source IP, not the forged header", func(t *testing.T) {
 		logs := console.logs(t)
 		assert.Contains(t, logs, `"client":"`+realSourceIP+`"`)
@@ -62,8 +62,8 @@ func TestWebconsoleImageServesThroughTheLambdaWebAdapter(t *testing.T) {
 	})
 }
 
-// API Gateway REST API（本番構成）が届けるプロキシイベントを組み立てる
-// sourceIP は requestContext.identity に入る、つまりクライアントが触れない側である
+// API Gateway REST API (本番構成) が送信するプロキシイベントを組み立てる
+// sourceIP は requestContext.identity に入り、クライアントは設定できない
 func proxyEvent(t *testing.T, sourceIP string, headers map[string]string) []byte {
 	t.Helper()
 
@@ -91,7 +91,7 @@ func proxyEvent(t *testing.T, sourceIP string, headers map[string]string) []byte
 	return payload
 }
 
-// アダプタが立てるのと同じ名前のヘッダを、クライアントが偽装して送ってきた形にする
+// アダプタが設定するものと同じ名前のヘッダを、クライアントが送信した状態を構成する
 func forgedRequestContext(sourceIP string) map[string]string {
 	return map[string]string{
 		"x-amzn-request-context": `{"identity":{"sourceIp":"` + sourceIP + `"}}`,

@@ -1,10 +1,10 @@
 // cheapskate-cli と web console が共有する設定操作を実装する
-// どちらのフロントエンドとも同じく、触れるのは DynamoDB のアイテムと読み取り専用の tag:GetResources API だけである
-// RDS/ECS/EC2 のコントロール API には決して触れない
+// 操作対象は DynamoDB のアイテムと読み取り専用の tag:GetResources API に限る
+// RDS/ECS/EC2 のコントロール API は呼ばない
 //
-// 設定をどう変えるかの規則そのものは持たない
-// 「pin は cron を残す」「unpin は cron があれば schedule へ戻る」といった遷移は model.GroupSpec のメソッドにあり、ここはその前後の読み書きを担う
-// 遷移側が結果を検証してから返すので、この層が model.ParseGroup に後から拒否される設定を保存することはない
+// 設定の変更規則そのものは持たない
+// 各モードへの遷移は model.GroupSpec のメソッドが実装し、本パッケージはその前後の読み書きを担う
+// 遷移側が結果を検証してから返すため、本層が model.ParseGroup に拒否される設定を保存することはない
 package groups
 
 import (
@@ -18,11 +18,11 @@ import (
 )
 
 // 設定フロントエンドが state テーブルに求める範囲
-// *state.Store が満たすが、設定操作が受け取るのはこの窓口だけである
+// *state.Store が満たすが、設定操作が受け取るのはこの範囲に限る
 //
-// UpdateStatus を意図的に含めていない
-// status# アイテムを所有するのは reconciler であり、CLI と web console にとっては読み取り専用の表示材料である
-// 型に書いておけば、設定操作から監査証跡を書き換える経路が存在しなくなる
+// UpdateStatus は含めない
+// status# アイテムを所有するのは reconciler であり、CLI と web console にとっては読み取り専用である
+// 型で限定することにより、設定操作から監査証跡を書き換える経路が存在しなくなる
 type Store interface {
 	ScanAll(ctx context.Context, now time.Time) (state.ScanResult, error)
 	GetGroup(ctx context.Context, name string) (*model.GroupSpec, error)
@@ -33,11 +33,11 @@ type Store interface {
 	DeleteGroupStatus(ctx context.Context, name string) error
 }
 
-// ターゲットグループ 1 件を、その override とグループ単位のステータスとともに表したもの
+// ターゲットグループ 1 件と、その override およびグループ単位のステータス
 // 1 回の ScanAll から組み立て、リソースの動的探索は行わない
-// List は高速な Scan 1 回に保つ必要があり、探索は GetDetail で 1 グループずつ行う
-// このグループの override、group#、group-status のいずれかが壊れていた場合は Err が設定される
-// その場合も行自体は表示し、一覧全体が消えるのではなくオペレータが見て直せるようにする
+// List を Scan 1 回に保つためであり、探索は GetDetail が 1 グループずつ行う
+// override、group#、group-status のいずれかが壊れている場合は Err を設定する
+// この場合も行自体は返し、一覧全体を失敗させない
 type GroupRow struct {
 	Name     string
 	Group    model.GroupSpec
@@ -47,8 +47,8 @@ type GroupRow struct {
 }
 
 // 登録済みの全グループを、override とグループ単位のステータスを解決した状態で返す
-// グループごとに GetItem を投げるのではなく、Scan 1 回（state.ScanAll）で済ませる
-// override やステータスはあるのに group# アイテムがない名前は孤立データとみなし、ここには載せない
+// グループごとの GetItem ではなく、Scan 1 回 (state.ScanAll) で取得する
+// override やステータスが存在し group# アイテムが存在しない名前は孤立データとみなし、結果に含めない
 func List(ctx context.Context, s Store, now time.Time) ([]GroupRow, error) {
 	sr, err := s.ScanAll(ctx, now)
 	if err != nil {
@@ -68,10 +68,10 @@ func toGroupRow(gr state.GroupRow) GroupRow {
 	return GroupRow{Name: gr.Name, Group: gr.Group, Override: gr.Override, Status: gr.Status, Err: gr.Err}
 }
 
-// グループのセレクタに現在マッチしているリソース 1 件を、そのステータスと結合したもの
-// 種別に対応する port.Describer が結線されていれば、現在の状態のライブなスナップショットも併せ持つ
-// 種別に対応する Describer がない場合や、ライブの Describe 呼び出しが失敗した場合、Live は nil になる（LiveErr を参照）
-// いずれの場合も「不明」に劣化するだけで、行全体のエラーにはしない
+// グループのセレクタに現在一致するリソース 1 件と、そのステータス
+// 種別に対応する port.Describer が結線されている場合は、現在の状態のスナップショットを併せ持つ
+// 種別に対応する Describer が存在しない場合、および Describe の呼び出しが失敗した場合、Live は nil となる (LiveErr を参照)
+// いずれの場合も状態を不明として扱い、行全体のエラーとはしない
 type ResourceRow struct {
 	Resource model.Resource
 	Status   model.Status
@@ -79,10 +79,10 @@ type ResourceRow struct {
 	LiveErr  error
 }
 
-// グループの完全な詳細で、設定・override・グループ単位のステータスを含む
-// セレクタが設定されていれば、現在マッチする全リソースを動的に探索し、リソース単位のステータスと結合して併せ持つ
-// Discover の失敗はエラーではなくデータとして DiscoverErr に載せて返す
-// これにより tag:GetResources の権限不足や不備は、ページやコマンド全体の失敗ではなく画面内のメッセージに留まる
+// グループの詳細であり、設定、override、グループ単位のステータスを含む
+// セレクタが設定されている場合は、現在一致する全リソースを動的に探索し、リソース単位のステータスと結合する
+// Discover の失敗はエラーではなくデータとして DiscoverErr へ格納する
+// これにより tag:GetResources の権限不足は、ページやコマンド全体の失敗とならない
 type GroupDetail struct {
 	Name        string
 	Group       model.GroupSpec
@@ -94,8 +94,8 @@ type GroupDetail struct {
 }
 
 // グループ 1 件の詳細を解決する
-// セレクタがあればメンバーを動的に探索し、メンバーごとに describers[member.Type] があれば現在の状態を問い合わせる
-// マップが nil や空でも問題なく、その場合は各行の Live が nil のままになるだけである
+// セレクタが存在する場合はメンバーを動的に探索し、describers[member.Type] が存在するメンバーについて現在の状態を問い合わせる
+// マップが nil または空の場合、各行の Live は nil のままとなる
 func GetDetail(ctx context.Context, s Store, d port.Discoverer, describers map[model.ResourceType]port.Describer, group string, now time.Time) (GroupDetail, error) {
 	if err := model.ValidGroupName(group); err != nil {
 		return GroupDetail{}, err
@@ -142,9 +142,8 @@ func GetDetail(ctx context.Context, s Store, d port.Discoverer, describers map[m
 }
 
 // sel をグループのセレクタとして書き込む
-// グループが存在しなければ mode=disabled で作成する
-// これは旧来のメンバー方式の Add が持っていた初回作成の挙動を踏襲したものだが、対象はリソース 1 件の登録ではなくグループ所属の定義である
-// 既存グループの Mode・Desired・cron 各種・Timezone は read-modify-write で保たれ、変わるのはセレクタだけである
+// グループが存在しない場合は mode=disabled で作成する
+// 既存グループの Mode、Desired、cron 各種、Timezone は read-modify-write により保持し、変更はセレクタに限る
 func SetSelector(ctx context.Context, s Store, group string, sel model.Selector) (created bool, err error) {
 	if err := model.ValidGroupName(group); err != nil {
 		return false, err
@@ -167,15 +166,15 @@ func SetSelector(ctx context.Context, s Store, group string, sel model.Selector)
 	return existing == nil, nil
 }
 
-// グループを完全に削除する
+// グループを削除する
 // 削除順は override、グループ単位のステータス、グループアイテム本体である
-// この順なら途中で失敗してもグループアイテムが残り、再試行のためにグループへ到達できる
-// セレクタがマッチしていた個々のリソースのステータスアイテムは残す
-// 消すには動的な Discover が必要になるうえ、無害な孤立した監査記録に過ぎないためである
-// 手作業で片づけたい場合の手順は operations.md に記載がある
+// この順序では、途中で失敗してもグループアイテムが残り、再試行のためにグループへ到達できる
+// セレクタが一致していたリソースのステータスアイテムは残す
+// 削除には動的な Discover が必要であり、かつ孤立した監査記録は他の動作に影響しないためである
+// 手作業による削除手順は operations.md に記載がある
 //
-// 呼び出し側でグループ名がすでに塞がれていても、この層のどの入口も同じ検証を通す
-// 名前の検証を入口ごとに省ける関数とそうでない関数が混ざると、「ここは検証済みのはず」という前提が呼び出し側の都合に依存してしまう
+// 呼び出し側でグループ名を検証済みの場合も、本層のすべての入口が同じ検証を行う
+// 検証を行う関数と行わない関数が混在すると、検証済みという前提が呼び出し側の実装に依存する
 func RemoveGroup(ctx context.Context, s Store, group string) error {
 	if err := model.ValidGroupName(group); err != nil {
 		return err
@@ -255,8 +254,8 @@ func SetOverride(ctx context.Context, s Store, group string, desired model.Desir
 	if err != nil {
 		return time.Time{}, err
 	}
-	// disabled は override より強い停止である
-	// reconciler は override を見る前に disabled のグループをスキップするため、ここで受け付けても黙って何も起きない
+	// disabled は override より優先度の高い停止である
+	// reconciler は override の評価前に disabled のグループをスキップするため、ここで受け付けても効果を持たない
 	if existing.EffectiveMode() == model.ModeDisabled {
 		return time.Time{}, fmt.Errorf("group %q is disabled; disabled overrides mode=schedule/pinned but is itself not overridable (schedule or pin it first)", group)
 	}
@@ -267,8 +266,8 @@ func SetOverride(ctx context.Context, s Store, group string, desired model.Desir
 	return expiresAt, nil
 }
 
-// TTL を待たずに override アイテムを今すぐ削除する
-// RemoveGroup と同じ理由で、ここでも名前を検証する
+// TTL の失効を待たずに override アイテムを削除する
+// RemoveGroup と同じ理由により、ここでも名前を検証する
 func ClearOverride(ctx context.Context, s Store, group string) error {
 	if err := model.ValidGroupName(group); err != nil {
 		return err
@@ -277,8 +276,8 @@ func ClearOverride(ctx context.Context, s Store, group string) error {
 }
 
 // 既存グループを取得して検証する
-// Pin/Schedule/Disable/SetOverride が打ち間違いから黙ってグループを作ってしまってはならないためである
-// 初回利用時に作成するのが設計上の意図である SetSelector とは、この点が異なる
+// Pin/Schedule/Disable/SetOverride が、名前の誤りによりグループを新規作成してはならないためである
+// 初回利用時の作成を意図する SetSelector とは、この点で異なる
 func requireGroup(ctx context.Context, s Store, group string) (*model.GroupSpec, error) {
 	if err := model.ValidGroupName(group); err != nil {
 		return nil, err

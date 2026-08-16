@@ -28,8 +28,8 @@ var now = time.Date(2026, 7, 19, 12, 0, 0, 0, time.UTC)
 
 var devSelector = model.Selector{TagKey: "env", TagValue: "dev", Types: []model.ResourceType{model.TypeRdsInstance}}
 
-// pin -> schedule -> pin と辿っても cron のフィールドは失われず往復できなければならない
-// Pin と Schedule はどちらも共有のグループアイテムを read-modify-write するためである
+// pin -> schedule -> pin の順に遷移しても、cron のフィールドは保持されなければならない
+// Pin と Schedule はいずれも同一のグループアイテムを read-modify-write するためである
 func TestPinScheduleRoundTripPreservesCronFields(t *testing.T) {
 	_, s := newFixture(t)
 	ctx := context.Background()
@@ -110,8 +110,8 @@ func TestSetSelectorCreatesGroupWhenAbsent(t *testing.T) {
 	assert.Equal(t, []model.ResourceType{model.TypeRdsInstance}, group.Types)
 }
 
-// 既存グループに対して set-selector をもう一度実行しても、作成したと報告してはならない
-// mode・desired・cron は保持され、read-modify-write によって変わるのはセレクタのフィールドだけである
+// 既存グループに対する set-selector の再実行は、作成として報告してはならない
+// mode、desired、cron は保持し、read-modify-write による変更はセレクタのフィールドに限る
 func TestSetSelectorOnExistingGroupPreservesModeAndCrons(t *testing.T) {
 	_, s := newFixture(t)
 	ctx := context.Background()
@@ -153,8 +153,8 @@ func TestSetOverrideRejectsUnknownGroup(t *testing.T) {
 	require.Error(t, err, "want error for unknown group")
 }
 
-// disabled は override より強い停止である（reconciler は override を読む前に disabled のグループをスキップする）
-// そのため登録しても黙って何も起きないので、SetOverride は代わりに拒否しなければならない
+// disabled は override より優先度の高い停止である (reconciler は override の評価前に disabled のグループをスキップする)
+// 登録しても効果を持たないため、SetOverride は拒否しなければならない
 func TestSetOverrideRejectsDisabled(t *testing.T) {
 	f, s := newFixture(t)
 	ctx := context.Background()
@@ -191,8 +191,8 @@ func TestPinScheduleDisableRejectUnknownGroup(t *testing.T) {
 }
 
 // グループ名を受け取る入口はすべて model.ValidGroupName を通さなければならない
-// 通す関数と通さない関数が混ざっていると、「ここは検証済みのはず」という前提が呼び出し側（CLI と web console）の都合に依存してしまう
-// 名前が pk へそのまま入る以上、区切り文字を含む名前をここで止められることが不変条件である
+// 検証を行う関数と行わない関数が混在すると、検証済みという前提が呼び出し側 (CLI と web console) の実装に依存する
+// 名前は pk へそのまま入るため、区切り文字を含む名前をここで拒否することが不変条件である
 func TestNameTakingEntryPointsRejectInvalidNames(t *testing.T) {
 	bad := "dev#1/2"
 	ops := map[string]func(context.Context, Store) error{
@@ -215,7 +215,7 @@ func TestNameTakingEntryPointsRejectInvalidNames(t *testing.T) {
 	for name, op := range ops {
 		t.Run(name, func(t *testing.T) {
 			f, s := newFixture(t)
-			// その名前のアイテムが（手書きなどで）すでにあっても、書き換えても消してもならない
+			// その名前のアイテムが手作業により存在する場合も、書き換えと削除のいずれも行ってはならない
 			for _, pk := range pks {
 				f.Seed(map[string]types.AttributeValue{"pk": &types.AttributeValueMemberS{Value: pk}, "mode": &types.AttributeValueMemberS{Value: string(model.ModeDisabled)}})
 			}
@@ -250,8 +250,8 @@ func TestRemoveGroupDeletesOverrideStatusAndGroup(t *testing.T) {
 }
 
 // RemoveGroup は override、ステータス、グループアイテム本体の順に削除する
-// この順なら途中で失敗してもグループアイテムが残り、再試行のためにグループへ到達できる（RemoveGroup のコメントを参照）
-// 最初の削除で失敗したときは、他のすべてがそのまま残っていなければならない
+// この順序では、途中で失敗してもグループアイテムが残り、再試行のためにグループへ到達できる (RemoveGroup のコメントを参照)
+// 最初の削除が失敗した場合、他のすべてが残存しなければならない
 func TestRemoveGroupStopsOnOverrideDeleteFailure(t *testing.T) {
 	f, s := newFixture(t)
 	ctx := context.Background()
@@ -271,8 +271,8 @@ func TestRemoveGroupStopsOnOverrideDeleteFailure(t *testing.T) {
 	assert.NotNilf(t, f.Item("group#"+group), "group item must survive a failure before it is reached")
 }
 
-// 2 番目の削除（ステータス）で失敗した場合も、グループアイテムは残っていなければならない
-// その手前の override はすでに削除済みであっても同様である
+// 2 番目の削除であるステータスが失敗した場合も、グループアイテムは残存しなければならない
+// 先行する override が削除済みである場合も同様である
 func TestRemoveGroupStopsOnStatusDeleteFailure(t *testing.T) {
 	f, s := newFixture(t)
 	ctx := context.Background()
@@ -292,7 +292,7 @@ func TestRemoveGroupStopsOnStatusDeleteFailure(t *testing.T) {
 	assert.NotNilf(t, f.Item("group#"+group), "group item must survive a failure before it is reached")
 }
 
-// あるグループの override が壊れていても、List は一覧全体を中断せず処理を続け、その行のエラーを報告しなければならない
+// あるグループの override が壊れている場合も、List は処理を継続し、その行のエラーを報告しなければならない
 func TestListSurfacesPerRowErrorWithoutAbortingOthers(t *testing.T) {
 	f, s := newFixture(t)
 	ctx := context.Background()
@@ -319,8 +319,8 @@ func TestListSurfacesPerRowErrorWithoutAbortingOthers(t *testing.T) {
 	assert.NoError(t, byName["fine"].Err, "unrelated row must be unaffected")
 }
 
-// GetDetail はグループのセレクタに現在マッチする全リソースを解決し、そのステータスと結合しなければならない
-// CLI の `show` もコンソールのグループページも、グループ自身の設定アイテムではなく「このグループが今かかっているリソース」を必要とするためである
+// GetDetail はグループのセレクタに現在一致する全リソースを解決し、そのステータスと結合しなければならない
+// CLI の `show` とコンソールのグループページは、グループの設定アイテムではなく、現在の管理対象リソースを必要とするためである
 func TestGetDetailResolvesResourcesWithStatus(t *testing.T) {
 	_, s := newFixture(t)
 	ctx := context.Background()
@@ -343,9 +343,8 @@ func TestGetDetailResolvesResourcesWithStatus(t *testing.T) {
 	assert.Equal(t, []model.Selector{devSelector}, d.Selectors, "resources must be discovered with the group's own selector")
 }
 
-// リソース種別に port.Describer が結線されていれば必ず問い合わせ、その Observation を ResourceRow.Live に載せなければならない
-// これにより webconsole や CLI は、最後に記録された reconcile のステータスではなく実際の現在状態を表示できる
-// たとえば ECS サービスのライブな desiredCount がそれにあたる
+// リソース種別に port.Describer が結線されている場合は必ず問い合わせ、その Observation を ResourceRow.Live へ格納しなければならない
+// これにより webconsole と CLI は、最後に記録した reconcile のステータスではなく、現在の状態を表示できる
 func TestGetDetailPopulatesLiveStateWhenDescriberWired(t *testing.T) {
 	_, s := newFixture(t)
 	ctx := context.Background()
@@ -368,9 +367,9 @@ func TestGetDetailPopulatesLiveStateWhenDescriberWired(t *testing.T) {
 	assert.NoError(t, detail.Resources[0].LiveErr)
 }
 
-// Describe の失敗はエラーではなくデータとして ResourceRow.LiveErr に現れなければならない
-// これによりリソース 1 件の Describe 権限の不備が、グループのページやコマンド全体を失敗させずに穏当に劣化する
-// Discover の失敗が GroupDetail.DiscoverErr になるのと同じ扱いである
+// Describe の失敗は、エラーではなくデータとして ResourceRow.LiveErr に現れなければならない
+// これによりリソース 1 件の Describe 権限の不備は、グループのページやコマンド全体を失敗させない
+// Discover の失敗を GroupDetail.DiscoverErr とするのと同じ扱いである
 func TestGetDetailReturnsLiveErrAsDataOnDescribeFailure(t *testing.T) {
 	_, s := newFixture(t)
 	ctx := context.Background()
@@ -391,8 +390,8 @@ func TestGetDetailReturnsLiveErrAsDataOnDescribeFailure(t *testing.T) {
 	assert.Error(t, detail.Resources[0].LiveErr)
 }
 
-// Discover の失敗（tag:GetResources 権限の不足など）は関数のエラーではなく、GroupDetail.DiscoverErr にデータとして返る
-// 呼び出し側（CLI や webconsole）が、そのまま失敗するのではなくグループ自身の設定を表示し続けられなければならないためである
+// Discover の失敗は関数のエラーではなく、GroupDetail.DiscoverErr にデータとして現れる
+// 呼び出し側である CLI と webconsole が、失敗せずにグループの設定を表示できなければならないためである
 func TestGetDetailReturnsDiscoverErrAsData(t *testing.T) {
 	_, s := newFixture(t)
 	ctx := context.Background()
@@ -409,7 +408,7 @@ func TestGetDetailReturnsDiscoverErrAsData(t *testing.T) {
 	assert.Empty(t, detail.Resources)
 }
 
-// disabled のグループ、あるいはセレクタが未設定のグループでは、Discover を一切呼んではならない
+// disabled のグループ、およびセレクタが未設定のグループでは、Discover を呼んではならない
 func TestGetDetailSkipsDiscoveryWhenSelectorEmpty(t *testing.T) {
 	_, s := newFixture(t)
 	ctx := context.Background()
@@ -433,8 +432,8 @@ func TestGetDetailRejectsUnknownGroup(t *testing.T) {
 }
 
 // 変更操作は、reconciler が従えない設定を保存してはならない
-// 検証は書き込みより前に行うので、拒否されたときテーブルは元のまま残る
-// 規則そのものは model.GroupSpec の遷移が持っており、ここで確かめるのはその拒否がストアへ届く前に効いていることである
+// 検証は書き込みより前に行うため、拒否された場合のテーブルは変更前の状態を保つ
+// 規則自体は model.GroupSpec の遷移が持ち、本テストが確かめるのは、その拒否がストアへの到達前に働くことである
 func TestMutationsRejectUnusableConfigWithoutWriting(t *testing.T) {
 	ctx := context.Background()
 	group := "dev"
@@ -475,12 +474,12 @@ func TestMutationsRejectUnusableConfigWithoutWriting(t *testing.T) {
 	}
 }
 
-// disabled はどんな設定のグループにも効かなければならない
-// 設定が壊れているグループの管理を止めたいときの最後の手段だからである
+// disabled は、設定の内容によらず適用できなければならない
+// 設定が壊れているグループの管理を停止する唯一の手段であるためである
 func TestDisableWorksOnAGroupWhoseConfigIsUnusable(t *testing.T) {
 	db, s := newFixture(t)
 	ctx := context.Background()
-	// reconciler が従えない設定を、遷移を経由せず直接投入する（手編集や旧バージョンの名残にあたる）
+	// reconciler が従えない設定を、遷移を経由せず直接投入する
 	require.NoError(t, s.PutGroup(ctx, model.GroupSpec{
 		Name: "broken", Mode: model.ModeSchedule, StartCron: "every morning",
 		TagKey: "env", TagValue: "broken", Types: []model.ResourceType{model.TypeRdsInstance},
@@ -489,15 +488,15 @@ func TestDisableWorksOnAGroupWhoseConfigIsUnusable(t *testing.T) {
 		Name: "broken", Mode: model.ModeSchedule, StartCron: "every morning",
 		TagKey: "env", TagValue: "broken", Types: []model.ResourceType{model.TypeRdsInstance},
 	})
-	require.Error(t, perr, "この設定は ParseGroup が拒否する（前提の確認）")
+	require.Error(t, perr, "この設定は ParseGroup が拒否する (前提の確認)")
 
 	require.NoError(t, Disable(ctx, s, "broken"))
 
 	assert.Equal(t, string(model.ModeDisabled), db.Item("group#broken")["mode"].(*types.AttributeValueMemberS).Value)
 }
 
-// mode 属性のないアイテム（手で作られたもの）は reconciler が disabled として扱う
-// override を受け付けてしまうと、成功したように見えて何も起きない
+// mode 属性を持たないアイテムを、reconciler は disabled として扱う
+// override を受け付けた場合、操作は成功するが効果を持たない
 func TestSetOverrideRejectsGroupWithNoModeAttribute(t *testing.T) {
 	_, s := newFixture(t)
 	ctx := context.Background()
@@ -506,6 +505,6 @@ func TestSetOverrideRejectsGroupWithNoModeAttribute(t *testing.T) {
 	}))
 
 	_, err := SetOverride(ctx, s, "raw", model.DesiredRunning, time.Hour, time.Now())
-	require.Error(t, err, "mode 未設定は disabled と同じであり、override は黙って無視されるだけになる")
+	require.Error(t, err, "mode 未設定は disabled と同じであり、override は反映されない")
 	assert.Contains(t, err.Error(), "disabled")
 }

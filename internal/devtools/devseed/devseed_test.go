@@ -23,8 +23,8 @@ func TestEnsureTaskDefinitionReturnsExistingWhenPresent(t *testing.T) {
 	c.EXPECT().DescribeTaskDefinition(gomock.Any(), gomock.Any()).Return(&ecs.DescribeTaskDefinitionOutput{
 		TaskDefinition: &ecstypes.TaskDefinition{TaskDefinitionArn: aws.String("arn:existing")},
 	}, nil)
-	// RegisterTaskDefinition の EXPECT はない
-	// 想定外の呼び出しはモックコントローラ経由でテストを失敗させる
+	// RegisterTaskDefinition の EXPECT は設定しない
+	// 想定外の呼び出しは、モックコントローラによりテストの失敗となる
 
 	arn, err := ensureTaskDefinition(context.Background(), c)
 	require.NoError(t, err)
@@ -49,8 +49,8 @@ func TestEnsureTaskDefinitionPropagatesUnexpectedDescribeError(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	c := mocks.NewMockEcsAPI(ctrl)
 	c.EXPECT().DescribeTaskDefinition(gomock.Any(), gomock.Any()).Return(nil, errors.New("network down"))
-	// RegisterTaskDefinition の EXPECT はない
-	// ClientException 以外の describe エラーが register まで流れてはならない
+	// RegisterTaskDefinition の EXPECT は設定しない
+	// ClientException 以外の describe エラーは、register へ到達してはならない
 
 	_, err := ensureTaskDefinition(context.Background(), c)
 	assert.ErrorContains(t, err, "network down")
@@ -62,8 +62,8 @@ func TestEnsureServiceReturnsExistingActiveService(t *testing.T) {
 	c.EXPECT().DescribeServices(gomock.Any(), gomock.Any()).Return(&ecs.DescribeServicesOutput{
 		Services: []ecstypes.Service{{Status: aws.String("ACTIVE"), ServiceArn: aws.String("arn:svc-api")}},
 	}, nil)
-	// CreateService の EXPECT はない
-	// 既存の ACTIVE なサービスを作り直してはならない
+	// CreateService の EXPECT は設定しない
+	// 既存の ACTIVE なサービスを再作成してはならない
 
 	arn, err := ensureService(context.Background(), c, "arn:taskdef", "api")
 	require.NoError(t, err)
@@ -94,9 +94,9 @@ func TestEnsureServicePropagatesDescribeError(t *testing.T) {
 	assert.ErrorContains(t, err, "boom")
 }
 
-// Seed はクラスタを作り、全サービス共通のタスク定義 1 つを再利用または登録しなければならない
-// 作成済み・既存いずれのサービスにも Resource Groups Tagging API 経由でタグを付ける
-// "worker" の ECS スケーリングタグも含まれる（この組み合わせにしている理由は `services` 変数のコメントを参照）
+// Seed はクラスタを作成し、全サービス共通のタスク定義 1 つを再利用または登録しなければならない
+// 新規作成と既存のいずれのサービスに対しても、Resource Groups Tagging API を通じてタグを付与する
+// "worker" の ECS スケーリングタグも対象に含む (この構成の根拠は `services` 変数のコメントを参照)
 func TestSeedCreatesClusterTaskDefinitionAndTagsEveryService(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	ecsAPI := mocks.NewMockEcsAPI(ctrl)
@@ -136,8 +136,8 @@ func TestSeedPropagatesCreateClusterError(t *testing.T) {
 	ecsAPI := mocks.NewMockEcsAPI(ctrl)
 	taggingAPI := mocks.NewMockTaggingAPI(ctrl)
 	ecsAPI.EXPECT().CreateCluster(gomock.Any(), gomock.Any()).Return(nil, errors.New("aws down"))
-	// これ以上の EXPECT はない
-	// クラスタ作成の失敗は、タスク定義やサービスに触れる前に Seed を止めなければならない
+	// これ以上の EXPECT は設定しない
+	// クラスタの作成の失敗は、タスク定義とサービスの操作の前に Seed を中断させなければならない
 
 	err := Seed(context.Background(), ecsAPI, taggingAPI)
 	assert.ErrorContains(t, err, "aws down")

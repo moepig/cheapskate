@@ -28,11 +28,11 @@ type AutoScalingAPI interface {
 	RegisterScalableTarget(ctx context.Context, in *aas.RegisterScalableTargetInput, opts ...func(*aas.Options)) (*aas.RegisterScalableTargetOutput, error)
 }
 
-// stop は desiredCount を 0 にし、start はリソース自身の model.EcsDesiredCountTagKey タグから desiredCount を取る（未設定なら既定の 1）
+// stop は desiredCount を 0 とし、start はリソース自身の model.EcsDesiredCountTagKey タグから desiredCount を取得する (未設定の場合は 1)
 //
-// サービスに Application Auto Scaling のターゲットがある場合、stop 時にはその min/max を 0/0 にする
-// そうしないとスケーリングポリシーが desiredCount の変更を巻き戻してしまう
-// start 時には model.EcsScalingMinTagKey と EcsScalingMaxTagKey から書き戻す（未設定なら desired count 自体を既定値とする）
+// サービスが Application Auto Scaling のターゲットを持つ場合、stop 時にその min/max を 0/0 とする
+// これを行わない場合、スケーリングポリシーが desiredCount の変更を取り消す
+// start 時は model.EcsScalingMinTagKey と EcsScalingMaxTagKey から書き戻す (未設定の場合は desiredCount を既定値とする)
 type EcsServiceTarget struct {
 	Ecs         EcsAPI
 	AutoScaling AutoScalingAPI
@@ -64,10 +64,10 @@ func (t *EcsServiceTarget) Describe(ctx context.Context, ref string) (model.Obse
 	return model.Observation{State: model.StateNotFound}, nil
 }
 
-// stop は 2 段階（スケーラブルターゲットを 0/0 → desiredCount を 0）で、原子的ではない
-// 後段だけが失敗すると、サービスは起動したまま Auto Scaling だけが 0/0 に固定されて残る
-// スケールアウトできない状態であり、しかも「停止に失敗した」というエラーからはそうなっていると読み取れない
-// そのため後段が失敗したら前段を巻き戻す
+// stop はスケーラブルターゲットの 0/0 化と desiredCount の 0 化の 2 段階からなり、原子的ではない
+// 後段のみが失敗した場合、サービスは起動したまま Auto Scaling が 0/0 に固定された状態で残る
+// この状態はスケールアウトが不可能であり、かつ停止の失敗を示すエラーからは判別できない
+// したがって、後段が失敗した場合は前段を巻き戻す
 func (t *EcsServiceTarget) Stop(ctx context.Context, ref string) error {
 	cluster, service, err := splitEcsRef(ref)
 	if err != nil {
@@ -85,19 +85,19 @@ func (t *EcsServiceTarget) Stop(ctx context.Context, ref string) error {
 	var zero int32
 	if _, err := t.Ecs.UpdateService(ctx, &ecs.UpdateServiceInput{Cluster: &cluster, Service: &service, DesiredCount: &zero}); err != nil {
 		if scalable == nil {
-			return err // 0/0 にしたものがないので巻き戻すものもない
+			return err // 0/0 とした対象が存在しないため、巻き戻す対象も存在しない
 		}
 		return t.rollbackFailedStop(ctx, cluster, service, scalable, err)
 	}
 	return nil
 }
 
-// 0/0 に潰したスケーラブルターゲットを、DescribeScalableTargets が返していた元の min/max へ戻す
-// 元の値はすでに手元にある（scalableTarget が ScalableTarget をそのまま返す）ので、追加の API 呼び出しも IAM 権限も要らない
+// 0/0 としたスケーラブルターゲットを、DescribeScalableTargets が返した元の min/max へ戻す
+// 元の値は scalableTarget が返す ScalableTarget から取得できるため、追加の API 呼び出しと IAM 権限を必要としない
 // この関数は必ずエラーを返す
-// 巻き戻せたかどうかにかかわらず停止自体は失敗しており、その事実は呼び出し側で握りつぶされてはならないためである
-// 巻き戻しにも失敗した場合は、0/0 のまま人手で直す必要があることをエラー本文に明示する
-// これが status# の last_error と SNS 通知にそのまま載る
+// 巻き戻しの成否によらず停止自体は失敗しており、呼び出し側へその事実を伝える必要があるためである
+// 巻き戻しも失敗した場合は、0/0 のまま手作業による復旧が必要であることをエラー本文へ含める
+// この本文が status# の last_error と SNS 通知に現れる
 func (t *EcsServiceTarget) rollbackFailedStop(ctx context.Context, cluster, service string, prev *aastypes.ScalableTarget, cause error) error {
 	minimum, maximum := aws.ToInt32(prev.MinCapacity), aws.ToInt32(prev.MaxCapacity)
 	if rerr := t.register(ctx, cluster, service, minimum, maximum); rerr != nil {
@@ -107,9 +107,9 @@ func (t *EcsServiceTarget) rollbackFailedStop(ctx context.Context, cluster, serv
 	return fmt.Errorf("stop failed: %w; scalable target rolled back to %d/%d", cause, minimum, maximum)
 }
 
-// start も 2 段階だが、Stop と違って巻き戻さない
-// 前段で min が 1 以上に戻った時点で Auto Scaling 自身がサービスを立ち上げにいくので、後段の UpdateService が失敗しても残る状態は「起動しようとしている」であり、望んだ向きと同じである
-// 次サイクルの再試行が desiredCount を正確な値に揃える
+// start も 2 段階からなるが、Stop と異なり巻き戻しを行わない
+// 前段で min が 1 以上へ戻った時点で Auto Scaling がサービスを起動するため、後段の UpdateService が失敗しても、残る状態は起動の方向にある
+// 次のサイクルの再試行が desiredCount を目的の値へ揃える
 func (t *EcsServiceTarget) Start(ctx context.Context, res model.Resource) error {
 	cluster, service, err := splitEcsRef(res.Ref)
 	if err != nil {
@@ -136,12 +136,12 @@ func (t *EcsServiceTarget) Start(ctx context.Context, res model.Resource) error 
 	return err
 }
 
-// ecs-service の Ref を、ECS API が別々の引数として要求する cluster と service へ分解する
-// この分解が要るのは ECS API を呼ぶ側だけなので、Ref の文法を宣言しているドメイン（model の ecs-service の RefPattern）ではなくここに置く
+// ecs-service の Ref を、ECS API が個別の引数として要求する cluster と service へ分解する
+// この分解を必要とするのは ECS API の呼び出し側に限るため、Ref の文法を宣言するドメイン (model の ecs-service の RefPattern) ではなく、ここに置く
 //
-// 探索を通ったリソースの Ref はすでにその文法で検証済みである（model.Resource.Validate）
-// それでもここで確かめるのは、cluster か service が空のまま DescribeServices や UpdateService を呼ばないための歯止めである
-// 空文字のクラスタ名は ECS 側では「default クラスタ」を意味するので、黙って別のクラスタへ操作が飛びうる
+// 探索を通ったリソースの Ref は、その文法で検証済みである (model.Resource.Validate)
+// ここで再度検証するのは、cluster または service が空のまま DescribeServices や UpdateService を呼ばないためである
+// ECS は空文字のクラスタ名を default クラスタとして解釈するため、意図しないクラスタへ操作が及びうる
 func splitEcsRef(ref string) (cluster, service string, err error) {
 	cluster, service, found := strings.Cut(ref, "/")
 	if !found || cluster == "" || service == "" {
@@ -150,8 +150,7 @@ func splitEcsRef(ref string) (cluster, service string, err error) {
 	return cluster, service, nil
 }
 
-// model.EcsDesiredCountTagKey を読み、未設定なら既定の 1 とする
-// そのタグを持たないリソースを初めて start する場合などがこれにあたる
+// model.EcsDesiredCountTagKey を読み、未設定の場合は 1 とする
 func desiredCountFromTags(tags map[string]string) (int32, error) {
 	n, ok, err := tagInt32(tags, model.EcsDesiredCountTagKey)
 	if err != nil {
@@ -166,7 +165,7 @@ func desiredCountFromTags(tags map[string]string) (int32, error) {
 	return n, nil
 }
 
-// model.EcsScalingMinTagKey と EcsScalingMaxTagKey を読み、それぞれ未設定なら独立に desiredCount を既定値とする
+// model.EcsScalingMinTagKey と EcsScalingMaxTagKey を読み、未設定の場合はそれぞれ独立に desiredCount を既定値とする
 func scalingBoundsFromTags(tags map[string]string, desiredCount int32) (minimum, maximum int32, err error) {
 	minimum = desiredCount
 	if n, ok, err := tagInt32(tags, model.EcsScalingMinTagKey); err != nil {
@@ -181,9 +180,9 @@ func scalingBoundsFromTags(tags map[string]string, desiredCount int32) (minimum,
 		maximum = n
 	}
 	// 3 つのタグは min <= desired-count <= max を満たさなければならない
-	// desiredCount が上下限の外にあると、Start は「UpdateService でその台数にした直後に Auto Scaling が上下限まで引き戻す」を必ず引き起こし、オペレータの指定した台数が黙って実現しないまま成功として記録される
-	// min > max もこの不等式が破れる場合の 1 つなので、検査はこれ 1 つで足りる
-	// どのタグが悪いのかは一方だけでは決まらない（min の既定値は desired-count である）ため、3 つの値をまとめて示す
+	// desiredCount が上下限の外にある場合、UpdateService による変更の直後に Auto Scaling が上下限まで引き戻すため、指定した台数は実現しないまま、Start は成功として記録される
+	// min > max もこの不等式が成立しない場合の 1 つであるため、検査はこの 1 つで足りる
+	// 不正なタグは 1 つの値だけでは特定できない (min の既定値は desired-count である) ため、3 つの値をまとめて示す
 	if desiredCount < minimum || desiredCount > maximum {
 		return 0, 0, fmt.Errorf("tags must satisfy %s <= %s <= %s, got %d <= %d <= %d",
 			model.EcsScalingMinTagKey, model.EcsDesiredCountTagKey, model.EcsScalingMaxTagKey,
@@ -193,8 +192,8 @@ func scalingBoundsFromTags(tags map[string]string, desiredCount int32) (minimum,
 }
 
 // tags[key] を非負の int32 として解釈する
-// タグがない、または空のときは ok が false になる
-// これは不正な値とは区別され、不正な値は黙って既定値にせずエラーにする
+// タグが存在しない場合、および空の場合は ok が false となる
+// この場合は不正な値と区別する。不正な値は既定値へ倒さず、エラーとする
 func tagInt32(tags map[string]string, key string) (n int32, ok bool, err error) {
 	v, present := tags[key]
 	if !present || v == "" {

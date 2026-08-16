@@ -1,6 +1,6 @@
-// `make dev` 向けに、ローカルのエミュレータ（Floci）へダミーの ECS リソースを作る
-// これにより web console と CLI が空のリソース一覧ではなく、実在して多様なデータを表示できる
-// 冪等なので再実行しても安全であり、cmd/dev-bootstrap と同じく Lambda のコンテナイメージには決して含めない
+// `make dev` 向けに、ローカルのエミュレータ (Floci) へダミーの ECS リソースを作成する
+// これにより、web console と CLI は空でないリソース一覧を表示する
+// 冪等であり再実行に対応する。cmd/dev-bootstrap と同じく、Lambda のコンテナイメージには含めない
 package devseed
 
 import (
@@ -37,20 +37,20 @@ type TaggingAPI interface {
 	TagResources(ctx context.Context, in *resourcegroupstaggingapi.TagResourcesInput, opts ...func(*resourcegroupstaggingapi.Options)) (*resourcegroupstaggingapi.TagResourcesOutput, error)
 }
 
-// 投入するダミーの ECS サービス 1 件と、それに付けるべきタグ
-// タグは ECS 自身の --tags ではなく Resource Groups Tagging API 経由で適用する
-// Floci は作成時のサービスタグを tag:GetResources に反映しないためである（docs/en/development/run_local.md を参照）
-// そうしなければ tagging.Discoverer からは決して見えない
+// 投入するダミーの ECS サービス 1 件と、それへ付与するタグ
+// タグは ECS の --tags ではなく、Resource Groups Tagging API を通じて適用する
+// Floci は作成時のサービスタグを tag:GetResources へ反映しないためである (docs/en/development/run_local.md を参照)
+// 適用しない場合、tagging.Discoverer から探索できない
 type ecsService struct {
 	name string
 	tags map[string]string
 }
 
-// グループ所属の両側と、web console や CLI のリソース表示における ECS スケーリングタグの両方を通すため、あえて混在させている:
-//   - "api" と "worker" は cheapskate:group=dev を持ち、サンプルの "dev" グループのセレクタ（scripts/dev.sh）にマッチする
+// グループ所属の有無と、web console および CLI における ECS スケーリングタグの表示の双方を検証するため、次の構成とする:
+//   - "api" と "worker" は cheapskate:group=dev を持ち、サンプルの "dev" グループのセレクタ (scripts/dev.sh) に一致する
 //     "worker" はさらに ECS スケーリングタグ一式を持つ
-//     （model.EcsDesiredCountTagKey・EcsScalingMinTagKey・EcsScalingMaxTagKey）
-//   - "batch" はそのタグを持たないので、Floci には現れるが "dev" グループの Resources には出ない
+//     (model.EcsDesiredCountTagKey、EcsScalingMinTagKey、EcsScalingMaxTagKey)
+//   - "batch" はそのタグを持たないため、Floci には存在するが "dev" グループの Resources には現れない
 var services = []ecsService{
 	{name: "api", tags: map[string]string{
 		"cheapskate:group":          "dev",
@@ -67,10 +67,10 @@ var services = []ecsService{
 	}},
 }
 
-// dev クラスタ、ダミーのタスク定義 1 つ、`services` に挙げたサービス群を作り、それぞれにタグを付ける
-// すでに存在するもの（クラスタ、タスク定義、個々のサービス）はそのまま残す
-// タグだけは常に付け直す
-// Floci のタグ保管は、そこで describe されるリソースと違って `docker compose down`/`up` をまたいで残らないためである
+// dev クラスタ、ダミーのタスク定義 1 つ、`services` に定義したサービス群を作成し、それぞれへタグを付与する
+// クラスタ、タスク定義、サービスのうち既存のものは変更しない
+// タグは常に再付与する
+// Floci のタグの保持は、describe の対象となるリソースと異なり、`docker compose down`/`up` をまたいで維持されないためである
 func Seed(ctx context.Context, ecsClient EcsAPI, taggingClient TaggingAPI) error {
 	if _, err := ecsClient.CreateCluster(ctx, &ecs.CreateClusterInput{ClusterName: aws.String(cluster)}); err != nil {
 		return fmt.Errorf("devseed: create cluster %s: %w", cluster, err)
@@ -100,8 +100,8 @@ func Seed(ctx context.Context, ecsClient EcsAPI, taggingClient TaggingAPI) error
 }
 
 // family の active なタスク定義の ARN を返す
-// family がまだ存在しなければ、ダミーのタスク定義を登録する
-// ダミーは nginx コンテナ 1 つだけで、実際には動かさないのでイメージが取得されることもない
+// family が存在しない場合は、ダミーのタスク定義を登録する
+// ダミーは nginx コンテナ 1 つからなり、実行しないためイメージの取得も発生しない
 func ensureTaskDefinition(ctx context.Context, c EcsAPI) (string, error) {
 	out, err := c.DescribeTaskDefinition(ctx, &ecs.DescribeTaskDefinitionInput{TaskDefinition: aws.String(family)})
 	if err == nil {
@@ -129,8 +129,8 @@ func ensureTaskDefinition(ctx context.Context, c EcsAPI) (string, error) {
 	return *reg.TaskDefinition.TaskDefinitionArn, nil
 }
 
-// その名前の既存の ACTIVE なサービスの ARN を返し、なければ作成する
-// 作成時は desired count 1、ダミーのサブネット上とし、Floci に実際の VPC はないので実際にスケジュールされることはない
+// 指定した名前の既存の ACTIVE なサービスの ARN を返す。存在しない場合は作成する
+// 作成時は desired count 1、ダミーのサブネット上とする。Floci は VPC を持たないため、スケジュールは発生しない
 func ensureService(ctx context.Context, c EcsAPI, taskDefArn, name string) (string, error) {
 	desc, err := c.DescribeServices(ctx, &ecs.DescribeServicesInput{Cluster: aws.String(cluster), Services: []string{name}})
 	if err != nil {

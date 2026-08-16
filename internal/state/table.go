@@ -11,9 +11,9 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
 
-// state テーブル（pk をハッシュキー、expires_at を TTL とする）が存在しなければ作成する
-// 冪等なので `make dev` を何度でも安全に再実行できる
-// 作成後はテーブルが active になるまで待ち、expires_at の TTL を有効化する
+// state テーブルが存在しない場合に作成する。pk をハッシュキー、expires_at を TTL とする
+// 冪等であり、`make dev` の再実行に対応する
+// 作成後はテーブルが active となるまで待機し、expires_at の TTL を有効化する
 func CreateTable(ctx context.Context, db *dynamodb.Client, name string) error {
 	_, err := db.CreateTable(ctx, &dynamodb.CreateTableInput{
 		TableName:            &name,
@@ -31,7 +31,7 @@ func CreateTable(ctx context.Context, db *dynamodb.Client, name string) error {
 	}
 
 	// ベストエフォートで実行する
-	// TTL はコード側でも強制している（state.GetOverride、state.ScanAll）ので、すでに有効な場合などここでの失敗は致命的ではない
+	// TTL の判定は state.GetOverride と state.ScanAll でも行うため、ここでの失敗は動作に影響しない
 	_, _ = db.UpdateTimeToLive(ctx, &dynamodb.UpdateTimeToLiveInput{
 		TableName: &name,
 		TimeToLiveSpecification: &types.TimeToLiveSpecification{

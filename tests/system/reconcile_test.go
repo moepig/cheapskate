@@ -1,10 +1,10 @@
 //go:build integration
 
-// reconcile ループを実アダプタに結線した状態で、エミュレータに対して動かす
+// reconcile ループを実アダプタへ結線した状態で、エミュレータに対して実行する
 //
 // 対象は reconcile パッケージ単体ではなく、組み上がったシステムである
-// internal/wire が本番で行う結線をテスト内で手で作り、実 DynamoDB・実 RDS・実 SNS を相手に 1 サイクル走らせて、状態の遷移と通知を確かめる
-// 位置づけは doc.go を参照
+// internal/wire が本番で行う結線をテスト内で構築し、実 DynamoDB、実 RDS、実 SNS に対して 1 サイクル実行し、状態の遷移と通知を検証する
+// 本パッケージの位置づけは doc.go を参照
 package system
 
 import (
@@ -33,9 +33,9 @@ import (
 	"cheapskate/internal/state"
 )
 
-// Describe は本物（エミュレータが応答する）のまま残し、Stop/Start は呼ばずに記録するだけにする
-// Floci が StopDBInstance/StartDBInstance を実装していないためである
-// これらの API 呼び出しは実 AWS 上の受け入れテストで担保する
+// Describe はエミュレータへの実際の呼び出しとし、Stop/Start は呼び出しの記録のみとする
+// Floci が StopDBInstance/StartDBInstance を実装しないためである
+// これらの API 呼び出しは、実 AWS 上の受け入れテストが検証する
 type spyRdsInstanceTarget struct {
 	*compute.RdsInstanceTarget
 	stopped []string
@@ -52,10 +52,10 @@ func (s *spyRdsInstanceTarget) Start(_ context.Context, res model.Resource) erro
 	return nil
 }
 
-// port.Discoverer を満たす手書きのスタブで、セレクタのタグ値をキーに引く
-// ここでのテストはどのグループもタグ値に自身の名前を使う
-// Floci の Resource Groups Tagging API 対応は限定的なので、結合テストがグループ所属の探索でそれに依存することはない
-// エミュレータを通すのは実際の DynamoDB 読み書きだけである
+// port.Discoverer を満たす手書きのスタブであり、セレクタのタグ値をキーとする
+// 本ファイルのテストは、いずれのグループもタグ値をグループ名と一致させる
+// Floci の Resource Groups Tagging API の対応範囲は限定的であるため、結合テストはグループ所属の探索でこれに依存しない
+// エミュレータを経由するのは、DynamoDB の読み書きに限る
 type staticDiscoverer struct {
 	byGroup map[string][]model.Resource
 }
@@ -66,7 +66,7 @@ func (d *staticDiscoverer) Discover(_ context.Context, sel model.Selector) ([]mo
 	return d.byGroup[sel.TagValue], nil
 }
 
-// SNS トピックに SQS キューを購読させ、通知が実際に届くことをテストで検証できるようにする
+// SNS トピックへ SQS キューを購読させ、通知の到達を検証可能とする
 type notificationProbe struct {
 	sqs      *sqs.Client
 	queueURL string
@@ -105,10 +105,10 @@ func newNotificationProbe(t *testing.T, cfg aws.Config) *notificationProbe {
 	return &notificationProbe{sqs: sqsClient, queueURL: *queue.QueueUrl, topicArn: *topic.TopicArn}
 }
 
-// プローブ用キューに届いた通知の Subject と本文を返す
-// SNS から SQS へのファンアウトは非同期で、ReceiveMessage はキュー内の一部しか返さないことがある
-// そのため 1 回の受信ですべて見えると信じず、`want` 件が届くか期限が来るまでポーリングを続ける
-// 正確な件数の検証は呼び出し側が行う
+// プローブ用キューへ到達した通知の Subject と本文を返す
+// SNS から SQS へのファンアウトは非同期であり、ReceiveMessage はキュー内の一部のみを返す場合がある
+// したがって 1 回の受信で全件を取得できるとは仮定せず、`want` 件の到達または期限まで受信を繰り返す
+// 件数の検証は呼び出し側が行う
 func (p *notificationProbe) receive(t *testing.T, want int) []snsEnvelope {
 	t.Helper()
 	envelopes := []snsEnvelope{}
@@ -196,8 +196,8 @@ func newHarness(t *testing.T) *harness {
 	}
 }
 
-// セレクタのタグ値をグループ名そのものにした pinned なグループを書き込み、対応するリソースをスタブの discoverer に結線する
-// 実際の Tagging API への往復なしで `cheapskate-cli set-selector` と `pin` の組み合わせを再現する
+// セレクタのタグ値をグループ名と一致させた pinned なグループを書き込み、対応するリソースをスタブの discoverer へ結線する
+// 実際の Tagging API を呼ばずに、`cheapskate-cli set-selector` と `pin` の組み合わせを再現する
 func (h *harness) pin(t *testing.T, group string, res model.Resource, desired model.DesiredState) {
 	t.Helper()
 	ctx := context.Background()
@@ -237,8 +237,8 @@ func TestPinnedStopFlow(t *testing.T) {
 	assert.Equal(t, group, payload["group"])
 }
 
-// RDS イベント時に単一リソースへ絞る reconcile は、メンバー登録とともに廃止した
-// 現在の RDS イベントは、他の呼び出しと同じく全グループを reconcile する
+// 単一リソースへ絞る reconcile は、メンバー登録とともに廃止した
+// RDS イベントは、他の呼び出しと同じく全グループを reconcile する
 func TestRdsEventTriggersFullReconcile(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
@@ -275,14 +275,14 @@ func TestScheduleModeAgainstEmulator(t *testing.T) {
 	}))
 	h.discoverer.byGroup[group] = []model.Resource{{Type: model.TypeRdsInstance, Ref: identifier}}
 
-	// 水曜 23:00 JST = 14:00 UTC なので、desired は stopped、observed は running となり stop する
+	// 水曜 23:00 JST = 14:00 UTC であり、desired は stopped、observed は running となるため stop する
 	night := time.Date(2026, 7, 15, 14, 0, 0, 0, time.UTC)
 	_, err := reconcile.Run(ctx, json.RawMessage(`{}`), h.deps, night)
 	require.NoError(t, err)
 	assert.Len(t, h.spy.stopped, 1, "night run must stop")
 
-	// 水曜 12:00 JST = 03:00 UTC なので、desired は running、observed も running（エミュレータのインスタンスは available のまま）
-	// 収束済みなのでアクションは起きない
+	// 水曜 12:00 JST = 03:00 UTC であり、desired は running、observed も running となる
+	// 収束済みであるためアクションは発生しない
 	h.spy.stopped = nil
 	noon := time.Date(2026, 7, 15, 3, 0, 0, 0, time.UTC)
 	summary, err := reconcile.Run(ctx, json.RawMessage(`{}`), h.deps, noon)

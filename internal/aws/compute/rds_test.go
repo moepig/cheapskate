@@ -18,7 +18,7 @@ import (
 var errOther = errors.New("some other AWS error")
 
 // rdsObservation のステータス文字列から Observation への写像を、すべての分岐について確かめる
-// "available" と "stopped" 以外はすべて transitioning となり、reconciler は待たずに次のサイクルで再試行する
+// "available" と "stopped" 以外はすべて transitioning となり、reconciler は待機せず次のサイクルで再試行する
 func TestRdsObservationStateMapping(t *testing.T) {
 	cases := []struct {
 		raw  string
@@ -49,7 +49,7 @@ func TestRdsInstanceDescribeNotFoundFault(t *testing.T) {
 	assert.Equal(t, model.StateNotFound, obs.State)
 }
 
-// Describe がエラーではなく空リストを返した場合も not-found として扱わなければならない
+// Describe がエラーではなく空のリストを返した場合も、not-found として扱わなければならない
 func TestRdsInstanceDescribeEmptyListIsNotFound(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	c := mocks.NewMockRdsAPI(ctrl)
@@ -84,9 +84,9 @@ func TestRdsInstanceDescribeRunning(t *testing.T) {
 	assert.Equal(t, model.StateRunning, obs.State)
 }
 
-// ステータスは RDS のレスポンスでもポインタであり、nil で返ってくる余地がある
-// EC2 の State と同じく飛ばす（TestEc2DescribeSkipsInstancesWithoutState と対になる）
-// deref すれば reconciler は Lambda ごと panic し、そのサイクルの他のリソースまで巻き添えになる
+// ステータスは RDS のレスポンスにおいてもポインタであり、nil となりうる
+// EC2 の State と同じくスキップする (TestEc2DescribeSkipsInstancesWithoutState と対応する)
+// 参照した場合は panic となり、そのサイクルの他のリソースの処理も中断する
 func TestRdsInstanceDescribeSkipsInstancesWithoutStatus(t *testing.T) {
 	available := "available"
 	ctrl := gomock.NewController(t)
@@ -104,8 +104,8 @@ func TestRdsInstanceDescribeSkipsInstancesWithoutStatus(t *testing.T) {
 	assert.Equal(t, model.StateRunning, obs.State)
 }
 
-// 状態の読めるインスタンスが 1 つもなければ、観測できていないので not-found へ落とす
-// reconciler はこれを穏当なスキップとして扱い、次のサイクルで読み直す
+// 状態を読めるインスタンスが 1 つも存在しない場合は、観測できていないため not-found とする
+// reconciler はこれをスキップとして扱い、次のサイクルで再度読み取る
 func TestRdsInstanceDescribeWithOnlyStatuslessInstancesIsNotFound(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	c := mocks.NewMockRdsAPI(ctrl)
@@ -161,7 +161,7 @@ func TestRdsClusterDescribeEmptyListIsNotFound(t *testing.T) {
 }
 
 // クラスタの状態も、インスタンスと同じ rdsObservation の写像を通らなければならない
-// TestRdsInstanceDescribeRunning のクラスタ版であり、片方だけ写像を外れて壊れていないことを確かめる
+// TestRdsInstanceDescribeRunning のクラスタ版であり、両者の写像が一致することを確かめる
 func TestRdsClusterDescribeRunning(t *testing.T) {
 	status := "available"
 	ctrl := gomock.NewController(t)
@@ -186,7 +186,7 @@ func TestRdsClusterDescribeOtherErrorPassesThrough(t *testing.T) {
 	require.ErrorIs(t, err, errOther, "non-NotFound error must pass through unchanged")
 }
 
-// nil ステータスの扱いも、インスタンスとクラスタで揃っていなければならない
+// nil ステータスの扱いも、インスタンスとクラスタで一致しなければならない
 // TestRdsInstanceDescribeSkipsInstancesWithoutStatus のクラスタ版である
 func TestRdsClusterDescribeSkipsClustersWithoutStatus(t *testing.T) {
 	available := "available"

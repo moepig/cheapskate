@@ -75,21 +75,21 @@ func newFixture(t *testing.T) *fixture {
 func s[T ~string](v T) types.AttributeValue { return &types.AttributeValueMemberS{Value: string(v)} }
 func n(v int) types.AttributeValue          { return &types.AttributeValueMemberN{Value: fmt.Sprint(v)} }
 
-// セレクタのタグ値をグループ名そのものにした group# アイテムを用意する
-// discoverer のテストダブルも同じキーで引くので、f.discoverer.ByTagValue[name] = ... がそのままこのグループの「中身」になる
-// 別途のメンバー登録は必要ない
+// セレクタのタグ値をグループ名と一致させた group# アイテムを用意する
+// discoverer のテストダブルも同じキーを用いるため、f.discoverer.ByTagValue[name] がそのグループのメンバーとなる
+// 別途のメンバー登録は不要である
 func (f *fixture) seedGroup(name string, mode model.Mode, desired model.DesiredState) {
 	f.db.Seed(map[string]types.AttributeValue{
-		// pk の接頭辞は state 側のキー設計であって、model.GroupNamespace（status のリソース ID 名前空間）ではない
-		// 同じ文字列だが理由が異なるので、あえて結合しない（state/items.go を参照）
+		// pk の接頭辞は state 側のキー設計であり、status のリソース ID 名前空間である model.GroupNamespace ではない
+		// 文字列は同一だが根拠が異なるため、共有しない (state/items.go を参照)
 		"pk": s("group#" + name), "mode": s(mode), "desired": s(desired),
 		"tag_key": s("env"), "tag_value": s(name),
 		"types": &types.AttributeValueMemberSS{Value: model.TypeNames(model.KnownTypes)},
 	})
 }
 
-// pinned かつ stopped のグループを用意し、その 1 リソースを discoverer に結線する
-// ここのテストはほぼ 1 リソースだけを扱うので、グループ名がそのリソースの読みやすい呼び名も兼ねる
+// pinned かつ stopped のグループを用意し、その 1 リソースを discoverer へ結線する
+// 本ファイルのテストは主に 1 リソースを扱うため、グループ名をそのリソースの識別にも用いる
 func (f *fixture) pinnedStoppedGroup(name string, res model.Resource) {
 	f.seedGroup(name, model.ModePinned, model.DesiredStopped)
 	f.discoverer.ByTagValue[name] = []model.Resource{res}
@@ -122,9 +122,8 @@ func TestStopsRunningPinnedResource(t *testing.T) {
 	assert.Equal(t, "[cheapskate] stop: dev-db/rds-instance#dev-db", f.notifier.Published[0].Subject)
 }
 
-// EC2 はこれまで reconcile 層のテストに結線されていなかった
-// 汎用の pin/stop ディスパッチ、つまり model.TypeEc2Instance を Deps.Targets 内の Target へ解決する処理のことである
-// これまでは rds-instance・rds-cluster・ecs-service でしか通されていなかった
+// model.TypeEc2Instance を Deps.Targets 内の Target へ解決する経路を検証する
+// 他の種別と同じ pin/stop のディスパッチを、ec2-instance についても通す
 func TestStopsRunningPinnedEc2Instance(t *testing.T) {
 	f := newFixture(t)
 	f.pinnedStoppedGroup("dev-vm", ec2Instance("i-0abc123"))
@@ -140,9 +139,9 @@ func TestStopsRunningPinnedEc2Instance(t *testing.T) {
 	assert.Equal(t, "stop", status["last_action"].(*types.AttributeValueMemberS).Value)
 }
 
-// terminated 状態の EC2 インスタンスは、Tagging API 経由では 1 時間ほど見え続ける
-// しかし Ec2InstanceTarget.Describe は "terminated" を StateNotFound へ写像し（ec2.go を参照）、reconcile はこれを穏当なスキップとして扱う
-// TestNotFoundAfterDiscoverySkipsWithoutError と同じ筋書きを、汎用の代用品ではなく実際の EC2 ターゲットで通している
+// terminated 状態の EC2 インスタンスは、Tagging API から 1 時間程度は返り続ける
+// Ec2InstanceTarget.Describe は "terminated" を StateNotFound へ写像し (ec2.go を参照)、reconcile はこれをスキップとして扱う
+// TestNotFoundAfterDiscoverySkipsWithoutError と同じ経路を、実際の EC2 ターゲットで検証する
 func TestTerminatedEc2InstanceSkippedWithoutError(t *testing.T) {
 	f := newFixture(t)
 	f.pinnedStoppedGroup("dev-vm", ec2Instance("i-0abc123"))
@@ -203,9 +202,9 @@ func TestTransitioningIsSkipped(t *testing.T) {
 	assert.Empty(t, summary.Errors)
 }
 
-// disabled のグループでは Discover を一切呼んではならない
-// 収束させる対象がないので、セレクタの解決も AWS Tagging API への往復も純粋な無駄になる
-// しかもそのグループがまだ持っていないかもしれない権限を要求してしまう
+// disabled のグループでは Discover を呼んではならない
+// 収束の対象が存在しないため、セレクタの解決と AWS Tagging API への呼び出しはいずれも不要である
+// 加えて、そのグループが持たない権限を要求する場合がある
 func TestDisabledGroupSkipsDiscoveryAndAllResources(t *testing.T) {
 	f := newFixture(t)
 	f.seedGroup("dev", model.ModeDisabled, "")
@@ -217,12 +216,13 @@ func TestDisabledGroupSkipsDiscoveryAndAllResources(t *testing.T) {
 	assert.Empty(t, f.ecs.Stopped)
 }
 
-// 探索直後に消えるリソース（削除との競合や Tagging API の遅れ）はエラーではなく穏当なスキップとして扱う
-// 廃止したメンバー登録モデルでは、明示的に管理を指示されたリソースが消えることは本物の設定ずれのエラーだった
+// 探索の直後に消えるリソースは、エラーではなくスキップとして扱う
+// 削除との競合、または Tagging API の反映遅延によるものである
+// 廃止したメンバー登録モデルでは、登録済みのリソースの消失は設定の不整合を示すエラーであった
 func TestNotFoundAfterDiscoverySkipsWithoutError(t *testing.T) {
 	f := newFixture(t)
 	f.pinnedStoppedGroup("gone", rdsInstance("gone"))
-	// 観測値を用意していないので、porttest.Target.Describe は既定の StateNotFound を返す
+	// 観測値が未設定であるため、porttest.Target.Describe は StateNotFound を返す
 
 	summary := runEmpty(t, f)
 
@@ -232,7 +232,7 @@ func TestNotFoundAfterDiscoverySkipsWithoutError(t *testing.T) {
 	assert.Empty(t, f.notifier.Published, "a skip must never notify")
 }
 
-// 内容が変わらないエラー（Describe が常に失敗するなど）は、毎サイクルではなく 1 度だけ通知しなければならない
+// 内容が変わらないエラーは、毎サイクルではなく 1 度だけ通知しなければならない
 func TestRepeatedSameErrorNotifiesOnce(t *testing.T) {
 	f := newFixture(t)
 	f.pinnedStoppedGroup("broken", rdsInstance("broken"))
@@ -244,7 +244,7 @@ func TestRepeatedSameErrorNotifiesOnce(t *testing.T) {
 	assert.Len(t, f.notifier.Published, 1, "repeated identical error must notify once")
 }
 
-// エラーメッセージが変わったら（新しい失敗の様相なら）改めて通知しなければならない
+// エラーメッセージが変化した場合は、改めて通知しなければならない
 func TestChangedErrorNotifiesAgain(t *testing.T) {
 	f := newFixture(t)
 	f.pinnedStoppedGroup("dev-db", rdsInstance("dev-db"))
@@ -258,7 +258,7 @@ func TestChangedErrorNotifiesAgain(t *testing.T) {
 	assert.Len(t, f.notifier.Published, 2, "changed error must notify again")
 }
 
-// エラー状態のリソースが収束したら、「復旧」通知が 1 度だけ飛び、last_error が消える
+// エラー状態のリソースが収束した場合、復旧通知を 1 度だけ送り、last_error を削除する
 func TestRecoveryNotifiesOnceAndClearsError(t *testing.T) {
 	f := newFixture(t)
 	f.pinnedStoppedGroup("dev-db", rdsInstance("dev-db"))
@@ -280,8 +280,9 @@ func TestRecoveryNotifiesOnceAndClearsError(t *testing.T) {
 	assert.Len(t, f.notifier.Published, 2, "already-recovered convergence must not notify again")
 }
 
-// performAction の default 節は Run 経由では到達しない（model.DecideAction は "stop"・"start"・"" しか返さない）
-// それでも、将来 model.Action に値が増えたときに、未知のアクションを黙って Target へ送らないための実コードである
+// performAction の default 節は Run 経由では到達しない
+// model.DecideAction が返すのは "stop"、"start"、"" に限るためである
+// この節は、model.Action に値が追加されたとき、未知のアクションを Target へ送らないために存在する
 func TestPerformActionRejectsUnknownAction(t *testing.T) {
 	tgt := porttest.NewTarget(model.TypeRdsInstance)
 	err := performAction(context.Background(), model.Resource{}, "pause", tgt)
@@ -290,9 +291,9 @@ func TestPerformActionRejectsUnknownAction(t *testing.T) {
 	assert.Empty(t, tgt.Started, "the unknown-action branch must not call Start")
 }
 
-// start/stop のアクション成功が直前のエラーを解消した場合、「復旧」通知は別途送らない
-// アクション自身の通知がすでに復旧を伝えているためである
-// TestRecoveryNotifiesOnceAndClearsError が通る収束済み・アクションなしの経路では、こちらは通知を送る
+// start/stop のアクションの成功が直前のエラーを解消した場合、復旧通知は送らない
+// アクション自身の通知が復旧を伝えるためである
+// 収束済みかつアクションなしの経路 (TestRecoveryNotifiesOnceAndClearsError) では、復旧通知を送る
 func TestActionSuccessClearsPriorErrorWithoutSeparateRecoveredNotification(t *testing.T) {
 	f := newFixture(t)
 	f.pinnedStoppedGroup("dev-db", rdsInstance("dev-db"))
@@ -312,8 +313,8 @@ func TestActionSuccessClearsPriorErrorWithoutSeparateRecoveredNotification(t *te
 	assert.Equal(t, "", status["last_error"].(*types.AttributeValueMemberS).Value, "last_error must be cleared even without a distinct notification")
 }
 
-// 復旧したエラーを消す途中の PutStatus 失敗は、ログに残すだけで reconcile のエラーにも panic にもしてはならない
-// 過去のエラーに関する記録の更新が失敗しただけで、リソース自体は収束しているためである
+// 復旧したエラーの削除における PutStatus の失敗は、ログへの記録のみとし、reconcile のエラーとしても panic としてもならない
+// 過去のエラーの記録の更新が失敗しただけであり、リソース自体は収束しているためである
 func TestClearRecoveredErrorPutStatusFailureIsLoggedNotSurfaced(t *testing.T) {
 	f := newFixture(t)
 	f.pinnedStoppedGroup("dev-db", rdsInstance("dev-db"))
@@ -334,8 +335,8 @@ func TestClearRecoveredErrorPutStatusFailureIsLoggedNotSurfaced(t *testing.T) {
 	assert.NotEqual(t, "", status["last_error"].(*types.AttributeValueMemberS).Value, "last_error must remain since the clear failed")
 }
 
-// アクション成功後の Publish 失敗を reconcile のエラーとして記録してはならない
-// アクションは成功し、永続化も済んでいるためである
+// アクションの成功後における Publish の失敗を、reconcile のエラーとして記録してはならない
+// アクションは成功し、永続化も完了しているためである
 func TestNotifyFailureAfterSuccessfulActionIsNotAnError(t *testing.T) {
 	f := newFixture(t)
 	f.pinnedStoppedGroup("dev-db", rdsInstance("dev-db"))
@@ -351,8 +352,8 @@ func TestNotifyFailureAfterSuccessfulActionIsNotAnError(t *testing.T) {
 	assert.Nil(t, status["last_error"], "notify failure must not be written as last_error")
 }
 
-// アクション成功後の PutStatus 失敗はそのサイクルのエラーとして記録され、他のリソースの reconcile は続行される
-// 永続化そのものが失敗した場合でも、リソース単位の隔離は保たれる
+// アクションの成功後における PutStatus の失敗は、そのサイクルのエラーとして記録し、他のリソースの reconcile を継続する
+// 永続化が失敗した場合も、リソース単位の隔離を保つ
 func TestPutStatusFailureAfterActionIsRecordedButIsolated(t *testing.T) {
 	f := newFixture(t)
 	f.pinnedStoppedGroup("dev-db", rdsInstance("dev-db"))
@@ -368,8 +369,8 @@ func TestPutStatusFailureAfterActionIsRecordedButIsolated(t *testing.T) {
 	assert.Len(t, f.cluster.Stopped, 1, "second resource must still be reconciled")
 }
 
-// エラー記録用の PutStatus まで失敗しても、Run は panic せず他のリソースの処理を続けなければならない
-// その失敗はログに残すだけである
+// エラー記録用の PutStatus が失敗した場合も、Run は panic せず他のリソースの処理を継続しなければならない
+// その失敗はログへ記録するのみとする
 func TestErrorRecordingFailureDoesNotPanic(t *testing.T) {
 	f := newFixture(t)
 	f.pinnedStoppedGroup("a-broken", rdsInstance("a-broken"))
@@ -431,9 +432,9 @@ func TestOverrideAppliesToEveryResourceInGroup(t *testing.T) {
 	assert.Equal(t, []string{"dev-cluster/api"}, f.ecs.Started)
 }
 
-// disabled は override より強い停止である
-// disable は override# アイテムを消さないので、pin → override → disable の順に操作すれば「disabled なグループに有効期限内の override が残っている」状態は普通に作れる
-// この経路で reconciler が override を拾ってしまうと、止めたはずのグループが期限切れまで動き出す
+// disabled は override より優先度の高い停止である
+// disable は override# アイテムを削除しないため、pin → override → disable の順の操作により、disabled のグループに未失効の override が残る状態となる
+// この経路で reconciler が override を適用した場合、停止したグループが override の失効まで起動する
 func TestDisabledGroupIgnoresLiveOverride(t *testing.T) {
 	f := newFixture(t)
 	f.seedGroup("dev", model.ModeDisabled, "")
@@ -464,10 +465,10 @@ func TestStatusAttrsFromTargetArePersisted(t *testing.T) {
 	assert.Equal(t, "stop", status["last_action"].(*types.AttributeValueMemberS).Value)
 }
 
-// cheapskate は Stop の前に復元用の状態を先行書き込みしなくなった
-// ECS の起動時 desired count とスケーリングの上下限は、保存したステータスではなくリソース自身のタグから来る
-// そのため Stop の失敗（ここでは Stop がそのまま失敗する形で模した）は、記録されたエラーだけを残さなければならない
-// last_action と observed_state はアクション成功後にしか書かないので、残ってはならない
+// Stop の前に復元用の状態を先行して書き込むことはしない
+// ECS の起動時 desired count とスケーリングの上下限は、保存したステータスではなくリソース自身のタグから取得するためである
+// したがって Stop の失敗が残すのは、記録されたエラーのみでなければならない
+// last_action と observed_state はアクションの成功後にのみ書き込むため、残ってはならない
 func TestFailedStopRecordsOnlyTheError(t *testing.T) {
 	f := newFixture(t)
 	f.pinnedStoppedGroup("dev-api", ecsService("dev/api"))
@@ -486,10 +487,9 @@ func TestFailedStopRecordsOnlyTheError(t *testing.T) {
 	assert.False(t, hasObservedState, "a failed stop must not record observed_state")
 }
 
-// 動的探索による設定の継承を示す
-// すでに pinned や schedule のグループのセレクタに新たにマッチしたリソースは、次の reconcile でただちに操作される
-// 誰かがタグを付けただけで、グループやスケジュールの設定は一切変えていない状況にあたる
-// これがグループ優先の設計における中心的な約束である
+// 動的探索による設定の継承を検証する
+// pinned または schedule のグループのセレクタに新たに一致したリソースは、次の reconcile で操作の対象となる
+// グループとスケジュールの設定を変更せず、リソースへのタグ付与のみを行った場合が該当する
 func TestNewlyDiscoveredResourceInheritsGroupsExistingPinOnNextReconcile(t *testing.T) {
 	f := newFixture(t)
 	f.seedGroup("dev", model.ModePinned, model.DesiredStopped)
@@ -499,8 +499,8 @@ func TestNewlyDiscoveredResourceInheritsGroupsExistingPinOnNextReconcile(t *test
 	runEmpty(t, f)
 	require.Len(t, f.rds.Stopped, 1, "first resource acted on")
 
-	// 2 つめのリソースが、すでに pinned な同じグループのセレクタにマッチし始める
-	// タグを付けたばかりの状況にあたり、グループ設定は何も変えていない
+	// 2 つめのリソースが、pinned である同じグループのセレクタに一致する
+	// リソースへタグを付与した状態であり、グループ設定は変更していない
 	f.discoverer.ByTagValue["dev"] = []model.Resource{rdsInstance("dev-db"), ecsService("dev-cluster/api")}
 	f.ecs.Observations["dev-cluster/api"] = model.Observation{State: model.StateRunning}
 
@@ -509,12 +509,12 @@ func TestNewlyDiscoveredResourceInheritsGroupsExistingPinOnNextReconcile(t *test
 	assert.Equal(t, []string{"dev-cluster/api"}, f.ecs.Stopped, "newly discovered resource must inherit the group's existing pin and be acted on immediately")
 }
 
-// グループ単位の失敗（ここでは不正な cron）は、リソースごとに散らさず "group#<name>" のステータスへ 1 度だけ記録される
+// グループ単位の失敗は、リソースごとではなく "group#<name>" のステータスへ 1 度だけ記録する
 // resolveGroup が失敗した時点で Discover は呼ばれもしないためである
 // 通知の重複排除はグループ単位でも同じように効く
 func TestGroupLevelErrorRecordedOnceNotPerResource(t *testing.T) {
 	f := newFixture(t)
-	f.seedGroup("dev", model.ModeSchedule, "") // start/stop の cron がないので schedule.ResolveDesired が失敗する
+	f.seedGroup("dev", model.ModeSchedule, "") // start/stop の cron がないため schedule.ResolveDesired が失敗する
 
 	summary := runEmpty(t, f)
 	require.Len(t, summary.Errors, 1, "a group-level error must be recorded once, not per resource")
@@ -530,10 +530,10 @@ func TestGroupLevelErrorRecordedOnceNotPerResource(t *testing.T) {
 	assert.Len(t, f.notifier.Published, 1, "repeated identical group-level error must not notify again")
 }
 
-// あるグループ配下のアイテム（ここでは override）が壊れていても、他のグループの reconcile を止めてはならない
+// あるグループ配下のアイテム(ここでは override)が壊れていても、他のグループの reconcile を止めてはならない
 // 壊れたグループについては desired が確定できないので、推測して操作するのではなく必ず何もしない
 // 誤った向きへ倒すと、止めるべきでないものを止める・起こすべきでないものを起こすことになる
-// 失敗はグループ単位のエラーと同じ経路（status#group#<name>）へ記録し、オペレータに届ける
+// 失敗はグループ単位のエラーと同じ経路(status#group#<name>)へ記録し、オペレータに届ける
 func TestCorruptGroupRecordIsRecordedAndDoesNotTouchItsResources(t *testing.T) {
 	f := newFixture(t)
 	f.pinnedStoppedGroup("broken", rdsInstance("broken-db"))
@@ -565,9 +565,9 @@ func TestCorruptGroupRecordIsRecordedAndDoesNotTouchItsResources(t *testing.T) {
 	assert.Equal(t, 1, notified, "repeated identical corruption must not notify again")
 }
 
-// 孤立データ（対応する group# アイテムのない override など）は警告付きでスキップしなければならない
-// これは削除の途中で落ちた場合に生じる
-// 落ちることも、黙って何かの既定値へ誤って解決することも許されない
+// 孤立データは警告を伴ってスキップしなければならない
+// 対応する group# アイテムを持たない override などであり、削除の中断により生じる
+// 処理の中断も、既定値による解決も行ってはならない
 func TestOrphanedGroupDataIsSkippedWithWarning(t *testing.T) {
 	f := newFixture(t)
 	var logBuf bytes.Buffer
@@ -609,8 +609,8 @@ func TestRdsEventTriggersFullReconcile(t *testing.T) {
 	assert.Len(t, f.rds.Stopped, 1, "an RDS event must reconcile every group, not just the resource it names")
 }
 
-// 既知かどうかを問わず、どのイベントソースでも全体 reconcile に落ちる
-// そもそも落ちる元となる絞り込み経路がもう存在しない
+// 既知かどうかを問わず、すべてのイベントソースで全体 reconcile を行う
+// 単一リソースへ絞り込む経路は存在しない
 func TestEventSourcePresentStillFullReconciles(t *testing.T) {
 	f := newFixture(t)
 	var logBuf bytes.Buffer
@@ -625,7 +625,7 @@ func TestEventSourcePresentStillFullReconciles(t *testing.T) {
 }
 
 // セレクタ重複の防護策として、複数グループのセレクタにマッチしたリソースは名前順で最初のグループが取得する
-// 取り損ねたグループは、黙って二重管理せずリソース単位のエラーを受け取る
+// 取得できなかったグループは、二重の管理を行わず、リソース単位のエラーを受け取る
 func TestSelectorOverlapFirstGroupWinsBySortedName(t *testing.T) {
 	f := newFixture(t)
 	f.seedGroup("a-first", model.ModePinned, model.DesiredStopped)
@@ -644,7 +644,7 @@ func TestSelectorOverlapFirstGroupWinsBySortedName(t *testing.T) {
 }
 
 // セレクタ重複のエラーは、リソースが共有する status# ではなく、報告する側のグループの status#group# に記録しなければならない
-// 共有アイテムへ書くと、そのリソースを所有するグループの clearRecoveredError と同じ 1 件を毎サイクル奪い合うことになる
+// 共有アイテムへ書いた場合、そのリソースを所有するグループの clearRecoveredError と同じアイテムを毎サイクル更新することになる
 func TestSelectorOverlapRecordsOnGroupStatusNotOnSharedResource(t *testing.T) {
 	f := newFixture(t)
 	f.seedGroup("a-first", model.ModePinned, model.DesiredStopped)
@@ -706,9 +706,9 @@ func TestTransitioningRecordsSinceOnceThenClearsOnConvergence(t *testing.T) {
 	assert.Empty(t, f.notifier.Published, "a stuck transition is surfaced by doctor, never by notification")
 }
 
-// transitioning_since の記録・消去はどちらもベストエフォートである
-// これは監査のための情報であって収束の判断には使わないので、書けなかったことを理由にそのサイクルをエラーにしたり、他のリソースの処理を止めたりしてはならない
-// 黙って捨てるのではなく、なぜ残らなかったのかは必ずログに出す
+// transitioning_since の記録と消去は、いずれもベストエフォートである
+// これは監査のための情報であり収束の判断には用いないため、書き込みの失敗を理由にそのサイクルをエラーとしてはならず、他のリソースの処理も止めてはならない
+// 失敗の理由は必ずログへ記録する
 func TestTransitioningMarkerFailuresAreLoggedNotSurfaced(t *testing.T) {
 	t.Run("mark", func(t *testing.T) {
 		f := newFixture(t)
@@ -745,8 +745,8 @@ func TestTransitioningMarkerFailuresAreLoggedNotSurfaced(t *testing.T) {
 	})
 }
 
-// 探索できたリソースの種別に対応する Target が結線されていないのは、結線側の不備である
-// 黙って飛ばすと、そのリソースだけが永久に収束しないまま誰にも気づかれない
+// 探索できたリソースの種別に対応する Target が結線されていない状態は、結線側の不備である
+// エラーを記録せずにスキップした場合、そのリソースは収束せず、検知の経路も存在しない
 // リソース単位のエラーとして記録し、他のリソースは通常どおり処理する
 func TestUnknownResourceTypeIsRecordedPerResource(t *testing.T) {
 	f := newFixture(t)
@@ -787,7 +787,7 @@ func TestDiscoverFailureIsRecordedOnTheGroup(t *testing.T) {
 
 // 復旧通知の Publish が失敗しても、last_error はすでに消えている
 // この通知は「直りました」と伝えるだけのものなので、送れなかったことを理由に直っていない状態へ巻き戻したり、そのサイクルをエラーにしたりしてはならない
-// 次のサイクルは last_error が空なので復旧通知を再送しない（重複排除の代償として受け入れる）
+// 次のサイクルは last_error が空なので復旧通知を再送しない(重複排除の代償として受け入れる)
 func TestRecoveredNotifyFailureLeavesErrorCleared(t *testing.T) {
 	f := newFixture(t)
 	var logBuf bytes.Buffer
@@ -808,25 +808,26 @@ func TestRecoveredNotifyFailureLeavesErrorCleared(t *testing.T) {
 		"PutStatus は成功しているので last_error は消えたままでなければならない")
 }
 
-// 通知の重複排除は「前回の last_error と同じか」で決まるので、前回を読めなければ判断できない
-// 読めなかったことを黙って「同じ」と扱うと、初報すら握りつぶしかねない
-// 読めない側へ倒して通知し、読めなかった事実はログに残す
+// 通知の重複排除は前回の last_error との一致で決まるため、前回を読めない場合は判定できない
+// 読めない場合を一致として扱うと、初回の通知も抑止される
+// 判定できない場合は通知を行い、読めなかった事実をログへ記録する
 func TestErrorReportingNotifiesWhenPreviousStatusCannotBeRead(t *testing.T) {
 	f := newFixture(t)
 	var logBuf bytes.Buffer
 	f.deps.Log = slog.New(slog.NewTextHandler(&logBuf, nil))
-	f.seedGroup("dev", model.ModeSchedule, "") // start/stop の cron がないので resolveGroup が失敗する
+	f.seedGroup("dev", model.ModeSchedule, "") // start/stop の cron がないため resolveGroup が失敗する
 	f.db.FailOn("get", "status#group#dev", fmt.Errorf("dynamodb unavailable"))
 
 	summary := runEmpty(t, f)
 
 	require.Len(t, summary.Errors, 1)
 	assert.Contains(t, logBuf.String(), "status-read-failed")
-	assert.Len(t, f.notifier.Published, 1, "重複排除の判断がつかないなら通知する側へ倒す")
+	assert.Len(t, f.notifier.Published, 1, "重複排除を判定できない場合は通知する")
 }
 
-// 起動そのものが成立しない失敗（イベントが読めない、テーブルが読めない）は、空の Summary として黙って成功するのではなく Run のエラーにする
-// Lambda の呼び出しを失敗させ、再試行とアラームに載せるためである
+// 起動が成立しない失敗は、空の Summary による成功ではなく Run のエラーとする
+// イベントの読み取り失敗とテーブルの読み取り失敗が該当する
+// Lambda の呼び出しを失敗させ、再試行とアラームの対象とするためである
 func TestRunAbortsOnUnusableInput(t *testing.T) {
 	t.Run("malformed event", func(t *testing.T) {
 		f := newFixture(t)

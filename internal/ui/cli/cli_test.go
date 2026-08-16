@@ -23,8 +23,8 @@ import (
 	mocks "cheapskate/internal/state/mocks"
 )
 
-// フラグの誤用は flag.ExitOnError による os.Exit ではなく、Run() のエラー（ContinueOnError）として返さなければならない
-// os.Exit ではテストバイナリや、このコードを組み込んだプロセスまで落ちてしまう
+// フラグの誤用は、flag.ExitOnError による os.Exit ではなく、Run() のエラー (ContinueOnError) として返さなければならない
+// os.Exit の場合、テストバイナリおよびこのコードを組み込んだプロセスが終了するためである
 func TestFlagMisuseReturnsErrorInsteadOfExiting(t *testing.T) {
 	cases := []struct {
 		name string
@@ -47,13 +47,13 @@ func TestFlagMisuseReturnsErrorInsteadOfExiting(t *testing.T) {
 	}
 }
 
-// -h を通常の（JSON の）エラーとして報告してはならない
-// main は flag.ErrHelp に Usage テキストと終了コード 0 で応じる
+// -h を通常の JSON エラーとして報告してはならない
+// main は flag.ErrHelp に対し、Usage テキストと終了コード 0 で応答する
 func TestHelpReturnsFlagErrHelp(t *testing.T) {
 	assert.ErrorIs(t, Run([]string{"-h"}, io.Discard), flag.ErrHelp)
 }
 
-// コマンド名の打ち間違いをフラグのエラーと取り違えず、-h を案内しなければならない
+// コマンド名の誤記をフラグのエラーとして扱わず、-h を案内しなければならない
 func TestUnknownAndMissingCommand(t *testing.T) {
 	err := Run([]string{"-table", "t", "bogus"}, io.Discard)
 	require.Error(t, err)
@@ -64,8 +64,8 @@ func TestUnknownAndMissingCommand(t *testing.T) {
 	assert.Contains(t, err.Error(), "missing command")
 }
 
-// 引数の不備は AWS へ 1 度も触れる前に、そのコマンド自身の言葉で報告しなければならない
-// --group を落とした呼び出しが「グループ "" が見つからない」になると、打ち間違いなのかフラグの付け忘れなのかを利用者が切り分けられない
+// 引数の不備は、AWS を呼ぶ前に、そのコマンドに固有の内容で報告しなければならない
+// --group を省略した呼び出しが空のグループ名の未検出として報告された場合、名前の誤記とフラグの省略を区別できないためである
 func TestCommandArgumentValidation(t *testing.T) {
 	cases := []struct {
 		name string
@@ -82,15 +82,15 @@ func TestCommandArgumentValidation(t *testing.T) {
 		{"override without group", []string{"override", "running", "-for", "2h"}, "--group is required"},
 		{"clear-override without group", []string{"clear-override"}, "--group is required"},
 
-		// 位置引数は running|stopped のどちらか 1 つでなければならない
-		// 落としたぶんを既定値で補うと、意図しない向きへ倒すことになる
+		// 位置引数は running と stopped のいずれか 1 つでなければならない
+		// 省略時に既定値で補った場合、意図しない desired state となる
 		{"pin without a desired state", []string{"pin", "--group", "dev"}, "exactly one"},
 		{"pin with two desired states", []string{"pin", "--group", "dev", "running", "stopped"}, "exactly one"},
 		{"override without a desired state", []string{"override", "--group", "dev", "-for", "2h"}, "exactly one"},
 		{"override with two desired states", []string{"override", "--group", "dev", "running", "stopped", "-for", "2h"}, "exactly one"},
 
-		// override に期限は必須である
-		// -for を落としたぶんを既定の期間で補うと、利用者が意図していない時刻に勝手に失効する
+		// override は期限を必須とする
+		// -for の省略時に既定の期間で補った場合、意図しない時刻に失効する
 		{"override without a duration", []string{"override", "--group", "dev", "running"}, "-for"},
 		{"override with a zero duration", []string{"override", "--group", "dev", "running", "-for", "0s"}, "-for"},
 		{"override with a negative duration", []string{"override", "--group", "dev", "running", "-for", "-1h"}, "-for"},
@@ -106,8 +106,8 @@ func TestCommandArgumentValidation(t *testing.T) {
 	}
 }
 
-// state テーブル名はどのコマンドの前提でもあり、これがなければ何も読めない
-// 決め打ちの既定値へ落ちると、意図しないテーブルを読み書きしうる
+// state テーブル名はすべてのコマンドの前提であり、これなしでは読み取りを行えない
+// 固定の既定値へ倒した場合、意図しないテーブルを読み書きしうる
 func TestMissingStateTableIsReported(t *testing.T) {
 	t.Setenv("CHEAPSKATE_TABLE", "")
 
@@ -125,7 +125,7 @@ func newTestStore(t *testing.T) (*mocks.DynaStore, *state.Store) {
 }
 
 // cmdList の JSON が "list" コマンドの振る舞いのすべてである
-// ここでの退行（フィールドの欠落や改名）は、これがなければどのテストにも気づかれない
+// フィールドの欠落と改名は、本テスト以外では検出されない
 func TestCmdListRendersGroupsAsJSON(t *testing.T) {
 	_, s := newTestStore(t)
 	ctx := context.Background()
@@ -164,8 +164,8 @@ func TestCmdListRendersGroupsAsJSON(t *testing.T) {
 	assert.Equal(t, "Asia/Tokyo", staging.Timezone)
 }
 
-// テーブルが空でも null ではなく JSON 配列を出力しなければならない
-// 呼び出し側が無条件に jq へ流せるようにするためである
+// テーブルが空の場合も、null ではなく JSON 配列を出力しなければならない
+// 呼び出し側が条件分岐なしに解析できるようにするためである
 func TestCmdListWithNoGroupsEmitsEmptyArray(t *testing.T) {
 	_, s := newTestStore(t)
 	var buf bytes.Buffer
@@ -182,8 +182,8 @@ func byName(t *testing.T, groups []groupJSON) map[string]groupJSON {
 	return m
 }
 
-// 壊れた行（override の破損など）は、そのグループの "error" フィールドとして現れなければならない
-// 一覧の残りを中断させてはならない
+// 壊れた行は、そのグループの "error" フィールドとして現れなければならない
+// 一覧の残りの処理を中断させてはならない
 func TestCmdListRendersPerRowErrorWithoutAbortingOthers(t *testing.T) {
 	f, s := newTestStore(t)
 	ctx := context.Background()
@@ -221,8 +221,8 @@ func TestCmdListPropagatesScanError(t *testing.T) {
 	assert.Error(t, cmdList(context.Background(), s, &buf))
 }
 
-// cmdShow の JSON の形（showOutput と showResource）は、他のどこでもまったくテストされていない
-// CLI の他のコマンドは store への副作用で検証できるが、"show" は出力しかしないためである
+// cmdShow の JSON の形式 (showOutput と showResource) を検証するのは、本テストのみである
+// CLI の他のコマンドは store への副作用により検証できるが、"show" は出力以外の副作用を持たないためである
 func TestCmdShowRendersResourcesConfigAndLiveState(t *testing.T) {
 	_, s := newTestStore(t)
 	ctx := context.Background()
@@ -265,9 +265,9 @@ func TestCmdShowRendersResourcesConfigAndLiveState(t *testing.T) {
 	assert.Equal(t, []model.Selector{sel}, d.Selectors, "show must discover with the group's own selector")
 }
 
-// 探索の失敗は show 全体の失敗ではなく discover_error として載せる
-// 権限不足やスロットリングで、設定・override・ステータスまで一緒に見えなくなってはならない
-// これらは探索に一切依存せず、しかも障害時にこそ必要な情報である
+// 探索の失敗は、show 全体の失敗ではなく discover_error として出力する
+// 権限不足とスロットリングにより、設定、override、ステータスの表示まで失われてはならない
+// これらは探索に依存せず、かつ障害時に必要な情報であるためである
 func TestCmdShowRendersDiscoverErrorWithoutFailing(t *testing.T) {
 	_, s := newTestStore(t)
 	ctx := context.Background()
@@ -287,8 +287,8 @@ func TestCmdShowRendersDiscoverErrorWithoutFailing(t *testing.T) {
 	assert.Equal(t, model.ModePinned, got.Group.Mode, "探索が落ちても設定は読めているので見せる")
 }
 
-// Describe の失敗はリソース単位の live_error に留め、その行や他の行を消してはならない
-// 1 リソースが読めないことと、グループの構成が分からないことは別である
+// Describe の失敗はリソース単位の live_error に限り、その行と他の行を除外してはならない
+// 1 リソースの読み取りの失敗と、グループの構成の不明は独立しているためである
 func TestCmdShowRendersPerResourceLiveError(t *testing.T) {
 	_, s := newTestStore(t)
 	ctx := context.Background()
@@ -312,8 +312,8 @@ func TestCmdShowRendersPerResourceLiveError(t *testing.T) {
 	assert.Empty(t, got.DiscoverErr, "探索は成功しているので discover_error は空でなければならない")
 }
 
-// 壊れた行はグループの "error" フィールドとして現れ、show 全体を落としてはならない
-// cmdList については TestCmdListRendersPerRowErrorWithoutAbortingOthers が同じ約束を担保している
+// 壊れた行はグループの "error" フィールドとして現れ、show 全体を失敗させてはならない
+// cmdList については、TestCmdListRendersPerRowErrorWithoutAbortingOthers が同じ規約を検証する
 func TestCmdShowRendersPerRowError(t *testing.T) {
 	f, s := newTestStore(t)
 	ctx := context.Background()
@@ -363,7 +363,7 @@ func TestNewConfigJSON(t *testing.T) {
 }
 
 // 保存された override は epoch 秒を持つ
-// 出力は RFC3339 の UTC でなければならず、CLI がどこで動いても曖昧さがないようにする
+// 出力は RFC3339 の UTC でなければならない。CLI の実行環境によらず解釈を一意とするためである
 func TestNewOverrideJSON(t *testing.T) {
 	assert.Nil(t, newOverrideJSON(nil))
 	expiresAt := time.Date(2026, 7, 20, 15, 0, 0, 0, time.UTC)
@@ -371,8 +371,8 @@ func TestNewOverrideJSON(t *testing.T) {
 	assert.Equal(t, &overrideJSON{Desired: model.DesiredRunning, ExpiresAt: "2026-07-20T15:00:00Z"}, newOverrideJSON(o))
 }
 
-// 変更系のコマンドはどれも、自身の名前と変更したグループを含む JSON オブジェクトを 1 つ出力する
-// jq へ流す呼び出し側は、どのコマンドが動いたかに関わらずそれに依拠できなければならない
+// 変更系のコマンドは、いずれも自身の名前と変更したグループを含む JSON オブジェクトを 1 つ出力する
+// 呼び出し側は、実行したコマンドによらずこの形式を前提にできなければならない
 func TestMutatingCommandsPrintJSON(t *testing.T) {
 	_, s := newTestStore(t)
 	ctx := context.Background()
@@ -452,8 +452,8 @@ func TestResourceConfig(t *testing.T) {
 	assert.Equal(t, map[string]string{"desired_count": "2"}, resourceConfig(r), "未設定のタグは出さない")
 }
 
-// 検出項目がなくても null ではなく JSON 配列を出力しなければならない（cmdList と同じ約束）
-// pruned も --prune の有無にかかわらず必ず出し、「消した/消していない」を出力そのものから読めるようにする
+// 検出項目が存在しない場合も、null ではなく JSON 配列を出力しなければならない (cmdList と同じ規約である)
+// pruned も --prune の有無によらず出力し、削除の有無を出力から判定できるようにする
 func TestCmdDoctorWithCleanTableEmitsEmptyArray(t *testing.T) {
 	_, s := newTestStore(t)
 	var buf bytes.Buffer

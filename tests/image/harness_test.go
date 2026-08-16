@@ -1,9 +1,9 @@
 //go:build image
 
-// イメージを Lambda として動かすための足場
+// イメージを Lambda として実行するための基盤
 //
-// ここにあるものはすべて手段であって検証の対象ではない
-// 何を確かめるかは reconciler_test.go と webconsole_test.go にある
+// 本ファイルの内容はすべて実行の手段であり、検証の対象ではない
+// 検証の内容は reconciler_test.go と webconsole_test.go にある
 package image
 
 import (
@@ -23,18 +23,19 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-// リポジトリルート（docker build のコンテキスト）
+// リポジトリルート (docker build のコンテキスト)
 const repoRoot = "../.."
 
 // docker CLI で Dockerfile の target をビルドし、そのタグを返す
 //
-// testcontainers の FromDockerfile を使わないのは、あちらが古い /build API を叩くためである
-// この Dockerfile は BuildKit 前提（`# syntax` ディレクティブ、`FROM --platform=$BUILDPLATFORM`、`TARGETOS`/`TARGETARCH`）で、旧ビルダに通すと $BUILDPLATFORM が未定義のまま解釈されて失敗する
-// BuildKit を選ぶ version=2 を指定しても、セッション（コンテキストの転送とレジストリ認証）を張るのは docker CLI の仕事なので、クライアントライブラリ単体では "no active sessions" で止まる
-// CLI 越しなら `make image-reconciler` / `make image-webconsole` と同じものがビルドされるという利点もある
+// testcontainers の FromDockerfile を用いないのは、それが旧来の /build API を呼ぶためである
+// この Dockerfile は BuildKit を前提とし、`# syntax` ディレクティブ、`FROM --platform=$BUILDPLATFORM`、`TARGETOS`/`TARGETARCH` を用いる
+// 旧ビルダで解釈した場合、$BUILDPLATFORM が未定義のまま処理され、失敗する
+// BuildKit を選択する version=2 を指定した場合も、コンテキストの転送とレジストリ認証を行うセッションの確立は docker CLI のみが行うため、クライアントライブラリ単体では "no active sessions" となる
+// CLI を経由することにより、`make image-reconciler` と `make image-webconsole` と同一のイメージをビルドする
 //
-// --platform は付けない
-// コンテナはホストの docker で動くので、既定のホストアーキテクチャ向けビルドがそのまま正しい（Makefile の本番既定である arm64 とは異なる）
+// --platform は指定しない
+// コンテナはホストの docker 上で動作するため、既定のホストアーキテクチャ向けのビルドを用いる (Makefile の本番既定である arm64 とは異なる)
 func buildImage(t *testing.T, target string) string {
 	t.Helper()
 	image := "cheapskate-" + target + ":imagetest"
@@ -44,11 +45,11 @@ func buildImage(t *testing.T, target string) string {
 	return image
 }
 
-// エミュレータと繋がった状態のイメージに渡す環境変数を、コンテナから見た形で返す
+// エミュレータへ接続した状態のイメージへ渡す環境変数を、コンテナから見た形式で返す
 //
-// エミュレータはホストにポートを公開している（emutest が AWS_ENDPOINT_URL に入れる）
-// コンテナからは host.docker.internal 経由で同じポートに届く（startUnderRIE を参照）
-// 本番との差は AWS_ENDPOINT_URL ただ 1 つで、これは AWS SDK が標準で解釈する変数である
+// エミュレータはホストへポートを公開する (emutest が AWS_ENDPOINT_URL へ設定する)
+// コンテナからは host.docker.internal を経由して同じポートへ到達する (startUnderRIE を参照)
+// 本番との差異は AWS_ENDPOINT_URL の 1 つであり、これは AWS SDK が標準で解釈する変数である
 func emulatorEnv(t *testing.T, table string) map[string]string {
 	t.Helper()
 	endpoint, err := url.Parse(os.Getenv("AWS_ENDPOINT_URL"))
@@ -63,22 +64,22 @@ func emulatorEnv(t *testing.T, table string) map[string]string {
 	}
 }
 
-// RIE 上で動いているイメージと、その呼び出し先
+// RIE 上で動作するイメージと、その呼び出し先
 type imageUnderRIE struct {
 	container testcontainers.Container
 	url       string
 }
 
-// RIE が公開する Lambda 呼び出しエンドポイント（関数名は "function" 固定）
+// RIE が公開する Lambda 呼び出しエンドポイント (関数名は "function" で固定である)
 const invokePath = "/2015-03-31/functions/function/invocations"
 
-// 本番の Lambda タイムアウト（120 秒, setup.md §5）にコールドスタート分の余裕を足したもの
+// 本番の Lambda タイムアウト (120 秒、setup.md §5) に、コールドスタートの所要時間を加えたもの
 var invokeClient = &http.Client{Timeout: 150 * time.Second}
 
-// イメージを RIE 越しに起動し、呼び出せる状態になったものを返す
+// イメージを RIE 経由で起動し、呼び出し可能となった状態で返す
 //
-// warmup は最初の 1 回を通すために投げるペイロードである
-// 何が無害かはイメージごとに違うので呼び出し側が決める（イメージ間で共通の「空の呼び出し」は無い）
+// warmup は、最初の 1 回を通すために投入するペイロードである
+// 状態を変更しないペイロードはイメージごとに異なるため、呼び出し側が指定する
 func startUnderRIE(t *testing.T, image string, env map[string]string, warmup []byte) imageUnderRIE {
 	t.Helper()
 	ctx := context.Background()
@@ -86,18 +87,18 @@ func startUnderRIE(t *testing.T, image string, env map[string]string, warmup []b
 	req := testcontainers.ContainerRequest{
 		Image:        image,
 		ExposedPorts: []string{"8080/tcp"},
-		// 本番のイメージはエントリポイントを上書きしない（/var/runtime/bootstrap がそのまま動く）
-		// ローカルで RIE を挟むときだけ、この 2 行が Lambda ランタイムの代役になる
+		// 本番のイメージはエントリポイントを上書きしない (/var/runtime/bootstrap をそのまま実行する)
+		// ローカルで RIE を経由する場合に限り、この 2 行が Lambda ランタイムを代替する
 		Entrypoint: []string{"/usr/local/bin/aws-lambda-rie"},
 		Cmd:        []string{"/var/runtime/bootstrap"},
 		Env:        env,
-		// ホストに公開されたエミュレータへの経路
-		// compose と testcontainers のどちらが起動したエミュレータでも同じように届く
+		// ホストへ公開したエミュレータへの経路
+		// compose と testcontainers のいずれが起動したエミュレータに対しても同じく到達する
 		HostConfigModifier: func(hc *container.HostConfig) {
 			hc.ExtraHosts = append(hc.ExtraHosts, "host.docker.internal:host-gateway")
 		},
-		// RIE はランタイムの起動を待たずにポートを開けるので、ここで分かるのは「起動した」ことだけである
-		// 呼び出せるようになったかどうかは warm up で確かめる
+		// RIE はランタイムの起動を待たずにポートを開くため、ここで判定できるのは起動の完了までである
+		// 呼び出しが可能となったかどうかは warm up で確かめる
 		WaitingFor: wait.ForListeningPort("8080/tcp").WithStartupTimeout(2 * time.Minute),
 	}
 
@@ -106,7 +107,7 @@ func startUnderRIE(t *testing.T, image string, env map[string]string, warmup []b
 		Started:          true,
 	})
 	require.NoError(t, err, "start %s under the RIE", image)
-	// emutest が Ryuk を無効化しているので、後片付けはこちらの責任になる
+	// emutest が Ryuk を無効化するため、コンテナの削除は本ファイルが行う
 	t.Cleanup(func() { _ = c.Terminate(context.Background()) })
 
 	host, err := c.Host(ctx)
@@ -119,8 +120,9 @@ func startUnderRIE(t *testing.T, image string, env map[string]string, warmup []b
 	return running
 }
 
-// ペイロードを 1 つ送り、ハンドラの応答本文を返す
-// RIE はハンドラが error を返しても 200 を返す（失敗は本文の errorMessage 側に出る）ので、ステータスコードの確認は「呼び出せたか」の確認にとどまる
+// ペイロードを 1 つ送信し、ハンドラの応答本文を返す
+// RIE はハンドラが error を返した場合も 200 を返し、失敗は本文の errorMessage に現れる
+// したがってステータスコードの検査は、呼び出しの成否の確認にとどまる
 func (r imageUnderRIE) invoke(t *testing.T, payload []byte) []byte {
 	t.Helper()
 	resp, err := invokeClient.Post(r.url, "application/json", bytes.NewReader(payload))
@@ -132,7 +134,7 @@ func (r imageUnderRIE) invoke(t *testing.T, payload []byte) []byte {
 	return body
 }
 
-// コンテナの stderr（ハンドラの JSON ログ）を読む
+// コンテナの stderr (ハンドラの JSON ログ) を読む
 func (r imageUnderRIE) logs(t *testing.T) string {
 	t.Helper()
 	stream, err := r.container.Logs(context.Background())
@@ -143,7 +145,7 @@ func (r imageUnderRIE) logs(t *testing.T) string {
 	return string(logs)
 }
 
-// 最初の呼び出しが通るまで待つ
+// 最初の呼び出しが成功するまで待機する
 func (r imageUnderRIE) warmup(t *testing.T, payload []byte) {
 	t.Helper()
 	deadline := time.Now().Add(90 * time.Second)

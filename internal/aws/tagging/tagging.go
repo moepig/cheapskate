@@ -1,5 +1,5 @@
-// Resource Groups Tagging API を通じて、ターゲットグループのセレクタにマッチする AWS リソースを見つける
-// この API に触れるのはこのパッケージだけであり、port.Discoverer を実装する
+// Resource Groups Tagging API を通じて、ターゲットグループのセレクタに一致する AWS リソースを探索する
+// この API を呼ぶのは本パッケージに限る。port.Discoverer を実装する
 package tagging
 
 import (
@@ -26,10 +26,10 @@ type Discoverer struct {
 	Client API
 }
 
-// sel.TagKey=sel.TagValue が付き、種別が sel.Types に含まれるリソースをすべて返す
-// reconcile の順序と表示を決定的にするため、Resource.ID() でソートする
-// 解釈できない ARN があれば呼び出し全体を失敗させる
-// それは旧形式の ARN（ParseARN を参照）か、フィルタや対応づけの不具合を示しており、黙って飛ばせば本物の設定不備を覆い隠すためである
+// sel.TagKey=sel.TagValue が付与され、種別が sel.Types に含まれるリソースをすべて返す
+// reconcile の順序と表示を決定的とするため、Resource.ID() でソートする
+// 解釈できない ARN が存在する場合、呼び出し全体を失敗させる
+// 該当するのは旧形式の ARN (ParseARN を参照)、またはフィルタと対応づけの不具合であり、スキップした場合はこれらの不備が検知されないためである
 func (d *Discoverer) Discover(ctx context.Context, sel model.Selector) ([]model.Resource, error) {
 	typeFilters := make([]string, 0, len(sel.Types))
 	for _, t := range sel.Types {
@@ -55,8 +55,8 @@ func (d *Discoverer) Discover(ctx context.Context, sel model.Selector) ([]model.
 			if m.ResourceARN == nil {
 				continue
 			}
-			// ParseARN は種別ごとの Ref 形式まで確かめて返す
-			// 通れば、以降のターゲット操作は形式について心配しなくてよい
+			// ParseARN は種別ごとの Ref 形式まで検証する
+			// これを通過した Ref に対し、以降のターゲット操作は形式の検証を行わない
 			r, err := ParseARN(*m.ResourceARN)
 			if err != nil {
 				return nil, fmt.Errorf("discover: %w", err)
@@ -74,10 +74,9 @@ func (d *Discoverer) Discover(ctx context.Context, sel model.Selector) ([]model.
 	return resources, nil
 }
 
-// Tagging API のキー/値の組をマップへ平坦化し、ターゲット固有の参照に使えるようにする
-// EcsServiceTarget が model.EcsDesiredCountTagKey を読む場合などがこれにあたる
-// Key が nil のものは飛ばす
-// 壊れたタグ 1 つで探索全体を失敗させないためである
+// Tagging API のキーと値の組をマップへ平坦化し、種別固有の設定の参照に用いる
+// Key が nil の組はスキップする
+// 壊れたタグ 1 件により探索全体を失敗させないためである
 func tagsToMap(tags []types.Tag) map[string]string {
 	m := make(map[string]string, len(tags))
 	for _, t := range tags {
@@ -94,21 +93,21 @@ func tagsToMap(tags []types.Tag) map[string]string {
 }
 
 // リソース ARN を model.Resource へ対応づける
-// ARN の末尾（リソース部）は "<resource-type><区切り><ref>" の形をしており、その (service, resource-type) の組から model.InfoByARN が種別を引く:
+// ARN の末尾(リソース部)は "<resource-type><区切り><ref>" の形をしており、その (service, resource-type) の組から model.InfoByARN が種別を引く:
 //
 //	arn:aws:rds:region:account:db:NAME              -> {rds-instance, NAME}
 //	arn:aws:rds:region:account:cluster:NAME         -> {rds-cluster,  NAME}
 //	arn:aws:ecs:region:account:service/CLUSTER/NAME -> {ecs-service,  CLUSTER/NAME}
 //	arn:aws:ec2:region:account:instance/i-...       -> {ec2-instance, i-...}
 //
-// 区切りが ":" か "/" かは AWS のサービスによって違うだけで、どちらであるかに意味はない
-// そのため宣言には持たせず、ここで先に現れた方を区切りとして扱う
-// 残り全体が Ref になるので、ECS の "CLUSTER/NAME" のように区切りを含む Ref もそのまま通る
+// 区切りが ":" と "/" のいずれであるかは AWS のサービスごとに異なり、種別の判別には用いない
+// したがって宣言には持たせず、先に現れた文字を区切りとして扱う
+// 残りの全体が Ref となるため、ECS の "CLUSTER/NAME" のように区切りを含む Ref も通る
 //
-// 種別が分かった時点で Ref の形式も確かめる（model.Resource.Validate を参照）
-// 探索が Resource を組み立てた瞬間に弾いておかないと、形式の誤りは stop/start まで遅れて現れる
-// どの ARN が問題なのかを必ずエラーに含める
-// ARN を挙げずに「ref が不正」とだけ言われても、どのリソースのタグを直せばよいか分からない
+// 種別が確定した時点で Ref の形式も検証する (model.Resource.Validate を参照)
+// 探索が Resource を組み立てた時点で拒否しない場合、形式の誤りは stop/start の実行時まで現れない
+// 対象の ARN を必ずエラーへ含める
+// ARN を含めない場合、修正すべきリソースを特定できないためである
 func ParseARN(arnStr string) (model.Resource, error) {
 	parts := strings.SplitN(arnStr, ":", 6)
 	if len(parts) != 6 || parts[0] != "arn" {

@@ -54,7 +54,7 @@ func TestOverrideExpiryEnforcedInCode(t *testing.T) {
 	require.NotNil(t, o)
 	assert.Equal(t, model.DesiredRunning, o.Desired)
 
-	// TTL による削除は遅延するので、store は過去の expires_at を「存在しない」として扱わなければならない
+	// TTL による削除は遅延するため、store は過去の expires_at を持つ override を存在しないものとして扱わなければならない
 	o, err = s.GetOverride(ctx, "dev", now.Add(2*time.Hour))
 	require.NoError(t, err)
 	assert.Nil(t, o, "expired override must be nil")
@@ -67,10 +67,10 @@ func TestStatusRoundtrip(t *testing.T) {
 	err := s.UpdateStatus(ctx, "ecs-service#dev/api", state.StatusPatch{
 		LastAction:    state.Set(model.ActionStop),
 		ObservedState: state.Set(model.StateRunning),
-		// nil のフィールド（LastError など）はその属性に触れてはならない
+		// nil のフィールドは、対応する属性を変更してはならない
 	})
 	require.NoError(t, err)
-	// 2 回目の部分更新は置き換えではなく統合されなければならない
+	// 2 回目の部分更新は、置き換えではなく統合でなければならない
 	require.NoError(t, s.UpdateStatus(ctx, "ecs-service#dev/api", state.StatusPatch{LastAction: state.Set(model.ActionStart)}))
 
 	status, err := s.GetStatus(ctx, "ecs-service#dev/api")
@@ -79,8 +79,8 @@ func TestStatusRoundtrip(t *testing.T) {
 	assert.Equal(t, model.StateRunning, status.ObservedState, "the earlier partial update's field must survive the merge")
 }
 
-// グループ単位の失敗（設定エラー、Discover の失敗）は、合成 resource_id である "group#<name>" の下に記録される
-// これにより実リソースと同じ status アイテムの形状と API を共有する
+// グループ単位の失敗である設定エラーと Discover の失敗は、合成 resource_id である "group#<name>" の下に記録する
+// これにより、実リソースと同じ status アイテムの形状と API を共有する
 func TestGroupStatusRoundtrip(t *testing.T) {
 	s := newStore(t)
 	ctx := context.Background()

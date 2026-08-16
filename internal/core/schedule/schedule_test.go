@@ -12,7 +12,7 @@ import (
 
 const tokyo = "Asia/Tokyo"
 
-// 与えられた JST の壁時計時刻に対応する UTC の瞬間を返す
+// 指定した JST の壁時計時刻に対応する UTC の時刻を返す
 func jst(t *testing.T, value string) time.Time {
 	t.Helper()
 	loc, err := time.LoadLocation(tokyo)
@@ -44,9 +44,9 @@ func TestDisabledReturnsEmpty(t *testing.T) {
 	assert.Empty(t, resolve(t, tag, nil, time.Now()), "disabled must resolve to empty")
 }
 
-// disabled は override より強い停止である
-// disable は override# アイテムを消さないので、pin → override → disable の順に操作すれば「disabled なグループに有効期限内の override が残っている」状態は普通に作れる
-// ResolveDesired の disabled 判定が override 判定より後ろへ動くと、止めたはずのグループが期限切れまで起動しはじめる
+// disabled は override より優先度の高い停止である
+// disable は override# アイテムを削除しないため、pin → override → disable の順の操作により、disabled のグループに未失効の override が残る状態となる
+// ResolveDesired の disabled 判定が override 判定より後になった場合、停止したグループが override の失効まで起動する
 func TestDisabledBeatsUnexpiredOverride(t *testing.T) {
 	now := time.Now()
 	tag := model.GroupConfig{Name: "dev", Mode: model.ModeDisabled}
@@ -55,7 +55,7 @@ func TestDisabledBeatsUnexpiredOverride(t *testing.T) {
 }
 
 // disabled は cron も同じく無効化する
-// mode を disabled にしても start_cron/stop_cron は spec に残るため、解決が誤って fromSchedule まで進むと業務時間中は running が返ってしまう
+// mode を disabled としても start_cron/stop_cron は spec に残るため、解決が fromSchedule へ到達した場合、cron の定める時間帯では running を返す
 func TestDisabledBeatsSchedule(t *testing.T) {
 	tag := businessHours()
 	tag.Mode = model.ModeDisabled
@@ -127,7 +127,7 @@ func TestScheduleWithoutCronsErrors(t *testing.T) {
 func TestScheduleUsesDefaultTimezone(t *testing.T) {
 	tag := businessHours()
 	tag.Timezone = ""
-	// 03:00 UTC = 12:00 JST であり、既定が UTC なら業務時間外になる
+	// 03:00 UTC = 12:00 JST であり、既定が UTC の場合は cron の時間帯の外となる
 	now := time.Date(2026, 7, 15, 3, 0, 0, 0, time.UTC)
 	got, err := ResolveDesired(tag, nil, now, "UTC")
 	require.NoError(t, err)
@@ -145,10 +145,10 @@ func TestInvalidTimezoneErrors(t *testing.T) {
 	require.Error(t, err, "want error for invalid timezone")
 }
 
-// start と stop のどちらが壊れていても解決を中断しなければならない
-// 壊れた側を「発火しなかった」とみなすと、もう片方だけで desired が決まってしまう
-// 例えば stop_cron が壊れているだけで、止めるはずのグループが一日中動き続けることになる
-// どちらの cron が悪いのかはエラー本文で名指しする
+// start と stop のいずれが不正な場合も、解決を中断しなければならない
+// 不正な側を発火しなかったものとして扱った場合、desired state はもう一方のみで決まる
+// stop_cron のみが不正な場合、停止すべきグループが起動したまま残ることになる
+// 不正な cron はエラー本文で特定する
 func TestInvalidCronErrors(t *testing.T) {
 	cases := map[string]func(*model.GroupConfig){
 		"start_cron": func(g *model.GroupConfig) { g.StartCron = "not a cron" },
@@ -167,8 +167,8 @@ func TestInvalidCronErrors(t *testing.T) {
 	}
 }
 
-// start_cron と stop_cron が同一時刻で並んだ場合は stop に解決する（安全側かつ安価側）
-// 両者が同じ壁時計時刻で発火する状況だけが、fromSchedule の lastStart.After(*lastStop) の同着判定を実際に通す唯一の経路である
+// start_cron と stop_cron が同一時刻の場合は stop へ解決する
+// 両者が同じ壁時計時刻で発火する場合のみが、fromSchedule の lastStart.After(*lastStop) による同時刻の判定を通る経路である
 func TestSameInstantStartStopTieResolvesStopped(t *testing.T) {
 	tag := model.GroupConfig{
 		Name: "dev", Mode: model.ModeSchedule,
@@ -177,8 +177,8 @@ func TestSameInstantStartStopTieResolvesStopped(t *testing.T) {
 	assert.Equal(t, model.DesiredStopped, resolve(t, tag, nil, jst(t, "2026-07-15 09:00")), "same-instant tie must resolve stopped (fail-safe)")
 }
 
-// ちょうど now に失効する override は、すでに失効したものとして扱わなければならない
-// schedule.go は狭義の不等号 ExpiresAt > now.Unix() を使うため、境界の瞬間そのものは勝ってはならない
+// now と同時刻に失効する override は、失効済みとして扱わなければならない
+// schedule.go は狭義の不等号 ExpiresAt > now.Unix() を用いるため、境界の時刻は override を適用しない
 func TestOverrideExpiringExactlyNowIsExpired(t *testing.T) {
 	now := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
 	tag := model.GroupConfig{Name: "dev", Mode: model.ModePinned, Desired: model.DesiredStopped}
@@ -186,12 +186,13 @@ func TestOverrideExpiringExactlyNowIsExpired(t *testing.T) {
 	assert.Equal(t, model.DesiredStopped, resolve(t, tag, o, now), "override expiring exactly now must be ignored")
 }
 
-// 夏時間の切り替えで cron の解決が壊れてはならない
-// DST のない Asia/Tokyo だけを試しても検出できないため、DST を持つ America/New_York を使う
+// 夏時間の切り替えにおいても、cron の解決は正しく行われなければならない
+// 夏時間のない Asia/Tokyo のみでは検出できないため、夏時間を持つ America/New_York を用いる
 //
-// 以下のテストはすべて UTC の絶対時刻を now として与える
-// 壁時計時刻で書くと、その文字列を壁時計へ戻す実装（＝ DST を無視する実装）でも同じ答えになってしまい、「now を正しくローカルの壁時計へ写しているか」を一切検証できないためである
-// ここで与える瞬間は、EST(-05:00) と EDT(-04:00) のどちらで解釈するかで答えが変わるものを選んである
+// 以下のテストは、すべて UTC の絶対時刻を now として与える
+// 壁時計時刻で与えた場合、その文字列を壁時計へ戻す実装、すなわち夏時間を無視する実装でも同じ結果となり、
+// now をローカルの壁時計へ変換できているかを検証できないためである
+// ここで与える時刻は、EST(-05:00) と EDT(-04:00) のいずれで解釈するかにより結果が変わるものを選ぶ
 func utcAt(t *testing.T, value string) time.Time {
 	t.Helper()
 	ts, err := time.Parse("2006-01-02 15:04", value)
@@ -206,9 +207,9 @@ func nyBusinessHours() model.GroupConfig {
 	}
 }
 
-// 2026-03-08 の America/New_York では 02:00 EST から 03:00 EDT へ一気に進む
-// 13:30Z を挟んで前日と当日で答えが割れることが、オフセットが実際に -05:00 から -04:00 へ動いた証拠になる
-// 固定オフセットで解く実装ではこの 2 件は同じ答えになり、必ずどちらかが落ちる
+// 2026-03-08 の America/New_York では、02:00 EST から 03:00 EDT へ移行する
+// 13:30Z を境に前日と当日で結果が異なることが、オフセットが -05:00 から -04:00 へ変化したことを示す
+// 固定オフセットで解決する実装では、この 2 件の結果は一致し、いずれかが失敗する
 func TestScheduleAcrossSpringForward(t *testing.T) {
 	cases := []struct {
 		at   string
@@ -225,8 +226,8 @@ func TestScheduleAcrossSpringForward(t *testing.T) {
 	}
 }
 
-// 2026-11-01 の America/New_York では 02:00 EDT から 01:00 EST へ戻る
-// 春と同じく、13:30Z を挟んで前日と当日で答えが割れなければならない（-04:00 から -05:00 へ動く）
+// 2026-11-01 の America/New_York では、02:00 EDT から 01:00 EST へ移行する
+// 春と同じく、13:30Z を境に前日と当日で結果が異ならなければならない (-04:00 から -05:00 へ変化する)
 func TestScheduleAcrossFallBack(t *testing.T) {
 	cases := []struct {
 		at   string
@@ -242,9 +243,9 @@ func TestScheduleAcrossFallBack(t *testing.T) {
 	}
 }
 
-// 秋の繰り下げで 2 回訪れる時刻に置いた cron は、その日 2 回発火しうる
-// desired state は「直近に発火した側」だけで決まる冪等な導出なので、2 回目の発火でも答えは変わってはならない
-// 2026-11-01 のローカル 01:30 は 05:30Z（EDT）と 06:30Z（EST）の 2 回訪れる
+// 秋の繰り下げにおいて 2 回訪れる時刻に置いた cron は、その日 2 回発火しうる
+// desired state は直近に発火した側のみで決まる冪等な導出であるため、2 回目の発火でも結果は変わってはならない
+// 2026-11-01 のローカル 01:30 は、05:30Z (EDT) と 06:30Z (EST) の 2 回訪れる
 func TestScheduleRepeatedHourFiresIdempotently(t *testing.T) {
 	group := nyBusinessHours()
 	group.StartCron = "30 1 * * *"
@@ -264,13 +265,13 @@ func TestScheduleRepeatedHourFiresIdempotently(t *testing.T) {
 	}
 }
 
-// 春の繰り上げで消える時刻に置いた cron は、その日まるごと発火しない（schedule.go の fromSchedule を参照）
-// 望ましい挙動ではないが実際の挙動なので、仕様として固定しておく
-// 誰かが解決を作り替えたときに、この日だけ黙って挙動が変わることを防ぐ
+// 春の繰り上げにより存在しなくなる時刻に置いた cron は、その日は発火しない (schedule.go の fromSchedule を参照)
+// この挙動を仕様として固定する
+// 解決の実装を変更したとき、この日の挙動のみが変化することを検出するためである
 // 2026-03-08 の America/New_York に 02:30 は存在しない
 func TestScheduleSkipsCronInMissingHour(t *testing.T) {
 	t.Run("start", func(t *testing.T) {
-		// start が飛ぶと、そのグループはその日ずっと停止したままになる（安価側）
+		// start が発火しない場合、そのグループはその日は停止したままとなる
 		group := nyBusinessHours()
 		group.StartCron = "30 2 * * *"
 
@@ -279,7 +280,7 @@ func TestScheduleSkipsCronInMissingHour(t *testing.T) {
 	})
 
 	t.Run("stop", func(t *testing.T) {
-		// stop が飛ぶと、そのグループは次の stop まで動き続ける（高価側）
+		// stop が発火しない場合、そのグループは次の stop まで起動したままとなる
 		group := nyBusinessHours()
 		group.StartCron, group.StopCron = "0 20 * * *", "30 2 * * *"
 

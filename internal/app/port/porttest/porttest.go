@@ -1,11 +1,11 @@
 // port インターフェース向けの手書きテストダブルを置く
-// アプリケーション層を駆動するすべてのパッケージ（internal/app/{reconcile,groups}、internal/ui/*）で共有する
+// アプリケーション層を駆動するすべてのパッケージ (internal/app/{reconcile,groups}、internal/ui/*) で共有する
 //
-// これらを mockgen のモックにしないのは意図的である
-// ポートは 4 インターフェース・7 メソッドと小さく、引数もすべて internal/core/model の型である
-// 利用側のテストが求めるのは呼び出しごとの期待値ではなく、状態を持つ振る舞い（用意した観測値、記録した stop/start 呼び出し）である
-// 生成したモックを使っても、結局ここにあるようなダブルで包み直すことになる
-// ひとつ外側の AWS SDK 境界（internal/aws/*、internal/state）はインターフェースが広く引数の型も重いので、生成する価値がある
+// これらは mockgen による生成の対象としない
+// ポートは 4 インターフェース、7 メソッドであり、引数はすべて internal/core/model の型である
+// 利用側のテストが必要とするのは、呼び出しごとの期待値ではなく、状態を持つ振る舞いである
+// 生成したモックを用いる場合も、ここにあるダブルと同等の実装で包む必要がある
+// 1 つ外側の AWS SDK 境界 (internal/aws/*、internal/state) はインターフェースが広く引数の型も大きいため、生成の対象とする
 package porttest
 
 import (
@@ -23,10 +23,10 @@ var (
 )
 
 // port.Discoverer のテストダブル
-// Resources と Err はあらゆるセレクタに対して答える
-// ByTagValue と ErrByTagValue は、セレクタのタグ値をキーにしてグループ単位でそれらを上書きする
-// フィクスチャのグループはタグ値を自身のグループ名にしているので、ByTagValue["dev"] = ... は「グループ dev の中身」と読める
-// Selectors は渡されたセレクタを呼び出し順にすべて記録し、どのグループが探索されたか（disabled が除かれたか）の検証に使う
+// Resources と Err は、すべてのセレクタに対する応答となる
+// ByTagValue と ErrByTagValue は、セレクタのタグ値をキーとしてグループ単位でそれらを上書きする
+// フィクスチャのグループはタグ値をグループ名と一致させるため、ByTagValue のキーはグループ名に対応する
+// Selectors は渡されたセレクタを呼び出し順に記録し、探索されたグループの検証に用いる
 type Discoverer struct {
 	Resources     []model.Resource
 	Err           error
@@ -35,8 +35,8 @@ type Discoverer struct {
 	Selectors     []model.Selector
 }
 
-// グループ単位のマップを書き込める状態にした Discoverer を返す
-// Resources と Err しか要らないテストならゼロ値のままでよい
+// グループ単位のマップを初期化した Discoverer を返す
+// Resources と Err のみを用いるテストでは、ゼロ値で足りる
 func NewDiscoverer() *Discoverer {
 	return &Discoverer{ByTagValue: map[string][]model.Resource{}, ErrByTagValue: map[string]error{}}
 }
@@ -59,8 +59,8 @@ func (d *Discoverer) Discover(_ context.Context, sel model.Selector) ([]model.Re
 func (d *Discoverer) Calls() int { return len(d.Selectors) }
 
 // 状態を持つ port.Target のテストダブル
-// Describe は Observations から答え、未登録なら StateNotFound を返す（探索後に消えたリソースの見え方にあたる）
-// Stop/Start は対応するエラーフィールドが未設定なら、呼ばれた ref を記録する
+// Describe は Observations を参照し、未登録の場合は StateNotFound を返す
+// Stop/Start は、対応するエラーフィールドが未設定の場合に、呼ばれた ref を記録する
 type Target struct {
 	Typ          model.ResourceType
 	Observations map[string]model.Observation
@@ -103,8 +103,8 @@ func (t *Target) Start(_ context.Context, res model.Resource) error {
 	return nil
 }
 
-// どの ref に対しても固定の Observation（またはエラー）を返す port.Describer のテストダブル
-// 値型なので map[model.ResourceType]port.Describer のリテラルへそのまま入れられる
+// すべての ref に対して固定の Observation またはエラーを返す port.Describer のテストダブル
+// 値型であるため、map[model.ResourceType]port.Describer のリテラルへ直接記述できる
 type Describer struct {
 	Obs model.Observation
 	Err error

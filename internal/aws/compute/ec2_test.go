@@ -24,10 +24,10 @@ func ec2State(name ec2types.InstanceStateName) *ec2.DescribeInstancesOutput {
 }
 
 // 状態の写像がこのターゲットの契約のすべてである
-// running と stopped はそのまま対応づく
-// 遷移中の状態（pending・stopping・shutting-down）は "transitioning" になり、reconciler は次のサイクルで再試行する
-// terminated は stopped ではなく not-found へ写像し、reconciler が亡骸を Start しないようにする
-// terminated のインスタンスは終了後も 1 時間ほど Tagging API から見え続けるためである
+// running と stopped はそのまま対応する
+// 遷移中の状態である pending、stopping、shutting-down は "transitioning" へ写像し、reconciler は次のサイクルで再試行する
+// terminated は stopped ではなく not-found へ写像し、reconciler による Start を抑止する
+// terminated のインスタンスは、終了後も 1 時間程度は Tagging API から返り続けるためである
 func TestEc2DescribeStateMapping(t *testing.T) {
 	cases := []struct {
 		raw  ec2types.InstanceStateName
@@ -52,9 +52,9 @@ func TestEc2DescribeStateMapping(t *testing.T) {
 	}
 }
 
-// State は EC2 のレスポンスではポインタであり、nil で返ってくる余地がある
-// 状態が分からないものを running や stopped と決めつけて操作してはならないので飛ばす
-// 状態の読めるインスタンスが同じレスポンスに混ざっていれば、そちらを採用する
+// State は EC2 のレスポンスにおいてポインタであり、nil となりうる
+// 状態を判定できないインスタンスを running や stopped として操作してはならないため、スキップする
+// 同じレスポンスに状態を読めるインスタンスが含まれる場合は、そちらを採用する
 func TestEc2DescribeSkipsInstancesWithoutState(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	c := mocks.NewMockEc2API(ctrl)
@@ -72,8 +72,8 @@ func TestEc2DescribeSkipsInstancesWithoutState(t *testing.T) {
 	assert.Equal(t, model.StateRunning, obs.State)
 }
 
-// 状態の読めるインスタンスが 1 つもなければ、観測できていないので not-found へ落とす
-// reconciler はこれを穏当なスキップとして扱い、次のサイクルで読み直す
+// 状態を読めるインスタンスが 1 つも存在しない場合は、観測できていないため not-found とする
+// reconciler はこれをスキップとして扱い、次のサイクルで再度読み取る
 func TestEc2DescribeWithOnlyStatelessInstancesIsNotFound(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	c := mocks.NewMockEc2API(ctrl)

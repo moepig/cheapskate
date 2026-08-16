@@ -9,8 +9,8 @@ import (
 )
 
 func TestValidGroupName(t *testing.T) {
-	// 長さの境界は両側を見る
-	// 上限ちょうどだけを試すと、正規表現の {0,63} が上限なしに緩んでも気づけない
+	// 長さの境界は上下の両方を検査する
+	// 上限のみを検査した場合、正規表現の {0,63} が上限なしへ変化しても検出できない
 	longest := "a" + strings.Repeat("b", 63)
 	require.Len(t, longest, 64, "groupNameRE が許す最長")
 
@@ -51,8 +51,8 @@ func TestParseGroupScheduleFields(t *testing.T) {
 	assert.Equal(t, "Asia/Tokyo", g.Timezone)
 }
 
-// mode=schedule のときは cron と timezone も ParseGroup が検証する
-// この検証がここにあることが、doctor が「reconciler が従えない設定」を config-error として報告できる根拠になっている（doctor.inspectGroup を参照）
+// mode=schedule の場合、cron と timezone も ParseGroup が検証する
+// この検証により、doctor は reconciler が従えない設定を config-error として報告できる (doctor.inspectGroup を参照)
 func TestParseGroupValidatesScheduleFields(t *testing.T) {
 	valid := GroupSpec{Name: "dev", Mode: ModeSchedule, TagKey: "env", TagValue: "dev", Types: []ResourceType{TypeRdsInstance}}
 
@@ -76,12 +76,12 @@ func TestParseGroupValidatesScheduleFields(t *testing.T) {
 	_, err = ParseGroup(withSchedule("0 9 * * 1-5", "", "Mars/Olympus"))
 	assert.Error(t, err, "an unknown timezone must be rejected")
 
-	// 空の timezone は不正ではなく、reconciler の既定タイムゾーンを使うことを意味する
+	// 空の timezone は不正ではなく、reconciler の既定タイムゾーンを用いることを表す
 	_, err = ParseGroup(withSchedule("0 9 * * 1-5", "0 21 * * 1-5", ""))
 	assert.NoError(t, err, "an empty timezone falls back to the reconciler default")
 
-	// cron が不正でも、mode がそれを見ない側なら設定エラーではない
-	// 見ないものを理由に失敗させると、壊れたスケジュールを pin で退避させる経路が塞がる
+	// cron が不正な場合も、mode が cron を参照しないときは設定エラーとしない
+	// 参照しない設定を理由に失敗させた場合、壊れたスケジュールを pin で回避する経路が失われる
 	pinned := withSchedule("every morning", "", "")
 	pinned.Mode, pinned.Desired = ModePinned, DesiredStopped
 	_, err = ParseGroup(pinned)
@@ -89,25 +89,25 @@ func TestParseGroupValidatesScheduleFields(t *testing.T) {
 }
 
 func TestParseGroupSelectorRules(t *testing.T) {
-	// セレクタが一切ない disabled は正常で、作成直後の未設定グループにあたる
+	// セレクタを持たない disabled は正常であり、作成直後の未設定グループが該当する
 	g, err := ParseGroup(GroupSpec{Name: "dev", Mode: ModeDisabled})
 	require.NoError(t, err)
 	assert.True(t, g.Selector.Empty())
 
-	// セレクタなしで有効化（pinned/schedule）するのは設定エラー
+	// セレクタなしでの有効化 (pinned/schedule) は設定エラーとする
 	_, err = ParseGroup(GroupSpec{Name: "dev", Mode: ModePinned, Desired: DesiredStopped})
 	assert.Error(t, err)
 	_, err = ParseGroup(GroupSpec{Name: "dev", Mode: ModeSchedule, StartCron: "0 9 * * 1-5"})
 	assert.Error(t, err)
 
-	// 壊れたセレクタは disabled でも拒否する
-	// いったん設定したなら妥当でなければならない
+	// 壊れたセレクタは disabled の場合も拒否する
+	// 設定済みのセレクタは妥当でなければならないためである
 	_, err = ParseGroup(GroupSpec{Name: "dev", Mode: ModeDisabled, TagValue: "dev", Types: []ResourceType{TypeRdsInstance}})
 	assert.Error(t, err)
 
 	// 有効なグループでも同じく拒否する
-	// 空でないのに妥当でないセレクタは Discover に渡せず、reconciler がメンバーを数え上げられない
-	// 「セレクタなしで有効化」とは別の経路なので、mode ごとに確かめる
+	// 空ではないが妥当でないセレクタは Discover へ渡せず、reconciler はメンバーを列挙できない
+	// セレクタなしでの有効化とは別の経路であるため、mode ごとに検査する
 	for _, mode := range []Mode{ModePinned, ModeSchedule} {
 		_, err = ParseGroup(GroupSpec{
 			Name: "dev", Mode: mode, Desired: DesiredStopped, StartCron: "0 9 * * 1-5",
@@ -131,8 +131,8 @@ func TestParseGroupRejects(t *testing.T) {
 	}
 }
 
-// pin は cron を消さない
-// mode=pinned では cron が作用しないので、あとで unpin や schedule で戻せるように残す
+// pin は cron を削除しない
+// mode=pinned では cron が作用しないため、unpin と schedule による復帰のために保持する
 func TestPinPreservesCronsAndSetsDesired(t *testing.T) {
 	base := GroupSpec{
 		Name: "dev", Mode: ModeSchedule, StartCron: "0 9 * * 1-5", StopCron: "0 21 * * 1-5", Timezone: "Asia/Tokyo",
@@ -167,8 +167,8 @@ func TestUnpinPicksScheduleOrDisabled(t *testing.T) {
 	assert.Equal(t, ModeDisabled, got.Mode, "a group that was never scheduled has nowhere to resume to")
 }
 
-// schedule は desired を持ち越さない
-// mode=schedule では cron が desired state を決めるので、古い pin の値が残ると読み手を惑わせる
+// schedule は desired を保持しない
+// mode=schedule では cron が desired state を決定し、pin の設定値は参照されないためである
 func TestWithScheduleDropsPinnedDesired(t *testing.T) {
 	pinned := GroupSpec{
 		Name: "dev", Mode: ModePinned, Desired: DesiredStopped,
@@ -180,12 +180,12 @@ func TestWithScheduleDropsPinnedDesired(t *testing.T) {
 	assert.Equal(t, DesiredNone, got.Desired, "the stale pinned desired must not survive")
 }
 
-// disabled は結果を検証しない唯一の遷移である
-// 設定が壊れているグループの管理を今すぐ止めるための最後の手段であり、まさにその壊れた設定を理由に失敗してはならない
+// disabled は、結果を検証しない唯一の遷移である
+// 設定が壊れているグループの管理を停止する唯一の手段であり、その設定の破損を理由に失敗してはならない
 func TestDisabledAlwaysSucceedsEvenForUnusableConfig(t *testing.T) {
 	broken := GroupSpec{Name: "dev", Mode: ModeSchedule, StartCron: "every morning", TagKey: "aws:reserved", TagValue: "x"}
 	_, err := ParseGroup(broken)
-	require.Error(t, err, "この設定は ParseGroup が拒否する（前提の確認）")
+	require.Error(t, err, "この設定は ParseGroup が拒否する (前提の確認)")
 
 	got := broken.Disabled()
 	assert.Equal(t, ModeDisabled, got.Mode)
@@ -210,8 +210,8 @@ func TestWithSelectorPreservesModeAndNormalizesTypes(t *testing.T) {
 	assert.Error(t, err, "an invalid selector must be rejected")
 }
 
-// 遷移はどれも結果を ParseGroup へ通す
-// これがあることで、アプリケーション層は「保存はできたが reconciler は従えない」設定を書けない
+// いずれの遷移も結果を ParseGroup へ通す
+// これにより、アプリケーション層は保存可能かつ reconciler が従えない設定を書き込めない
 func TestTransitionsRejectResultsParseGroupWouldReject(t *testing.T) {
 	noSelector := GroupSpec{Name: "dev", Mode: ModeDisabled}
 
@@ -221,8 +221,8 @@ func TestTransitionsRejectResultsParseGroupWouldReject(t *testing.T) {
 	_, err = noSelector.WithSchedule(ScheduleSpec{StartCron: "0 9 * * 1-5"})
 	assert.Error(t, err, "mode=schedule without a selector is a config error, so schedule must refuse it")
 
-	// 保存済みの cron が使えない状態で schedule へ戻すことも許さない
-	// 成功したように見えて、reconciler が毎サイクル同じ設定エラーを出し続ける状態になるためである
+	// 保存済みの cron が不正な状態での schedule への復帰も拒否する
+	// 操作は成功として報告される一方、reconciler が毎サイクル同じ設定エラーを出力するためである
 	brokenCron := GroupSpec{
 		Name: "dev", Mode: ModePinned, Desired: DesiredStopped, StartCron: "every morning",
 		TagKey: "env", TagValue: "dev", Types: []ResourceType{TypeRdsInstance},

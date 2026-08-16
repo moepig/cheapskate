@@ -1,7 +1,7 @@
-// cheapskate の合成ルートであり、アプリケーション層（internal/app）と AWS アダプタ（internal/aws）の両方をインポートできる唯一のパッケージ
+// cheapskate の合成ルートであり、アプリケーション層 (internal/app) と AWS アダプタ (internal/aws) の双方をインポートできる唯一のパッケージ
 // 各アダプタを、それが満たすポートへ束ねる
-// cmd/ の各エントリポイントは依存をここから組み立てる
-// これにより「どの AWS クライアントがどのポートを裏打ちするか」の結線が、3 つのバイナリに重複せず 1 か所に収まる
+// cmd/ の各エントリポイントは、依存をここから組み立てる
+// これにより、AWS クライアントとポートの対応づけは、3 つのバイナリに重複せず 1 か所に収まる
 package wire
 
 import (
@@ -41,12 +41,12 @@ func Targets(cfg aws.Config) map[model.ResourceType]port.Target {
 	return m
 }
 
-// フロントエンドが必要とする読み取り専用の describer 一式を、model.Type* をキーにして組み立てる
-// 値は Targets が使うのと同じ compute の型であり、Stop/Start も実装している
-// しかし渡すのは常に、より狭い port.Describer 越しに限られる
-// そのため cheapskate-cli と web console はコントロールプレーンを変更する経路を持たない
-// EcsServiceTarget の AutoScaling クライアントはここでは未設定のままにする
-// それを読むのは Start/Stop だけで、このマップがそのどちらにも使われることはないためである
+// フロントエンドが必要とする読み取り専用の describer 一式を、model.Type* をキーとして組み立てる
+// 値は Targets が用いるのと同じ compute の型であり、Stop/Start も実装する
+// ただし、受け渡しは常により狭い port.Describer を通じて行う
+// したがって cheapskate-cli と web console は、コントロールプレーンを変更する経路を持たない
+// EcsServiceTarget の AutoScaling クライアントは未設定とする
+// これを参照するのは Start/Stop のみであり、このマップはそのいずれにも用いないためである
 func Describers(cfg aws.Config) map[model.ResourceType]port.Describer {
 	targets := Targets(cfg)
 	m := make(map[model.ResourceType]port.Describer, len(targets))
@@ -57,7 +57,7 @@ func Describers(cfg aws.Config) map[model.ResourceType]port.Describer {
 }
 
 // topicArn 向けの port.Notifier を組み立てる
-// ARN が空なら何もしない notifier になる
+// ARN が空の場合は、何も行わない notifier となる
 func Notifier(cfg aws.Config, topicArn string) port.Notifier {
 	return &awssns.Notifier{Client: sns.NewFromConfig(cfg), TopicArn: topicArn}
 }

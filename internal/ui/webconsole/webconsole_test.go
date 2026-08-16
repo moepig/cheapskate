@@ -28,7 +28,7 @@ func newTestServer(t *testing.T) (*mocks.DynaStore, *porttest.Discoverer, http.H
 	return db, disc, h
 }
 
-// newTestServer と同じものに加えて、サーバが書いたログを返す
+// newTestServer が返すものに加え、サーバが出力したログを返す
 func newTestServerWithLog(t *testing.T) (*mocks.DynaStore, *porttest.Discoverer, http.Handler, *bytes.Buffer) {
 	t.Helper()
 	ctrl := gomock.NewController(t)
@@ -36,20 +36,20 @@ func newTestServerWithLog(t *testing.T) (*mocks.DynaStore, *porttest.Discoverer,
 	disc := porttest.NewDiscoverer()
 	seedDevGroup(db, disc)
 	var logBuf bytes.Buffer
-	// 本番と同じ JSON ハンドラで書く（属性名まで含めて、実際に出る行を検証するためである）
+	// 本番と同じ JSON ハンドラを用いる。属性名を含め、実際に出力する行を検証するためである
 	h := New(state.New(api, "t"), disc, nil, "", time.UTC, slog.New(slog.NewJSONHandler(&logBuf, nil))).Handler()
 	return db, disc, h, &logBuf
 }
 
-// ログを検証しないテストの出力を汚さないためのロガー
+// ログを検証しないテストにおいて、出力を抑止するためのロガー
 func testLogger(t *testing.T) *slog.Logger {
 	t.Helper()
 	return slog.New(slog.DiscardHandler)
 }
 
-// グループ "dev" と、そのセレクタに合致することになっているリソース 1 つを投入する
-// discoverer のテストダブルはセレクタのタグ値をキーにしており、ここでのグループはどれも自身の名前をその値に使う
-// そのため実物の Tagging API は関与しない
+// グループ "dev" と、そのセレクタに一致するリソース 1 つを投入する
+// discoverer のテストダブルはセレクタのタグ値をキーとし、本ファイルのグループはタグ値をグループ名と一致させる
+// したがって、実際の Tagging API は関与しない
 func seedDevGroup(db *mocks.DynaStore, disc *porttest.Discoverer) {
 	db.Seed(map[string]types.AttributeValue{
 		"pk": &types.AttributeValueMemberS{Value: "group#dev"}, "mode": &types.AttributeValueMemberS{Value: string(model.ModePinned)},
@@ -174,7 +174,7 @@ func TestGroupPage(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, rec.Code, "malformed group name")
 }
 
-// グループページはグループ設定だけでなく、override と実際に discover したリソースのステータスも描画しなければならない
+// グループページは、グループ設定に加え、override と探索したリソースのステータスも描画しなければならない
 func TestGroupPageRendersOverrideAndDiscoveredStatus(t *testing.T) {
 	db, _, h := newTestServer(t)
 	db.Seed(map[string]types.AttributeValue{
@@ -195,8 +195,8 @@ func TestGroupPageRendersOverrideAndDiscoveredStatus(t *testing.T) {
 	assert.Contains(t, body, "db1", "group page missing the discovered resource")
 }
 
-// グループページの "Current state" 列は、その場で問い合わせたリソースの実際の現在状態を表示しなければならない
-// ここでは ecs-service の実際の desiredCount を Observation.Detail に畳み込んだものであり、同じ行の他所に出る最後の reconcile ステータスとは別物である
+// グループページの "Current state" 列は、問い合わせたリソースの現在状態を表示しなければならない
+// ここでは ecs-service の desiredCount を Observation.Detail へ格納した値であり、同じ行に表示する最後の reconcile ステータスとは異なる
 func TestGroupPageRendersLiveState(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	api, db := mocks.NewDynaStore(ctrl)
@@ -212,9 +212,9 @@ func TestGroupPageRendersLiveState(t *testing.T) {
 	assert.Contains(t, rec.Body.String(), "running (available)", "group page missing live-queried current state")
 }
 
-// 1 リソースの Describe が失敗しても、その行だけにエラーを出して他は通常どおり描く
-// live state が読めないことと、グループの構成が読めないことは別である
-// 「不明」と黙って表示するのではなく、なぜ読めなかったのかをその場に出さなければ、オペレータは停止済みなのか権限が足りないのかを区別できない
+// 1 リソースの Describe が失敗した場合も、その行にのみエラーを表示し、他の行は通常どおり描画する
+// 現在状態の読み取りの失敗と、グループの構成の読み取りの失敗は独立している
+// 状態を不明として表示するだけでは、停止済みであるか権限が不足しているかを区別できないため、失敗の理由を表示する
 func TestGroupPageRendersLiveErrorInline(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	api, db := mocks.NewDynaStore(ctrl)
@@ -233,8 +233,8 @@ func TestGroupPageRendersLiveErrorInline(t *testing.T) {
 	assert.Contains(t, body, "db1", "行そのものは残る")
 }
 
-// Discover の失敗（例えば tag:GetResources 権限の欠落）はリクエストを失敗させず、グループページ内にそのまま描画しなければならない
-// IAM 権限の不足や誤設定が 500 になってはならない
+// Discover の失敗は、リクエストを失敗させず、グループページ内へ描画しなければならない
+// IAM 権限の不足と誤設定を 500 としてはならない
 func TestGroupPageShowsDiscoverErrorInlineWith200(t *testing.T) {
 	_, disc, h := newTestServer(t)
 	disc.Err = assert.AnError
@@ -275,8 +275,8 @@ func TestOpOverrideRejectsPastDateTime(t *testing.T) {
 	assert.Contains(t, rec.Header().Get("Location"), "err=")
 }
 
-// グループに cron のフィールドがあるなら unpin は mode=schedule へ戻さなければならない
-// Pin の「cron のフィールドは保たれる」という約束が、CLI 経由だけでなくコンソールからも実際に再開できることを担保する
+// グループが cron のフィールドを持つ場合、unpin は mode=schedule へ戻さなければならない
+// Pin が cron のフィールドを保持するという規約により、コンソールからも schedule を再開できることを検証する
 func TestOpUnpinRestoresScheduleWhenCronsPresent(t *testing.T) {
 	db, _, h := newTestServer(t)
 	rec := post(t, h, url.Values{
@@ -296,7 +296,7 @@ func TestOpUnpinRestoresScheduleWhenCronsPresent(t *testing.T) {
 	assert.Equal(t, "0 9 * * *", item["start_cron"].(*types.AttributeValueMemberS).Value, "unpin must not lose cron fields")
 }
 
-// cron が一度も設定されていなければ unpin に再開すべきものはなく、mode=disabled へ落ちる
+// cron が未設定の場合、unpin が復帰する先は存在せず、mode=disabled となる
 func TestOpUnpinFallsBackToDisabledWithoutCrons(t *testing.T) {
 	db, _, h := newTestServer(t)
 	rec := post(t, h, url.Values{"action": {"unpin"}, "group": {"dev"}}, nil)
@@ -307,8 +307,8 @@ func TestOpUnpinFallsBackToDisabledWithoutCrons(t *testing.T) {
 	assert.Equal(t, string(model.ModeDisabled), item["mode"].(*types.AttributeValueMemberS).Value)
 }
 
-// 書式が壊れた until はリダイレクトで差し戻し、override は 1 件も書かない
-// TestOpOverrideRejectsPastDateTime が見ているのは解析できた過去日時であり、これはその手前の解析そのものが失敗する経路である
+// 書式が不正な until はリダイレクトで差し戻し、override を書き込まない
+// TestOpOverrideRejectsPastDateTime の対象は解析できた過去日時であり、本テストの対象は解析自体が失敗する経路である
 func TestOpOverrideRejectsUnparsableDateTime(t *testing.T) {
 	db, _, h := newTestServer(t)
 
@@ -323,9 +323,9 @@ func TestOpOverrideRejectsUnparsableDateTime(t *testing.T) {
 	assert.Nil(t, db.Item("override#dev"), "解析に失敗した時点で override を書いてはならない")
 }
 
-// フォームの action と group は、操作を試みる前に弾く
-// この 2 つはフォームが正しければ必ず妥当なので、壊れているならフォーム側の不具合か手製のリクエストである
-// 利用者に直させる err リダイレクトではなく 400 で返す
+// フォームの action と group は、操作の実行前に検証する
+// この 2 つはフォームが正しい限り妥当であるため、不正な値はフォーム側の不具合または手動で構成したリクエストを示す
+// 修正を促す err リダイレクトではなく 400 を返す
 func TestOpRejectsMalformedRequestWithBadRequest(t *testing.T) {
 	cases := []struct {
 		name string
@@ -349,8 +349,8 @@ func TestOpRejectsMalformedRequestWithBadRequest(t *testing.T) {
 	}
 }
 
-// フォーム本体そのものが復号できない場合も 400 で返す
-// action も group も読めていない以上、どのグループへ差し戻せばよいかが決まらない
+// フォーム本体を復号できない場合も 400 を返す
+// action と group のいずれも読めないため、差し戻し先のグループを決定できないためである
 func TestOpRejectsUndecodableForm(t *testing.T) {
 	db, _, h := newTestServer(t)
 	req := httptest.NewRequest("POST", "/op", strings.NewReader("action=pin&group=%zz"))
@@ -437,8 +437,8 @@ func TestOpRemoveGroup(t *testing.T) {
 	assert.Equal(t, "/?msg="+url.QueryEscape("removed group dev"), rec.Header().Get("Location"), "remove-group should redirect to index")
 }
 
-// Base（API Gateway のステージプレフィックス）が空でないなら、操作後のリダイレクトはすべてそのプレフィックスを含まなければならない
-// これによりブラウザはそのプレフィックス配下に留まる
+// Base (API Gateway のステージの接頭辞) が空でない場合、操作後のリダイレクトはすべてその接頭辞を含まなければならない
+// これによりブラウザは、その接頭辞の配下に留まる
 func TestOpRedirectCarriesBasePath(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	api, db := mocks.NewDynaStore(ctrl)
@@ -454,8 +454,8 @@ func TestOpRedirectCarriesBasePath(t *testing.T) {
 	assert.Equal(t, "/console/?msg="+url.QueryEscape("removed group dev"), rec.Header().Get("Location"))
 }
 
-// すべてのレスポンスはフレーム内への埋め込みを拒否しなければならない
-// 許可リストに載ったオペレータが攻撃者のページを開いても、透明な iframe 経由で remove や pin を実行させられない（クリックジャッキング対策）
+// すべてのレスポンスは、フレーム内への埋め込みを拒否しなければならない
+// 許可リストに含まれる環境から外部のページを開いた場合も、iframe を経由した remove と pin の実行を防ぐためである
 func TestClickjackingHeadersPresent(t *testing.T) {
 	_, _, h := newTestServer(t)
 	rec := get(t, h, "/")
@@ -476,8 +476,8 @@ func TestCrossOriginPostRejected(t *testing.T) {
 	assert.Equal(t, http.StatusSeeOther, rec.Code, "same-origin")
 }
 
-// 解析できない Origin は同一オリジンだと確認できないのだから、拒否側へ倒さなければならない
-// url.Parse の失敗を「Origin なし」と同じに扱うと、壊れた Origin を送るだけで検査を素通りできてしまう
+// 解析できない Origin は同一オリジンであることを確認できないため、拒否しなければならない
+// url.Parse の失敗を Origin なしと同じに扱った場合、不正な Origin の送信により検査を回避できる
 func TestUnparsableOriginRejected(t *testing.T) {
 	_, _, h := newTestServer(t)
 	form := url.Values{"action": {"pin"}, "group": {"dev"}, "desired": {"running"}}
@@ -514,7 +514,7 @@ func TestDoctorPageWithNothingToReportHidesPruneForm(t *testing.T) {
 	assert.NotContains(t, rec.Body.String(), "Prune ")
 }
 
-// prune は表示済みの画面に対してではなく、押された時点で診断をやり直してから削除する
+// prune は表示済みの画面に対してではなく、実行の時点で診断を再実行した結果に対して削除する
 func TestDoctorPrune(t *testing.T) {
 	db, _, h := newTestServer(t)
 	db.Seed(map[string]types.AttributeValue{
@@ -532,9 +532,9 @@ func TestDoctorPrune(t *testing.T) {
 	assert.Nil(t, db.Item("override#ghost"))
 }
 
-// 個々の削除失敗は doctor.Run のエラーにはならず finding に残るだけなので、画面側で数えて伝える
-// 「N 件削除しました」だけを出すと、消せなかったレコードが残っていることに誰も気づかない
-// 削除は冪等なので、もう一度実行すればよいことまで案内する
+// 個々の削除の失敗は doctor.Run のエラーとならず finding に残るため、画面側で集計して報告する
+// 削除件数のみを表示した場合、削除できなかったレコードの残存を検知できない
+// 削除は冪等であるため、再実行により解消できることも併せて表示する
 func TestDoctorPruneReportsPartialFailure(t *testing.T) {
 	db, _, h := newTestServer(t)
 	for _, name := range []string{"ghost-a", "ghost-b"} {
@@ -579,8 +579,8 @@ func TestDoctorPruneRejectsCrossOrigin(t *testing.T) {
 	assert.NotNil(t, db.Item("override#ghost"), "a rejected request must not delete anything")
 }
 
-// 1 リクエストにつき開始と完了を 1 行ずつ残す
-// 完了行しか出さないと、途中で消えたリクエスト（Lambda のタイムアウト等）が痕跡なしに消える
+// 1 リクエストにつき、開始と完了を 1 行ずつ記録する
+// 完了行のみを出力した場合、Lambda のタイムアウトなどで中断したリクエストの記録が残らない
 func TestRequestLoggingRecordsStartAndEnd(t *testing.T) {
 	_, _, h, logBuf := newTestServerWithLog(t)
 
@@ -596,8 +596,8 @@ func TestRequestLoggingRecordsStartAndEnd(t *testing.T) {
 	assert.Contains(t, out, `"duration_ms":`)
 }
 
-// 画面に返すエラーはログにも残す
-// リダイレクトも 4xx/5xx も、ブラウザを閉じたら消えるものだけを記録先にしてはならない
+// 画面へ返すエラーは、ログへも記録する
+// リダイレクトと 4xx/5xx のいずれについても、記録先をブラウザの表示のみとしてはならない
 func TestErrorsGoToTheLogAndNotOnlyTheScreen(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -639,8 +639,8 @@ func TestErrorsGoToTheLogAndNotOnlyTheScreen(t *testing.T) {
 	}
 }
 
-// 設定を書き換える操作は、成功もグループと内容つきで残す
-// リクエストの完了行だけではフォーム本体（どのグループを何にしたのか）が分からない
+// 設定を書き換える操作は、成功時もグループと内容を併せて記録する
+// リクエストの完了行のみでは、対象のグループと変更の内容を特定できないためである
 func TestSuccessfulOperationIsLogged(t *testing.T) {
 	_, _, h, logBuf := newTestServerWithLog(t)
 
@@ -652,10 +652,10 @@ func TestSuccessfulOperationIsLogged(t *testing.T) {
 	assert.Contains(t, out, `"group":"dev"`)
 }
 
-// client には接続元を残す
-// これはリソースポリシーの aws:SourceIp が許可判定に使う値と同じものである
-// X-Forwarded-For の先頭はクライアントが自由に書けるので、そちらを採ってはならない
-// API Gateway は受け取った X-Forwarded-For の末尾に観測した IP を追記するだけであり、先頭は上書きしない
+// client には接続元を記録する
+// これはリソースポリシーの aws:SourceIp が許可の判定に用いる値と同一である
+// X-Forwarded-For の先頭はクライアントが任意に設定できるため、これを採用してはならない
+// API Gateway は受信した X-Forwarded-For の末尾へ観測した IP を追記し、先頭を上書きしない
 func TestClientIPIsTheConnectionSourceNotTheForwardedForHeader(t *testing.T) {
 	_, _, h, logBuf := newTestServerWithLog(t)
 
@@ -664,12 +664,12 @@ func TestClientIPIsTheConnectionSourceNotTheForwardedForHeader(t *testing.T) {
 	h.ServeHTTP(httptest.NewRecorder(), req)
 
 	out := logBuf.String()
-	assert.Contains(t, out, `"client":"192.0.2.1"`, "接続元を残す（ポートは落とす）")
+	assert.Contains(t, out, `"client":"192.0.2.1"`, "接続元を残す (ポートは除去する)")
 	assert.NotContains(t, out, "198.51.100.66", "クライアントが送った X-Forwarded-For を信じてはならない")
 }
 
-// Lambda 上では接続元は Lambda Web Adapter が渡す requestContext にしかない
-// RemoteAddr はアダプタからのループバック接続なので、そちらを優先すると全リクエストが同じ 127.0.0.1 として記録され、許可された IP の記録が失われる
+// Lambda 上では、接続元は Lambda Web Adapter が渡す requestContext にのみ存在する
+// RemoteAddr はアダプタからのループバック接続であるため、これを優先した場合、全リクエストが 127.0.0.1 として記録され、許可の判定に用いた IP の記録が失われる
 func TestClientIPComesFromTheAdapterRequestContext(t *testing.T) {
 	_, _, h, logBuf := newTestServerWithLog(t)
 
@@ -683,8 +683,8 @@ func TestClientIPComesFromTheAdapterRequestContext(t *testing.T) {
 	assert.NotContains(t, out, "127.0.0.1", "アダプタとの間のループバックアドレスを残してはならない")
 }
 
-// REST API(v1) と HTTP API(v2)/Function URL では sourceIp の位置が違う
-// 後者に切り替えたときに client が黙って空になることがあってはならない
+// REST API(v1) と HTTP API(v2)/Function URL では、sourceIp の位置が異なる
+// 後者へ切り替えたとき、client が空となってはならない
 func TestClientIPReadsTheHTTPAPIRequestContextShape(t *testing.T) {
 	_, _, h, logBuf := newTestServerWithLog(t)
 
@@ -695,8 +695,8 @@ func TestClientIPReadsTheHTTPAPIRequestContextShape(t *testing.T) {
 	assert.Contains(t, logBuf.String(), `"client":"203.0.113.10"`)
 }
 
-// requestContext が読めないときに client を空にしてはならない
-// アダプタの形式が変わっても、少なくとも接続元は残り続ける必要がある
+// requestContext を読めない場合も、client を空としてはならない
+// アダプタの形式が変化した場合も、接続元の記録を維持する必要があるためである
 func TestClientIPFallsBackToTheConnectionWhenRequestContextIsUnusable(t *testing.T) {
 	for name, header := range map[string]string{
 		"malformed":     `{"identity":`,
@@ -715,7 +715,7 @@ func TestClientIPFallsBackToTheConnectionWhenRequestContextIsUnusable(t *testing
 	}
 }
 
-// ポートの付かないアドレスで届いた場合に、SplitHostPort の失敗を握りつぶして値ごと捨ててはならない
+// ポートを含まないアドレスを受信した場合、SplitHostPort の失敗を理由に値を破棄してはならない
 func TestClientIPHandlesAddressWithoutPort(t *testing.T) {
 	_, _, h, logBuf := newTestServerWithLog(t)
 
@@ -726,8 +726,8 @@ func TestClientIPHandlesAddressWithoutPort(t *testing.T) {
 	assert.Contains(t, logBuf.String(), `"client":"203.0.113.9"`)
 }
 
-// 探索に失敗したサイクルでは孤立判定を見送ったことを画面に出す
-// 「孤立レコードが 0 件」と「調べられなかった」を読み手が取り違えてはならない
+// 探索に失敗したサイクルでは、孤立判定を見送ったことを画面へ表示する
+// 孤立レコードの不在と、判定の未実施とを区別できなければならないためである
 func TestDoctorPageSurfacesBlockedChecks(t *testing.T) {
 	_, disc, h := newTestServer(t)
 	disc.ErrByTagValue["dev"] = assert.AnError

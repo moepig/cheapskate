@@ -11,7 +11,7 @@ import (
 )
 
 // DesiredRunning または DesiredStopped を返す
-// グループが disabled のときは DesiredNone を返す
+// グループが disabled の場合は DesiredNone を返す
 func ResolveDesired(group model.GroupConfig, override *model.Override, now time.Time, defaultTimezone string) (model.DesiredState, error) {
 	if group.Mode == model.ModeDisabled {
 		return model.DesiredNone, nil
@@ -25,19 +25,21 @@ func ResolveDesired(group model.GroupConfig, override *model.Override, now time.
 	return fromSchedule(group, now, defaultTimezone)
 }
 
-// cron から desired state を導く
-// model.ParseGroup が mode=schedule の cron と timezone をすでに検証しているので、ここで残る失敗は既定タイムゾーン（reconciler の環境変数由来で、グループ設定の一部ではない）が不正な場合だけである
-// それ以外の検査は、GroupConfig を直接組み立てた呼び出しに対する防御として残してある
+// cron から desired state を導出する
+// model.ParseGroup が mode=schedule の cron と timezone を検証済みであるため、ここで残る失敗は既定タイムゾーンが不正な場合に限る
+// 既定タイムゾーンは reconciler の環境変数に由来し、グループ設定には含まれない
+// それ以外の検査は、GroupConfig を直接組み立てた呼び出しに対する防御として残す
 //
-// cron はグループのタイムゾーンのローカル壁時計時刻で解釈するため、夏時間の切り替え日には次の 2 つが起きる
-// （どちらも schedule_test.go で仕様として固定してある）
-//   - 春の繰り上げ：消える時刻（America/New_York なら 02:00-02:59）に置いた cron は、その日まるごと発火しない
-//     start が飛べばそのグループはその日ずっと停止したまま（安価側）だが、stop が飛べば次の stop まで動き続ける（高価側）
-//   - 秋の繰り下げ：2 回訪れる時刻に置いた cron はその日 2 回発火しうる
-//     desired state は「直近に発火した側」だけで決まる冪等な導出なので、2 回目でも答えは変わらない
+// cron はグループのタイムゾーンのローカル壁時計時刻で解釈するため、夏時間の切り替え日には次の 2 つが生じる
+// いずれも schedule_test.go が仕様として固定している
+//   - 春の繰り上げ: 存在しない時刻に置いた cron は、その日は発火しない
+//     start が発火しない場合、そのグループはその日は停止したままとなる
+//     stop が発火しない場合、そのグループは次の stop まで起動したままとなる
+//   - 秋の繰り下げ: 2 回訪れる時刻に置いた cron は、その日 2 回発火しうる
+//     desired state は直近に発火した側のみで決まる冪等な導出であるため、2 回目でも結果は変わらない
 //
-// つまり注意が要るのは春だけである
-// DST のある地域では、切り替え帯（多くの地域で 01:00-03:00）を避けた時刻に cron を置くこと
+// したがって影響が生じるのは春の繰り上げのみである
+// 夏時間のある地域では、切り替えの時間帯を避けた時刻へ cron を置くこと
 func fromSchedule(group model.GroupConfig, now time.Time, defaultTimezone string) (model.DesiredState, error) {
 	tzName := group.Timezone
 	if tzName == "" {
@@ -66,7 +68,7 @@ func fromSchedule(group model.GroupConfig, now time.Time, defaultTimezone string
 	case lastStop == nil:
 		return model.DesiredRunning, nil
 	}
-	// 直近に発火した側の cron が決定権を持ち、同着なら stop に倒す（安全側かつ安価側)
+	// 直近に発火した側の cron が desired state を決定する。同時刻の場合は stop とする
 	if lastStart.After(*lastStop) {
 		return model.DesiredRunning, nil
 	}

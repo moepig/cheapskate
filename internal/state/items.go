@@ -4,13 +4,13 @@ import (
 	"cheapskate/internal/core/model"
 )
 
-// テーブルのキー構成であり、pk はすべて "<kind>#<identity>" の形をとる
-// これらの接頭辞が現れるのはここだけで、アプリケーション層はグループやリソースを名前で要求し、自分でキーを組み立てることはない
+// テーブルのキー構成であり、pk はすべて "<kind>#<identity>" の形式をとる
+// これらの接頭辞が現れるのは本ファイルに限る。アプリケーション層はグループとリソースを名前で指定し、キーを組み立てない
 //
-// groupKeyPrefix と model.GroupNamespace は理由の異なる同一文字列であり、あえて同じ定数にしていない
-// こちらはグループの設定アイテム（"group#dev"）に名前空間を与える
-// model 側は status キーの中でグループの合成リソース ID（"status#group#dev"）に名前空間を与える
-// 一方を変えたとき、もう一方が黙って変わってはならない
+// groupKeyPrefix と model.GroupNamespace は、根拠の異なる同一の文字列であり、同じ定数としない
+// 本定数はグループの設定アイテムへ名前空間を与える
+// model 側は status キーにおいて、グループの合成リソース ID へ名前空間を与える
+// 一方の変更が他方へ波及してはならないためである
 const (
 	groupKeyPrefix    = "group#"
 	overrideKeyPrefix = "override#"
@@ -22,9 +22,9 @@ func overrideKey(name string) string         { return overrideKeyPrefix + name }
 func statusKey(resourceID string) string     { return statusKeyPrefix + resourceID }
 func groupStatusKey(groupName string) string { return statusKey(model.GroupStatusID(groupName)) }
 
-// 利用者が管理する `group#` アイテムの保存形状
-// 各フィールドを model の名前付き型ではなく素の string にしているのは、これが保存形状であり
-// ドメインの語彙との突き合わせを spec / newGroupItem の 2 か所に閉じるためである
+// 設定操作が管理する `group#` アイテムの保存形状
+// 各フィールドを model の名前付き型ではなく string とするのは、これが保存形状であり、
+// ドメインの語彙との対応づけを spec と newGroupItem の 2 か所へ限定するためである
 type groupItem struct {
 	PK        string   `dynamodbav:"pk"`
 	Mode      string   `dynamodbav:"mode,omitempty"`
@@ -52,13 +52,12 @@ func newGroupItem(spec model.GroupSpec) groupItem {
 }
 
 // アイテムをドメインの型へ復号する
-// グループ名は i.PK から解析し直さず、引数で受け取る
-// どの読み取り経路もすでに名前を知っている（キーを組み立てたか、scan 中に接頭辞と照合した）ためである
-// よって壊れたキーを扱う場合分けは残っていない
-// その検査が必要だったのは、ドメインの型が生のキーを持っていた頃の話である
+// グループ名は i.PK から解析せず、引数で受け取る
+// いずれの読み取り経路も、キーの組み立てまたは scan 中の接頭辞の照合により、すでに名前を保持するためである
+// したがって、壊れたキーに対する分岐を持たない
 //
-// 未知の mode や desired はここでは弾かない
-// 保存されたままの姿を返すのが GroupSpec の役目であり、妥当性を決めるのは model.ParseGroup である
+// 未知の mode と desired は、ここでは拒否しない
+// 保存された内容をそのまま返すことが GroupSpec の役割であり、妥当性の判定は model.ParseGroup が行う
 func (i groupItem) spec(name string) model.GroupSpec {
 	return model.GroupSpec{
 		Name:      name,
@@ -74,7 +73,7 @@ func (i groupItem) spec(name string) model.GroupSpec {
 }
 
 // `override#` アイテムの保存形状
-// expires_at はテーブルの TTL 属性も兼ねるので、失効した override は DynamoDB が自ら回収する
+// expires_at はテーブルの TTL 属性を兼ねるため、失効した override は DynamoDB が削除する
 type overrideItem struct {
 	Desired   string `dynamodbav:"desired"`
 	ExpiresAt int64  `dynamodbav:"expires_at"`
@@ -106,12 +105,12 @@ func (i statusItem) status() model.Status {
 }
 
 // status アイテムの部分更新
-// nil のフィールドはその属性に触れず、非 nil のフィールドはその値へ上書きする
-// クリアしたいときは空文字を指す（Set("") を参照）
+// nil のフィールドは対応する属性を変更せず、非 nil のフィールドはその値へ上書きする
+// 属性を空にする場合は空文字を指す (Set("") を参照)
 //
-// ポインタにしているのは「触らない」と「空にする」を型で区別するためである
-// 属性名とドメインの型の対応もここに閉じているので、アプリケーション層が DynamoDB の属性名を生文字列で書く経路はもう存在しない
-// 属性名の打ち間違いが黙って別の属性を生やす、という失敗の仕方がなくなる
+// ポインタとするのは、変更しないことと空にすることを型で区別するためである
+// 属性名とドメインの型の対応も本ファイルへ限定するため、アプリケーション層が DynamoDB の属性名を文字列で記述する経路は存在しない
+// これにより、属性名の誤記が別の属性の生成として現れることはない
 type StatusPatch struct {
 	ObservedState      *model.ObservedState
 	LastAction         *model.Action
@@ -121,8 +120,8 @@ type StatusPatch struct {
 	TransitioningSince *string
 }
 
-// StatusPatch のフィールドへ渡すポインタを作る
-// 「その属性を空にする」は Set("") であり、フィールドを nil のままにするのは「触らない」である
+// StatusPatch のフィールドへ渡すポインタを返す
+// 属性を空にする場合は Set("") とし、変更しない場合はフィールドを nil のままとする
 func Set[T ~string](v T) *T { return &v }
 
 // 保存属性名と値の組
@@ -131,9 +130,9 @@ type statusAttr struct {
 	value string
 }
 
-// パッチが設定しているフィールドを、保存属性名と値の組へ並べる
+// パッチが設定しているフィールドを、保存属性名と値の組として返す
 // 順序は決定的であり、statusItem の dynamodbav タグと 1 対 1 で対応する
-// status アイテムの属性はすべて文字列なので、値の型は 1 つで足りる
+// status アイテムの属性はすべて文字列であるため、値の型は 1 つで足りる
 func (p StatusPatch) attributes() []statusAttr {
 	var out []statusAttr
 	if p.ObservedState != nil {

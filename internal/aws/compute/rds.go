@@ -27,11 +27,11 @@ type RdsInstanceTarget struct {
 
 func (t *RdsInstanceTarget) Type() model.ResourceType { return model.TypeRdsInstance }
 
-// ステータスは RDS のレスポンスではポインタであり、nil で返ってくる余地がある
-// EC2 の State と同じく、状態が分からないものを running や stopped と決めつけて操作してはならないので飛ばす
-// 加えて、ここで nil を無条件に deref すると reconciler ごと panic する
-// reconciler は Lambda なので、それはリソース 1 件の失敗では済まず呼び出し全体を落とす
-// 1 件の失敗を他のリソースへ波及させないという不変条件（reconcile の TestOneFailureDoesNotBreakOthers）が、ここだけ成り立たなくなる
+// ステータスは RDS のレスポンスにおいてポインタであり、nil となりうる
+// EC2 の State と同じく、状態を判定できないインスタンスを running や stopped として操作してはならないため、スキップする
+// 加えて、nil を無条件に参照した場合は panic となる
+// reconciler は Lambda 上で動作するため、この panic はリソース 1 件の失敗にとどまらず呼び出し全体を失敗させる
+// 1 件の失敗を他のリソースへ波及させないという不変条件が成立しなくなる
 func (t *RdsInstanceTarget) Describe(ctx context.Context, ref string) (model.Observation, error) {
 	out, err := t.Client.DescribeDBInstances(ctx, &rds.DescribeDBInstancesInput{DBInstanceIdentifier: &ref})
 	if err != nil {
@@ -66,7 +66,7 @@ type RdsClusterTarget struct {
 
 func (t *RdsClusterTarget) Type() model.ResourceType { return model.TypeRdsCluster }
 
-// ステータスが nil のクラスタを飛ばす理由は RdsInstanceTarget.Describe と同じである
+// ステータスが nil のクラスタをスキップする理由は、RdsInstanceTarget.Describe と同じである
 func (t *RdsClusterTarget) Describe(ctx context.Context, ref string) (model.Observation, error) {
 	out, err := t.Client.DescribeDBClusters(ctx, &rds.DescribeDBClustersInput{DBClusterIdentifier: &ref})
 	if err != nil {
@@ -94,8 +94,8 @@ func (t *RdsClusterTarget) Start(ctx context.Context, res model.Resource) error 
 	return err
 }
 
-// available でも stopped でもない状態はすべて "transitioning" とする
-// reconciler は待たずにスキップし、次のサイクルで再試行する
+// available と stopped のいずれでもない状態は、すべて "transitioning" とする
+// reconciler は待機せずにスキップし、次のサイクルで再試行する
 func rdsObservation(rawStatus string) model.Observation {
 	switch rawStatus {
 	case "available":

@@ -16,7 +16,7 @@ func TestDecideAction(t *testing.T) {
 		{DesiredRunning, StateStopped, ActionStart},
 		{DesiredRunning, StateRunning, ActionNone}, // 収束済み
 		{DesiredStopped, StateStopped, ActionNone}, // 収束済み
-		// 遷移中と not-found はここでは何も決めない（呼び出し側が先に skip している）
+		// 遷移中と not-found については操作を決定しない (呼び出し側が事前に skip する)
 		{DesiredStopped, StateTransitioning, ActionNone},
 		{DesiredRunning, StateTransitioning, ActionNone},
 		{DesiredStopped, StateNotFound, ActionNone},

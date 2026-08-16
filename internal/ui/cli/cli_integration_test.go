@@ -20,7 +20,7 @@ import (
 )
 
 // JSON 出力を破棄して CLI を実行する
-// ここでのテストは結果として残る DynamoDB のアイテムを検証し、出力の形は main_test.go の単体テストが担保する
+// 本ファイルのテストは、結果として残る DynamoDB のアイテムを検証する。出力の形式は単体テストが検証する
 func runq(args []string) error { return Run(args, io.Discard) }
 
 func setup(t *testing.T) (*state.Store, string) {
@@ -44,7 +44,7 @@ func TestSetSelectorPinScheduleDisableRemoveLifecycle(t *testing.T) {
 	assert.Equal(t, "env", group.TagKey)
 	assert.Equal(t, []model.ResourceType{model.TypeRdsCluster}, group.Types)
 
-	// set-selector を再実行すると、セレクタの types を更新しつつ既存の mode と desired は read-modify-write で保たれなければならない
+	// set-selector の再実行は、セレクタの types を更新し、既存の mode と desired を read-modify-write により保持しなければならない
 	require.NoError(t, runq(args("set-selector", "--group", "dev", "--tag-key", "env", "--tag-value", "dev", "--types", "rds-cluster,ecs-service")))
 	group, err = s.GetGroup(ctx, "dev")
 	require.NoError(t, err)
@@ -59,7 +59,7 @@ func TestSetSelectorPinScheduleDisableRemoveLifecycle(t *testing.T) {
 	assert.Equal(t, model.ModeSchedule, group.Mode)
 	assert.Equal(t, "0 9 * * MON-FRI", group.StartCron)
 
-	// cron のフィールドが残っている状態の unpin は、それらを消さず mode=schedule へ戻さなければならない
+	// cron のフィールドが残っている状態の unpin は、それらを保持したまま mode=schedule へ戻さなければならない
 	require.NoError(t, runq(args("pin", "--group", "dev", "stopped")))
 	require.NoError(t, runq(args("unpin", "--group", "dev")))
 	group, err = s.GetGroup(ctx, "dev")
@@ -107,10 +107,10 @@ func TestOverrideLifecycle(t *testing.T) {
 	assert.Nil(t, o, "override after clear")
 }
 
-// 読み取り系の 3 コマンドは、その出力しか副作用を持たない
-// そのため他のテストは cmdList / cmdShow / cmdDoctor を直接呼んでおり、Run の switch を通っていない
-// つまり case のラベルを打ち間違えても、あるいは繋ぎ先を取り違えても、どのテストにも気づかれない
-// ここだけが実際のコマンド名からハンドラまでの結線を通す
+// 読み取り系の 3 コマンドは、出力以外の副作用を持たない
+// 他のテストは cmdList / cmdShow / cmdDoctor を直接呼び、Run の switch を経由しない
+// したがって、case のラベルの誤記と結線先の誤りは、他のテストでは検出されない
+// 本テストのみが、コマンド名からハンドラまでの結線を検証する
 func TestReadOnlyCommandsDispatchFromCommandName(t *testing.T) {
 	_, table := setup(t)
 	args := func(a ...string) []string { return append([]string{"-table", table}, a...) }
