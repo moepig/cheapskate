@@ -1,8 +1,8 @@
 # Lambda 上での実行形態(RIE / LWA)
 
-2 つの Lambda 関数は、いずれもコンテナイメージとしてデプロイする。このとき、Lambda ランタイムとの接続を本体外の部品が担う場合がある。関与する部品は次の 2 つである。
+2 つの Lambda 関数は、いずれもコンテナイメージとしてデプロイする。このとき、Lambda ランタイムとの接続を、本体の外にある LWA または RIE が行う場合がある。両者の位置づけと出現範囲を、以下にまとめる。
 
-| 部品 | 位置づけ | 出現範囲 |
+| 名称 | 位置づけ | 出現範囲 |
 |---|---|---|
 | LWA(Lambda Web Adapter) | Web コンソールのイメージに同梱する外部拡張 | 本番とローカルの両方 |
 | RIE(Runtime Interface Emulator) | ベースイメージに同梱されている Lambda 実行環境の代役 | ローカルのみ |
@@ -21,15 +21,15 @@ Lambda の実行環境は HTTP の API を 1 本立て、その所在を環境�
 
 ## 組み込み状況の一覧
 
-コンポーネントごとの、ランタイム API の担い手と部品の使用状況を、以下にまとめる。
+コンポーネントごとの、ランタイム API との接続方式と、LWA および RIE の使用状況を、以下にまとめる。
 
-| コンポーネント | ランタイム API を話すのは誰か | 本体の Lambda 依存 | LWA | RIE |
+| コンポーネント | ランタイム API との接続 | 本体の Lambda 依存 | LWA | RIE |
 |---|---|---|---|---|
 | reconciler | 本体にリンクした `aws-lambda-go` の `lambda.Start` | ハンドラ 1 つ | 入れない | ローカルのイメージテストのみ |
 | webconsole | 同梱の LWA(`/opt/extensions/lambda-adapter`) | なし。素の `http.ListenAndServe` | 同梱する | ローカルのイメージテストのみ |
 | cheapskate-cli | — | なし。Lambda では動かない | — | — |
 
-reconciler に LWA が入らないのは、`aws-lambda-go` でランタイム API を直接話すためである。webconsole は Lambda ランタイムのライブラリを一切リンクしないため、`lambda.norpc` ビルドタグも付かない。
+reconciler に LWA が入らないのは、`aws-lambda-go` によりランタイム API を直接処理するためである。webconsole は Lambda ランタイムのライブラリを一切リンクしないため、`lambda.norpc` ビルドタグも付かない。
 
 ## Lambda Web Adapter(LWA)
 
@@ -125,7 +125,7 @@ RIE が実際の Lambda 実行環境と異なる点を、以下に示す。
 
 ## 経路の比較
 
-reconciler — LWA は関与しない。ローカルとの差は、ランタイム API の担い手が Lambda 実行環境か RIE かだけである。
+reconciler — LWA は関与しない。ローカルとの差は、ランタイム API の提供元が Lambda 実行環境か RIE かだけである。
 
 ```mermaid
 flowchart LR

@@ -70,7 +70,7 @@ Enablement (`METRICS_ENABLED`) and the namespace (`METRICS_NAMESPACE`) are separ
 
 A value of `METRICS_ENABLED` that cannot be interpreted fails startup rather than falling back to the default. Reading a typo as enabled would keep charges running after they were supposedly turned off, leaving the bill as the only way to notice. While disabled, one `metrics-disabled` log line is written per cold start.
 
-The enabled/disabled decision belongs to the `cloudwatch.Emitter` type itself, so no caller writes the condition. There is more than one emission site, and repeating the same condition at each leaves room to forget one.
+The enabled/disabled decision belongs to the `cloudwatch.Emitter` type itself, so no caller writes the condition. There is more than one emission site, and repeating the same condition at each admits omitting one.
 
 Disabling loses the counts and the trends, nothing else. What remains and what is lost are collected below.
 

@@ -1,8 +1,8 @@
 # Running on Lambda (RIE / LWA)
 
-Both Lambda functions are deployed as container images, and in that form a component outside the application itself may handle the connection to the Lambda runtime. Two such components are involved.
+Both Lambda functions are deployed as container images, and in that form the connection to the Lambda runtime may be handled by the LWA or the RIE, which sit outside the application itself. What each is and where it appears are collected below.
 
-| Component | What it is | Where it appears |
+| Name | What it is | Where it appears |
 |---|---|---|
 | LWA (Lambda Web Adapter) | An external extension bundled into the web console image | Both production and locally |
 | RIE (Runtime Interface Emulator) | A stand-in for the Lambda execution environment, bundled in the base image | Locally only |
@@ -21,9 +21,9 @@ The other mechanism is external extensions. Executables under `/opt/extensions/`
 
 ## Integration summary
 
-Which component speaks the runtime API, and which parts are in use, is collected below.
+How each component connects to the runtime API, and where the LWA and the RIE are in use, is collected below.
 
-| Component | Who speaks the runtime API | Lambda dependency in the app | LWA | RIE |
+| Component | Connection to the runtime API | Lambda dependency in the app | LWA | RIE |
 |---|---|---|---|---|
 | reconciler | `lambda.Start` from `aws-lambda-go`, linked into the binary | One handler | Not included | Local image tests only |
 | webconsole | The bundled LWA (`/opt/extensions/lambda-adapter`) | None; a plain `http.ListenAndServe` | Bundled | Local image tests only |

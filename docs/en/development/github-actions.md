@@ -86,6 +86,6 @@ The changes to a workflow that leave the run succeeding while quietly losing its
 | Removing `cooldown` from `dependabot.yml` | Versions published moments ago become eligible and reach `main` through auto-merge without review |
 | Filtering `release-snapshot` with `on.paths` instead of the internal condition | The check stops reporting on pull requests that do not match, and a pull request requiring it waits forever on a result that never arrives |
 
-## Parts outside `.github/`
+## Files outside `.github/`
 
 The rest of the release path lives outside `.github/`. The `.goreleaser.yaml` at the repository root defines what a release produces, and `build/Dockerfile.reconciler` and `build/Dockerfile.webconsole` assemble the published images.

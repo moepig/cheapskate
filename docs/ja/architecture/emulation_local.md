@@ -16,9 +16,9 @@ LocalStack Community 互換のエミュレータである。LocalStack Community
 | ヘルスチェック | `/_localstack/health` |
 | docker ソケット | マウントする。RDS/ECS のエミュレーションが実コンテナを起動するため |
 
-起動経路は 2 つあり、どちらも同じエンドポイントを提供する。それぞれの起動主体と用途を、以下に示す。
+起動経路は 2 つあり、どちらも同じエンドポイントを提供する。それぞれの起動元と用途を、以下に示す。
 
-| 経路 | 起動主体 | 用途 |
+| 経路 | 起動元 | 用途 |
 |---|---|---|
 | `compose.yaml` | docker compose | ソースから各コンポーネントを起動する場合 |
 | testcontainers-go | テストバイナリ | 統合テストとイメージテスト |
@@ -60,4 +60,4 @@ RDS/EC2 のダミーリソースは持たない。Tagging API の対応も限定
 
 ### イメージのビルドを docker CLI に委ねる理由
 
-testcontainers-go のイメージビルドは旧 `/build` API を通るため、BuildKit 前提のこの `Dockerfile` を解釈できない。BuildKit を選ぶ指定を加えても、セッションを張るのは docker CLI の仕事であるため、クライアントライブラリ単体では失敗する。
+testcontainers-go のイメージビルドは旧 `/build` API を通るため、BuildKit 前提のこの `Dockerfile` を解釈できない。BuildKit を選ぶ指定を加えても、セッションの確立を行うのは docker CLI であるため、クライアントライブラリ単体では失敗する。

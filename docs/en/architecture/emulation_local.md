@@ -60,4 +60,4 @@ No platform is specified for the build. The RIE runs the container on the host's
 
 ### Why the image build is delegated to the docker CLI
 
-testcontainers-go builds images through the old `/build` API, which cannot interpret this BuildKit-based `Dockerfile`. Adding an option that selects BuildKit does not help either, because establishing the session is the docker CLI's job and the client library alone fails at it.
+testcontainers-go builds images through the old `/build` API, which cannot interpret this BuildKit-based `Dockerfile`. Adding an option that selects BuildKit does not help either, because the docker CLI is what establishes the session, and the client library alone fails at it.

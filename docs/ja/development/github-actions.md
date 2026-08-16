@@ -86,6 +86,6 @@ action はすべてタグではなく完全なコミット SHA で固定する�
 | `dependabot.yml` から `cooldown` を外す | 公開直後のバージョンが対象となり、レビューを経ないまま自動マージ経路で `main` に入る |
 | `release-snapshot` を内部の条件分岐ではなく `on.paths` で絞る | 条件に合わない pull request でチェックが報告されなくなり、それを必須とした pull request は到達しない結果を待ち続ける |
 
-## `.github/` の外にある構成要素
+## `.github/` の外にあるファイル
 
 リリース経路の残りは `.github/` の外にある。リポジトリルートの `.goreleaser.yaml` がリリースの生成物を定義し、`build/Dockerfile.reconciler` と `build/Dockerfile.webconsole` が公開されるイメージを組み立てる。
