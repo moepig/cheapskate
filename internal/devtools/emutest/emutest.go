@@ -48,6 +48,9 @@ func init() {
 // コンテナを 1 つ共有することにより、この両方を回避する
 const ContainerName = "cheapskate-itest-floci"
 
+// Docker ソケットへ接続できる Floci の内容がタグの更新だけで変わらないよう、manifest list の digest を固定する。
+const flociImage = "floci/floci:latest@sha256:bec9b9f749322444a57fb0f00d3e007ffd49015162361aab84ccecd9b4f5f8ed"
+
 // 共有の Floci コンテナを起動する。並行するテストバイナリまたは過去の実行が起動済みの場合は、それへ接続する
 // init() で Ryuk を無効化するため、回収は発生しない
 // コンテナはテストセッションより長く存続し、次のセッションが再利用する
@@ -55,7 +58,7 @@ const ContainerName = "cheapskate-itest-floci"
 func startFloci(ctx context.Context) (string, error) {
 	req := testcontainers.ContainerRequest{
 		Name:         ContainerName,
-		Image:        "floci/floci:latest",
+		Image:        flociImage,
 		ExposedPorts: []string{"4566/tcp"},
 		WaitingFor:   wait.ForHTTP("/_localstack/health").WithPort("4566/tcp").WithStartupTimeout(2 * time.Minute),
 		ConfigModifier: func(c *container.Config) {
@@ -64,6 +67,8 @@ func startFloci(ctx context.Context) (string, error) {
 		// RDS/ECS のエミュレーションはコンテナを起動するため、docker ソケットを要する (compose.yaml と同じ)
 		HostConfigModifier: func(hc *container.HostConfig) {
 			hc.Binds = append(hc.Binds, "/var/run/docker.sock:/var/run/docker.sock")
+			hc.CapDrop = append(hc.CapDrop, "ALL")
+			hc.SecurityOpt = append(hc.SecurityOpt, "no-new-privileges")
 		},
 	}
 	c, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
