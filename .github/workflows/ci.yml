@@ -54,7 +54,7 @@ jobs:
         with:
           go-version-file: go.mod
       - if: steps.scope.outputs.affected == 'true'
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
       # `--snapshot` rather than `--skip=publish`: dockers_v2 builds and pushes in one step, so
       # skipping publication would skip the image build too, which is the part worth testing.
       - if: steps.scope.outputs.affected == 'true'
