@@ -4,7 +4,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log"
 	"log/slog"
 	"os"
@@ -97,15 +96,8 @@ func main() {
 			{Name: "ReconcileActions", Value: len(summary.Actions)},
 			{Name: "ReconcileErrors", Value: len(summary.Errors)},
 		})
-		// リソース単位・グループ単位の失敗を Lambda の Errors メトリクスへ反映する
-		// Run はこれらの失敗で中断しない
-		// 1 件の失敗が残りの収束を止めないことと、その結果を呼び出し側へ報告することは独立している
-		//
-		// EventBridge の非同期リトライにより同じフル reconcile が最大 2 回追加で実行される
-		// 収束済みのリソースにアクションは発生せず、継続中のエラーは通知の重複排除に該当するため、通知は増えない
-		if len(summary.Errors) > 0 {
-			return summary, fmt.Errorf("reconcile completed with %d resource-level error(s); see status# last_error and the SNS notifications", len(summary.Errors))
-		}
+		// リソース単位・グループ単位の失敗は Summary、status、通知で報告し、Lambda 呼び出し自体は成功とする。
+		// ここでエラーを返すと EventBridge が全体 reconcile を再送し、正常に処理できたリソースまで再探索するためである。
 		return summary, nil
 	})
 }
