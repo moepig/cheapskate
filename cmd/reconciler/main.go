@@ -30,9 +30,9 @@ const defaultMetricsNamespace = "cheapskate"
 // 1 つにまとめると、未設定と空文字列で意味が変わる規約が必要になる
 // 他の環境変数は両者を区別しないため、この変数だけが異なる規約を持つことになる
 //
-// METRICS_ENABLED の既定は true である
-// EMF から生成されるメトリクスはカスタムメトリクスとして課金されるため、明示的に無効化できる
-// 無効化で失われるのは件数と推移であり、失敗の検知は Lambda 組み込みの Errors メトリクスと SNS 通知が担う
+// METRICS_ENABLED の既定は false である
+// EMF から生成されるメトリクスはカスタムメトリクスとして課金されるため、明示的に有効化した環境だけで発行する
+// 無効化で失われるのは件数と推移であり、失敗の検知は status、ログ、SNS 通知が担う
 //
 // 解釈できない METRICS_ENABLED は既定へ倒さず起動を失敗させる
 // 既定へ倒すと、無効化したつもりの設定が有効なまま課金され、それを検知する手段が請求書だけになる
@@ -41,7 +41,7 @@ func metricsEmitter(logger *slog.Logger) cloudwatch.Emitter {
 	if namespace == "" {
 		namespace = defaultMetricsNamespace
 	}
-	enabled := true
+	enabled := false
 	if raw := os.Getenv("METRICS_ENABLED"); raw != "" {
 		var err error
 		if enabled, err = strconv.ParseBool(raw); err != nil {
@@ -70,7 +70,7 @@ func main() {
 	metrics := metricsEmitter(logger)
 	if !metrics.Enabled {
 		// メトリクスが出力されない原因を特定するため、コールドスタートごとに 1 行記録する
-		logger.Info("metrics-disabled", "reason", "METRICS_ENABLED is false")
+		logger.Info("metrics-disabled", "reason", "METRICS_ENABLED is not true")
 	}
 	deps := &reconcile.Deps{
 		Store:           state.New(dynamodb.NewFromConfig(cfg), table),
