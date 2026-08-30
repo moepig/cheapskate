@@ -54,7 +54,8 @@ type Finding struct {
 	Kind     Kind   `json:"kind"`
 	Group    string `json:"group,omitempty"`
 	Resource string `json:"resource,omitempty"` // model.Resource.ID() 形式
-	PK       string `json:"pk,omitempty"`       // DynamoDB キー (手作業の delete-item 用)
+	PK       string `json:"pk,omitempty"`
+	SK       string `json:"sk,omitempty"`
 	Detail   string `json:"detail"`
 	Prunable bool   `json:"prunable"` // Kind から導出する (pruners を参照) ため、呼び出し側では設定しない
 	Pruned   bool   `json:"pruned,omitempty"`
@@ -164,13 +165,13 @@ func (r *Report) inspectGroup(ctx context.Context, d port.Discoverer, row state.
 		// グループの不在が Scan だけで確定するため、削除して差し支えない
 		if row.Override != nil {
 			r.add(Finding{
-				Kind: KindOrphanOverride, Group: row.Name, PK: state.OverridePK(row.Name),
+				Kind: KindOrphanOverride, Group: row.Name, PK: state.OverridePK(row.Name), SK: state.OverrideSK(row.Name),
 				Detail: fmt.Sprintf("override desired=%s expires_at=%s but group %q is not registered", row.Override.Desired, time.Unix(row.Override.ExpiresAt, 0).UTC().Format(time.RFC3339), row.Name),
 			})
 		}
 		if row.Status != (model.Status{}) {
 			r.add(Finding{
-				Kind: KindOrphanGroupStatus, Group: row.Name, PK: state.GroupStatusPK(row.Name),
+				Kind: KindOrphanGroupStatus, Group: row.Name, PK: state.GroupStatusPK(row.Name), SK: state.GroupStatusSK(),
 				Detail: fmt.Sprintf("group-level status record left behind; group %q is not registered", row.Name),
 			})
 		}
@@ -180,7 +181,7 @@ func (r *Report) inspectGroup(ctx context.Context, d port.Discoverer, row state.
 	if _, err := model.ParseGroup(row.Group); err != nil {
 		// reconciler はこのグループに従えない
 		// セレクタ自体は妥当な場合があるため、探索は以降で別途試行する
-		r.add(Finding{Kind: KindConfigError, Group: row.Name, PK: state.GroupPK(row.Name), Detail: err.Error()})
+		r.add(Finding{Kind: KindConfigError, Group: row.Name, PK: state.GroupPK(row.Name), SK: state.GroupSK(row.Name), Detail: err.Error()})
 	}
 
 	sel := row.Group.Selector()
@@ -230,7 +231,7 @@ func (r *Report) checkOrphanStatuses(statuses map[string]model.Status, owners ma
 			continue
 		}
 		r.add(Finding{
-			Kind: KindOrphanStatus, Resource: id, PK: state.StatusPK(id),
+			Kind: KindOrphanStatus, Resource: id, PK: state.StatusPK(id), SK: state.StatusSK(),
 			Detail: fmt.Sprintf("status record for %s, which matches no group's selector", id),
 		})
 	}
@@ -248,7 +249,7 @@ func (r *Report) checkStuck(statuses map[string]model.Status, owners map[string]
 		since, err := time.Parse(time.RFC3339, st.TransitioningSince)
 		if err != nil {
 			r.add(Finding{
-				Kind: KindCorruptRecord, Resource: id, PK: state.StatusPK(id),
+				Kind: KindCorruptRecord, Resource: id, PK: state.StatusPK(id), SK: state.StatusSK(),
 				Detail: fmt.Sprintf("transitioning_since %q is not RFC3339: %v", st.TransitioningSince, err),
 			})
 			continue
@@ -258,7 +259,7 @@ func (r *Report) checkStuck(statuses map[string]model.Status, owners map[string]
 			continue
 		}
 		f := Finding{
-			Kind: KindStuckTransitioning, Resource: id, PK: state.StatusPK(id),
+			Kind: KindStuckTransitioning, Resource: id, PK: state.StatusPK(id), SK: state.StatusSK(),
 			Detail: fmt.Sprintf("transitioning for %s (since %s); the reconciler skips it every cycle", elapsed.Round(time.Minute), st.TransitioningSince),
 		}
 		if g := owners[id]; len(g) > 0 {

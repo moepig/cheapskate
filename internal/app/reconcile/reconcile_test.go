@@ -122,6 +122,20 @@ func TestStopsRunningPinnedResource(t *testing.T) {
 	assert.Equal(t, "[cheapskate] stop: dev-db/rds-instance#dev-db", f.notifier.Published[0].Subject)
 }
 
+// 定常reconcileは設定のQueryとstatusのBatchGetItemを使用し、全件Scanとリソース単位のGetItemを行わない。
+func TestRunDoesNotScanOrReadStatusesOneByOne(t *testing.T) {
+	f := newFixture(t)
+	f.pinnedStoppedGroup("dev-db", rdsInstance("dev-db"))
+	f.rds.Observations["dev-db"] = model.Observation{State: model.StateStopped}
+
+	runEmpty(t, f)
+
+	assert.Equal(t, 1, f.db.Calls("query"))
+	assert.Equal(t, 2, f.db.Calls("batch-get"), "グループstatusとリソースstatusをそれぞれ一括取得する")
+	assert.Zero(t, f.db.Calls("scan"))
+	assert.Zero(t, f.db.Calls("get"))
+}
+
 // model.TypeEc2Instance を Deps.Targets 内の Target へ解決する経路を検証する
 // 他の種別と同じ pin/stop のディスパッチを、ec2-instance についても通す
 func TestStopsRunningPinnedEc2Instance(t *testing.T) {
@@ -808,21 +822,19 @@ func TestRecoveredNotifyFailureLeavesErrorCleared(t *testing.T) {
 		"PutStatus は成功しているので last_error は消えたままでなければならない")
 }
 
-// 通知の重複排除は前回の last_error との一致で決まるため、前回を読めない場合は判定できない
-// 読めない場合を一致として扱うと、初回の通知も抑止される
-// 判定できない場合は通知を行い、読めなかった事実をログへ記録する
-func TestErrorReportingNotifiesWhenPreviousStatusCannotBeRead(t *testing.T) {
+// 復号できないグループstatusは設定行のエラーとして報告し、初回の通知を抑止しない。
+func TestMalformedPreviousStatusIsReportedAndNotified(t *testing.T) {
 	f := newFixture(t)
-	var logBuf bytes.Buffer
-	f.deps.Log = slog.New(slog.NewTextHandler(&logBuf, nil))
-	f.seedGroup("dev", model.ModeSchedule, "") // start/stop の cron がないため resolveGroup が失敗する
-	f.db.FailOn("get", "status#group#dev", fmt.Errorf("dynamodb unavailable"))
+	f.seedGroup("dev", model.ModePinned, model.DesiredStopped)
+	f.db.Seed(map[string]types.AttributeValue{
+		"pk": s("status#group#dev"), "last_error": &types.AttributeValueMemberBOOL{Value: true},
+	})
 
 	summary := runEmpty(t, f)
 
 	require.Len(t, summary.Errors, 1)
-	assert.Contains(t, logBuf.String(), "status-read-failed")
-	assert.Len(t, f.notifier.Published, 1, "重複排除を判定できない場合は通知する")
+	assert.Contains(t, summary.Errors[0].Error, "unmarshal status group#dev")
+	assert.Len(t, f.notifier.Published, 1, "復号できないstatusも通知する")
 }
 
 // 起動が成立しない失敗は、空の Summary による成功ではなく Run のエラーとする
@@ -839,10 +851,10 @@ func TestRunAbortsOnUnusableInput(t *testing.T) {
 		assert.Zero(t, f.discoverer.Calls(), "イベントが読めない時点で何も収束させてはならない")
 	})
 
-	t.Run("scan failure", func(t *testing.T) {
+	t.Run("query failure", func(t *testing.T) {
 		f := newFixture(t)
 		f.pinnedStoppedGroup("dev-db", rdsInstance("dev-db"))
-		f.db.FailOn("scan", "", fmt.Errorf("dynamodb unavailable"))
+		f.db.FailOn("query", "", fmt.Errorf("dynamodb unavailable"))
 
 		_, err := Run(context.Background(), json.RawMessage(`{}`), f.deps, now)
 

@@ -500,7 +500,8 @@ func TestDoctorPageListsFindings(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 	body := rec.Body.String()
 	assert.Contains(t, body, "orphan-override")
-	assert.Contains(t, body, "override#ghost", "the raw key lets an operator delete it by hand")
+	assert.Contains(t, body, "pk=CONFIG", "the raw partition key lets an operator delete it by hand")
+	assert.Contains(t, body, "sk=OVERRIDE#ghost", "the raw sort key lets an operator delete it by hand")
 	assert.Contains(t, body, "Prune 1 record(s)")
 }
 

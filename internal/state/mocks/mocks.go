@@ -41,6 +41,50 @@ func (m *MockAPI) EXPECT() *MockAPIMockRecorder {
 	return m.recorder
 }
 
+// BatchGetItem mocks base method.
+func (m *MockAPI) BatchGetItem(ctx context.Context, in *dynamodb.BatchGetItemInput, opts ...func(*dynamodb.Options)) (*dynamodb.BatchGetItemOutput, error) {
+	m.ctrl.T.Helper()
+	varargs := []any{ctx, in}
+	for _, a := range opts {
+		varargs = append(varargs, a)
+	}
+	ret := m.ctrl.Call(m, "BatchGetItem", varargs...)
+	ret0, _ := ret[0].(*dynamodb.BatchGetItemOutput)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// BatchGetItem indicates an expected call of BatchGetItem.
+func (mr *MockAPIMockRecorder) BatchGetItem(ctx, in any, opts ...any) *MockAPIBatchGetItemCall {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]any{ctx, in}, opts...)
+	call := mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BatchGetItem", reflect.TypeOf((*MockAPI)(nil).BatchGetItem), varargs...)
+	return &MockAPIBatchGetItemCall{Call: call}
+}
+
+// MockAPIBatchGetItemCall wrap *gomock.Call
+type MockAPIBatchGetItemCall struct {
+	*gomock.Call
+}
+
+// Return rewrite *gomock.Call.Return
+func (c *MockAPIBatchGetItemCall) Return(arg0 *dynamodb.BatchGetItemOutput, arg1 error) *MockAPIBatchGetItemCall {
+	c.Call = c.Call.Return(arg0, arg1)
+	return c
+}
+
+// Do rewrite *gomock.Call.Do
+func (c *MockAPIBatchGetItemCall) Do(f func(context.Context, *dynamodb.BatchGetItemInput, ...func(*dynamodb.Options)) (*dynamodb.BatchGetItemOutput, error)) *MockAPIBatchGetItemCall {
+	c.Call = c.Call.Do(f)
+	return c
+}
+
+// DoAndReturn rewrite *gomock.Call.DoAndReturn
+func (c *MockAPIBatchGetItemCall) DoAndReturn(f func(context.Context, *dynamodb.BatchGetItemInput, ...func(*dynamodb.Options)) (*dynamodb.BatchGetItemOutput, error)) *MockAPIBatchGetItemCall {
+	c.Call = c.Call.DoAndReturn(f)
+	return c
+}
+
 // DeleteItem mocks base method.
 func (m *MockAPI) DeleteItem(ctx context.Context, in *dynamodb.DeleteItemInput, opts ...func(*dynamodb.Options)) (*dynamodb.DeleteItemOutput, error) {
 	m.ctrl.T.Helper()
@@ -169,6 +213,50 @@ func (c *MockAPIPutItemCall) Do(f func(context.Context, *dynamodb.PutItemInput, 
 
 // DoAndReturn rewrite *gomock.Call.DoAndReturn
 func (c *MockAPIPutItemCall) DoAndReturn(f func(context.Context, *dynamodb.PutItemInput, ...func(*dynamodb.Options)) (*dynamodb.PutItemOutput, error)) *MockAPIPutItemCall {
+	c.Call = c.Call.DoAndReturn(f)
+	return c
+}
+
+// Query mocks base method.
+func (m *MockAPI) Query(ctx context.Context, in *dynamodb.QueryInput, opts ...func(*dynamodb.Options)) (*dynamodb.QueryOutput, error) {
+	m.ctrl.T.Helper()
+	varargs := []any{ctx, in}
+	for _, a := range opts {
+		varargs = append(varargs, a)
+	}
+	ret := m.ctrl.Call(m, "Query", varargs...)
+	ret0, _ := ret[0].(*dynamodb.QueryOutput)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// Query indicates an expected call of Query.
+func (mr *MockAPIMockRecorder) Query(ctx, in any, opts ...any) *MockAPIQueryCall {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]any{ctx, in}, opts...)
+	call := mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Query", reflect.TypeOf((*MockAPI)(nil).Query), varargs...)
+	return &MockAPIQueryCall{Call: call}
+}
+
+// MockAPIQueryCall wrap *gomock.Call
+type MockAPIQueryCall struct {
+	*gomock.Call
+}
+
+// Return rewrite *gomock.Call.Return
+func (c *MockAPIQueryCall) Return(arg0 *dynamodb.QueryOutput, arg1 error) *MockAPIQueryCall {
+	c.Call = c.Call.Return(arg0, arg1)
+	return c
+}
+
+// Do rewrite *gomock.Call.Do
+func (c *MockAPIQueryCall) Do(f func(context.Context, *dynamodb.QueryInput, ...func(*dynamodb.Options)) (*dynamodb.QueryOutput, error)) *MockAPIQueryCall {
+	c.Call = c.Call.Do(f)
+	return c
+}
+
+// DoAndReturn rewrite *gomock.Call.DoAndReturn
+func (c *MockAPIQueryCall) DoAndReturn(f func(context.Context, *dynamodb.QueryInput, ...func(*dynamodb.Options)) (*dynamodb.QueryOutput, error)) *MockAPIQueryCall {
 	c.Call = c.Call.DoAndReturn(f)
 	return c
 }

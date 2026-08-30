@@ -24,18 +24,18 @@ import (
 // status# アイテムを所有するのは reconciler であり、CLI と web console にとっては読み取り専用である
 // 型で限定することにより、設定操作から監査証跡を書き換える経路が存在しなくなる
 type Store interface {
-	ScanAll(ctx context.Context, now time.Time) (state.ScanResult, error)
+	ListGroups(ctx context.Context, now time.Time) ([]state.GroupRow, error)
+	GetGroupRow(ctx context.Context, name string, now time.Time) (state.GroupRow, error)
+	GetStatuses(ctx context.Context, resourceIDs []string) (map[string]state.StatusRecord, error)
 	GetGroup(ctx context.Context, name string) (*model.GroupSpec, error)
-	PutGroup(ctx context.Context, spec model.GroupSpec) error
+	UpdateGroup(ctx context.Context, name string, patch state.GroupPatch) error
 	PutOverride(ctx context.Context, group string, o model.Override) error
 	DeleteGroup(ctx context.Context, name string) error
 	DeleteOverride(ctx context.Context, name string) error
 	DeleteGroupStatus(ctx context.Context, name string) error
 }
 
-// ターゲットグループ 1 件と、その override およびグループ単位のステータス
-// 1 回の ScanAll から組み立て、リソースの動的探索は行わない
-// List を Scan 1 回に保つためであり、探索は GetDetail が 1 グループずつ行う
+// ターゲットグループ1件と、そのoverrideおよびグループ単位のstatus。
 // override、group#、group-status のいずれかが壊れている場合は Err を設定する
 // この場合も行自体は返し、一覧全体を失敗させない
 type GroupRow struct {
@@ -50,12 +50,12 @@ type GroupRow struct {
 // グループごとの GetItem ではなく、Scan 1 回 (state.ScanAll) で取得する
 // override やステータスが存在し group# アイテムが存在しない名前は孤立データとみなし、結果に含めない
 func List(ctx context.Context, s Store, now time.Time) ([]GroupRow, error) {
-	sr, err := s.ScanAll(ctx, now)
+	stored, err := s.ListGroups(ctx, now)
 	if err != nil {
 		return nil, err
 	}
-	rows := make([]GroupRow, 0, len(sr.Groups))
-	for _, gr := range sr.Groups {
+	rows := make([]GroupRow, 0, len(stored))
+	for _, gr := range stored {
 		if !gr.HasGroup {
 			continue
 		}
@@ -100,18 +100,11 @@ func GetDetail(ctx context.Context, s Store, d port.Discoverer, describers map[m
 	if err := model.ValidGroupName(group); err != nil {
 		return GroupDetail{}, err
 	}
-	sr, err := s.ScanAll(ctx, now)
+	row, err := s.GetGroupRow(ctx, group, now)
 	if err != nil {
 		return GroupDetail{}, err
 	}
-	var row *state.GroupRow
-	for i := range sr.Groups {
-		if sr.Groups[i].Name == group && sr.Groups[i].HasGroup {
-			row = &sr.Groups[i]
-			break
-		}
-	}
-	if row == nil {
+	if !row.HasGroup {
 		return GroupDetail{}, fmt.Errorf("group %q is not registered", group)
 	}
 	detail := GroupDetail{Name: row.Name, Group: row.Group, Override: row.Override, Status: row.Status, Err: row.Err}
@@ -125,9 +118,17 @@ func GetDetail(ctx context.Context, s Store, d port.Discoverer, describers map[m
 		detail.DiscoverErr = derr
 		return detail, nil
 	}
+	ids := make([]string, 0, len(resources))
+	for _, resource := range resources {
+		ids = append(ids, resource.ID())
+	}
+	statuses, err := s.GetStatuses(ctx, ids)
+	if err != nil {
+		return GroupDetail{}, err
+	}
 	rows := make([]ResourceRow, 0, len(resources))
 	for _, r := range resources {
-		row := ResourceRow{Resource: r, Status: sr.Statuses[r.ID()]}
+		row := ResourceRow{Resource: r, Status: statuses[r.ID()].Status}
 		if describer, ok := describers[r.Type]; ok {
 			if obs, err := describer.Describe(ctx, r.Ref); err != nil {
 				row.LiveErr = err
@@ -160,7 +161,11 @@ func SetSelector(ctx context.Context, s Store, group string, sel model.Selector)
 	if err != nil {
 		return false, err
 	}
-	if err := s.PutGroup(ctx, next); err != nil {
+	patch := state.GroupPatch{TagKey: state.Set(next.TagKey), TagValue: state.Set(next.TagValue), Types: state.Set(next.Types)}
+	if existing == nil {
+		patch.Mode = state.Set(next.Mode)
+	}
+	if err := s.UpdateGroup(ctx, group, patch); err != nil {
 		return false, err
 	}
 	return existing == nil, nil
@@ -198,7 +203,7 @@ func Pin(ctx context.Context, s Store, group string, desired model.DesiredState)
 	if err != nil {
 		return err
 	}
-	return s.PutGroup(ctx, next)
+	return s.UpdateGroup(ctx, group, state.GroupPatch{Mode: state.Set(next.Mode), Desired: state.Set(next.Desired)})
 }
 
 // mode=pinned を解除し、書き込んだアイテムを返す
@@ -211,7 +216,7 @@ func Unpin(ctx context.Context, s Store, group string) (model.GroupSpec, error) 
 	if err != nil {
 		return model.GroupSpec{}, err
 	}
-	if err := s.PutGroup(ctx, next); err != nil {
+	if err := s.UpdateGroup(ctx, group, state.GroupPatch{Mode: state.Set(next.Mode)}); err != nil {
 		return model.GroupSpec{}, err
 	}
 	return next, nil
@@ -227,7 +232,10 @@ func Schedule(ctx context.Context, s Store, group string, spec model.ScheduleSpe
 	if err != nil {
 		return model.GroupSpec{}, err
 	}
-	if err := s.PutGroup(ctx, next); err != nil {
+	if err := s.UpdateGroup(ctx, group, state.GroupPatch{
+		Mode: state.Set(next.Mode), Desired: state.Set(next.Desired), StartCron: state.Set(next.StartCron),
+		StopCron: state.Set(next.StopCron), Timezone: state.Set(next.Timezone),
+	}); err != nil {
 		return model.GroupSpec{}, err
 	}
 	return next, nil
@@ -239,7 +247,8 @@ func Disable(ctx context.Context, s Store, group string) error {
 	if err != nil {
 		return err
 	}
-	return s.PutGroup(ctx, existing.Disabled())
+	next := existing.Disabled()
+	return s.UpdateGroup(ctx, group, state.GroupPatch{Mode: state.Set(next.Mode)})
 }
 
 // グループに期限付きの override を書き込み、その失効時刻を返す

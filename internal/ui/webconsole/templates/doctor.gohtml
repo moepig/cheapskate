@@ -23,7 +23,7 @@
     <td>{{with .Group}}<a href="{{$.Base}}/group?name={{.}}">{{.}}</a>{{else}}<span class="muted">-</span>{{end}}</td>
     <td>{{with .Resource}}<code>{{.}}</code>{{else}}<span class="muted">-</span>{{end}}</td>
     <td class="danger">{{.Detail}}</td>
-    <td>{{with .PK}}<code>{{.}}</code>{{else}}<span class="muted">-</span>{{end}}</td>
+    <td>{{if .PK}}<code>pk={{.PK}}<br>sk={{.SK}}</code>{{else}}<span class="muted">-</span>{{end}}</td>
   </tr>
   {{else}}
   <tr><td colspan="5" class="muted">Nothing to report — the state table is consistent.</td></tr>

@@ -2,6 +2,7 @@ package state
 
 import (
 	"context"
+	"fmt"
 	"maps"
 	"testing"
 	"time"
@@ -17,6 +18,16 @@ import (
 
 func s[T ~string](v T) types.AttributeValue { return &types.AttributeValueMemberS{Value: string(v)} }
 
+func seeded(k itemKey, attrs map[string]types.AttributeValue) map[string]types.AttributeValue {
+	item := marshalKey(k)
+	maps.Copy(item, attrs)
+	return item
+}
+
+func stored(db *mocks.DynaStore, k itemKey) map[string]types.AttributeValue {
+	return db.Item(k.PK, k.SK)
+}
+
 func newFixture(t *testing.T) (*mocks.DynaStore, *Store) {
 	t.Helper()
 	ctrl := gomock.NewController(t)
@@ -25,21 +36,15 @@ func newFixture(t *testing.T) (*mocks.DynaStore, *Store) {
 }
 
 func seedGroup(db *mocks.DynaStore, name string, mode model.Mode, desired model.DesiredState) {
-	db.Seed(map[string]types.AttributeValue{
-		"pk": s(groupKey(name)), "mode": s(string(mode)), "desired": s(string(desired)),
-	})
+	db.Seed(seeded(groupKey(name), map[string]types.AttributeValue{"mode": s(string(mode)), "desired": s(string(desired))}))
 }
 
 func seedGroupStatus(db *mocks.DynaStore, name string, attrs map[string]types.AttributeValue) {
-	item := map[string]types.AttributeValue{"pk": s(groupStatusKey(name))}
-	maps.Copy(item, attrs)
-	db.Seed(item)
+	db.Seed(seeded(groupStatusKey(name), attrs))
 }
 
 func seedStatus(db *mocks.DynaStore, resourceID string, attrs map[string]types.AttributeValue) {
-	item := map[string]types.AttributeValue{"pk": s(statusKey(resourceID))}
-	maps.Copy(item, attrs)
-	db.Seed(item)
+	db.Seed(seeded(statusKey(resourceID), attrs))
 }
 
 // ScanAll は LastEvaluatedKey を用いて Scan をページ送りしなければならない
@@ -56,14 +61,49 @@ func TestScanAllPagesThroughScan(t *testing.T) {
 	assert.Len(t, res.Groups, 3)
 }
 
+// 通常のグループ一覧は設定partitionのQueryと、グループstatusのBatchGetItemだけで構成する。
+// status履歴の件数が定常読み取りへ影響しないため、Scanを呼んではならない。
+func TestListGroupsDoesNotScanStatusHistory(t *testing.T) {
+	db, st := newFixture(t)
+	seedGroup(db, "dev", model.ModePinned, model.DesiredStopped)
+	seedGroupStatus(db, "dev", map[string]types.AttributeValue{"last_error": s("boom")})
+	for i := range 150 {
+		seedStatus(db, fmt.Sprintf("rds-instance#old-%03d", i), map[string]types.AttributeValue{"last_action": s("stop")})
+	}
+
+	rows, err := st.ListGroups(context.Background(), time.Now())
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "boom", rows[0].Status.LastError)
+	assert.Equal(t, 1, db.Calls("query"))
+	assert.Equal(t, 1, db.Calls("batch-get"))
+	assert.Zero(t, db.Calls("scan"))
+}
+
+// DynamoDBのBatchGetItemは1回に100キーまでであるため、101件のstatusを2回に分割する。
+func TestGetStatusesBatchesAtOneHundredKeys(t *testing.T) {
+	db, st := newFixture(t)
+	ids := make([]string, 0, 101)
+	for i := range 101 {
+		id := fmt.Sprintf("rds-instance#db-%03d", i)
+		ids = append(ids, id)
+		seedStatus(db, id, map[string]types.AttributeValue{"last_action": s("stop")})
+	}
+
+	statuses, err := st.GetStatuses(context.Background(), ids)
+	require.NoError(t, err)
+	assert.Len(t, statuses, 101)
+	assert.Equal(t, 2, db.Calls("batch-get"))
+}
+
 func TestScanAllJoinsGroupOverrideGroupStatus(t *testing.T) {
 	db, st := newFixture(t)
 	now := time.Date(2026, 7, 19, 12, 0, 0, 0, time.UTC)
 	seedGroup(db, "dev", model.ModePinned, model.DesiredStopped)
-	db.Seed(map[string]types.AttributeValue{
-		"pk": s(overrideKey("dev")), "desired": s(model.DesiredRunning),
+	db.Seed(seeded(overrideKey("dev"), map[string]types.AttributeValue{
+		"desired":    s(model.DesiredRunning),
 		"expires_at": &types.AttributeValueMemberN{Value: "9999999999"},
-	})
+	}))
 	seedGroupStatus(db, "dev", map[string]types.AttributeValue{"last_error": s("discover: access denied")})
 
 	res, err := st.ScanAll(context.Background(), now)
@@ -103,10 +143,10 @@ func TestScanAllRecordsPerRowErrorForMalformedOverride(t *testing.T) {
 	db, st := newFixture(t)
 	now := time.Now()
 	seedGroup(db, "broken", model.ModePinned, model.DesiredStopped)
-	db.Seed(map[string]types.AttributeValue{
-		"pk": s(overrideKey("broken")), "desired": s("not-a-valid-state"),
+	db.Seed(seeded(overrideKey("broken"), map[string]types.AttributeValue{
+		"desired":    s("not-a-valid-state"),
 		"expires_at": &types.AttributeValueMemberN{Value: "9999999999"},
-	})
+	}))
 	seedGroup(db, "fine", model.ModePinned, model.DesiredStopped)
 
 	res, err := st.ScanAll(context.Background(), now)
@@ -127,11 +167,10 @@ func TestScanAllRecordsPerRowErrorForMalformedGroupStatus(t *testing.T) {
 	db, st := newFixture(t)
 	now := time.Now()
 	seedGroup(db, "broken", model.ModePinned, model.DesiredStopped)
-	db.Seed(map[string]types.AttributeValue{
-		"pk":          s(groupStatusKey("broken")),
+	db.Seed(seeded(groupStatusKey("broken"), map[string]types.AttributeValue{
 		"last_error":  &types.AttributeValueMemberBOOL{Value: true}, // 文字列でなければならず、UnmarshalMap が失敗する
 		"last_action": s("stop"),
-	})
+	}))
 	seedGroup(db, "fine", model.ModePinned, model.DesiredStopped)
 
 	res, err := st.ScanAll(context.Background(), now)
@@ -151,10 +190,9 @@ func TestScanAllRecordsPerRowErrorForMalformedGroupStatus(t *testing.T) {
 func TestScanAllRecordsPerRowErrorForMalformedGroup(t *testing.T) {
 	db, st := newFixture(t)
 	now := time.Now()
-	db.Seed(map[string]types.AttributeValue{
-		"pk":   s(groupKey("broken")),
+	db.Seed(seeded(groupKey("broken"), map[string]types.AttributeValue{
 		"mode": &types.AttributeValueMemberBOOL{Value: true}, // 文字列でなければならず、UnmarshalMap が失敗する
-	})
+	}))
 	seedGroup(db, "fine", model.ModePinned, model.DesiredStopped)
 
 	res, err := st.ScanAll(context.Background(), now)
@@ -191,10 +229,9 @@ func TestScanAllSkipsItemsWithoutPK(t *testing.T) {
 func TestScanAllSkipsMalformedPerResourceStatus(t *testing.T) {
 	db, st := newFixture(t)
 	now := time.Now()
-	db.Seed(map[string]types.AttributeValue{
-		"pk":          s(statusKey("rds-instance#a")),
+	db.Seed(seeded(statusKey("rds-instance#a"), map[string]types.AttributeValue{
 		"last_action": &types.AttributeValueMemberBOOL{Value: true}, // 文字列でなければならず、UnmarshalMap が失敗する
-	})
+	}))
 	seedGroup(db, "fine", model.ModePinned, model.DesiredStopped)
 
 	res, err := st.ScanAll(context.Background(), now)
@@ -208,10 +245,10 @@ func TestScanAllExpiredOverrideIsIgnored(t *testing.T) {
 	db, st := newFixture(t)
 	now := time.Date(2026, 7, 19, 12, 0, 0, 0, time.UTC)
 	seedGroup(db, "dev", model.ModePinned, model.DesiredStopped)
-	db.Seed(map[string]types.AttributeValue{
-		"pk": s(overrideKey("dev")), "desired": s(model.DesiredRunning),
+	db.Seed(seeded(overrideKey("dev"), map[string]types.AttributeValue{
+		"desired":    s(model.DesiredRunning),
 		"expires_at": &types.AttributeValueMemberN{Value: "1"}, // はるか過去
-	})
+	}))
 
 	res, err := st.ScanAll(context.Background(), now)
 	require.NoError(t, err)
@@ -222,10 +259,10 @@ func TestScanAllExpiredOverrideIsIgnored(t *testing.T) {
 func TestScanAllSkipsOrphanedOverrideWithoutGroup(t *testing.T) {
 	db, st := newFixture(t)
 	now := time.Now()
-	db.Seed(map[string]types.AttributeValue{
-		"pk": s(overrideKey("ghost")), "desired": s(model.DesiredRunning),
+	db.Seed(seeded(overrideKey("ghost"), map[string]types.AttributeValue{
+		"desired":    s(model.DesiredRunning),
 		"expires_at": &types.AttributeValueMemberN{Value: "9999999999"},
-	})
+	}))
 
 	res, err := st.ScanAll(context.Background(), now)
 	require.NoError(t, err)
@@ -259,6 +296,30 @@ func TestGetPutGroup(t *testing.T) {
 	assert.Equal(t, model.ModeDisabled, got.Mode)
 }
 
+// 属性単位の更新は、パッチに含まれないcronとセレクターを保持する。
+// 異なる設定操作が同時に行われても、無関係な属性を古い読み取り結果で上書きしないためである。
+func TestUpdateGroupLeavesUnspecifiedAttributesUntouched(t *testing.T) {
+	db, st := newFixture(t)
+	ctx := context.Background()
+	require.NoError(t, st.PutGroup(ctx, model.GroupSpec{
+		Name: "dev", Mode: model.ModeSchedule, StartCron: "0 9 * * *", StopCron: "0 20 * * *",
+		TagKey: "env", TagValue: "dev", Types: []model.ResourceType{model.TypeRdsInstance},
+	}))
+
+	require.NoError(t, st.UpdateGroup(ctx, "dev", GroupPatch{Mode: Set(model.ModeDisabled)}))
+
+	got, err := st.GetGroup(ctx, "dev")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, model.ModeDisabled, got.Mode)
+	assert.Equal(t, "0 9 * * *", got.StartCron)
+	assert.Equal(t, "0 20 * * *", got.StopCron)
+	assert.Equal(t, "env", got.TagKey)
+	assert.Equal(t, "dev", got.TagValue)
+	assert.Equal(t, []model.ResourceType{model.TypeRdsInstance}, got.Types)
+	assert.NotNil(t, db.Item("CONFIG", "GROUP#dev"), "保存形式は複合キーでなければならない")
+}
+
 func TestGetOverrideByGroupName(t *testing.T) {
 	_, st := newFixture(t)
 	ctx := context.Background()
@@ -280,25 +341,25 @@ func TestGetOverrideEnforcesExpiryAndValidatesDesired(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, 7, 19, 12, 0, 0, 0, time.UTC)
 
-	db.Seed(map[string]types.AttributeValue{
-		"pk": s(overrideKey("expired")), "desired": s(model.DesiredRunning),
+	db.Seed(seeded(overrideKey("expired"), map[string]types.AttributeValue{
+		"desired":    s(model.DesiredRunning),
 		"expires_at": &types.AttributeValueMemberN{Value: "0"},
-	})
+	}))
 	got, err := st.GetOverride(ctx, "expired", now)
 	require.NoError(t, err)
 	assert.Nil(t, got, "an override past its expiry must read back as absent")
 
-	db.Seed(map[string]types.AttributeValue{
-		"pk": s(overrideKey("broken")), "desired": s("not-a-valid-state"),
+	db.Seed(seeded(overrideKey("broken"), map[string]types.AttributeValue{
+		"desired":    s("not-a-valid-state"),
 		"expires_at": &types.AttributeValueMemberN{Value: "9999999999"},
-	})
+	}))
 	_, err = st.GetOverride(ctx, "broken", now)
 	assert.Error(t, err, "an invalid desired value must be rejected rather than silently trusted")
 }
 
 func TestPutGroupPropagatesStoreError(t *testing.T) {
 	db, st := newFixture(t)
-	db.FailOn("put", "group#dev", assert.AnError)
+	db.FailOn("update", "group#dev", assert.AnError)
 	err := st.PutGroup(context.Background(), model.GroupSpec{Name: "dev", Mode: model.ModeDisabled})
 	assert.ErrorIs(t, err, assert.AnError)
 }
@@ -308,12 +369,12 @@ func TestPutGroupPropagatesStoreError(t *testing.T) {
 // 定常状態における書き込みの抑制にも対応する
 func TestUpdateStatusWithEmptyPatchSkipsUpdate(t *testing.T) {
 	db, st := newFixture(t)
-	db.FailOn("update", statusKey("rds-instance#a"), assert.AnError) // 呼ばれたら気づけるようにしておく
+	db.FailOn("update", "status#rds-instance#a", assert.AnError) // 呼ばれたら気づけるようにしておく
 
 	err := st.UpdateStatus(context.Background(), "rds-instance#a", StatusPatch{})
 
 	require.NoError(t, err)
-	assert.Nil(t, db.Item(statusKey("rds-instance#a")), "何も書くものがなければアイテムを作ってはならない")
+	assert.Nil(t, stored(db, statusKey("rds-instance#a")), "何も書くものがなければアイテムを作ってはならない")
 }
 
 // 空文字を指すポインタは属性の削除を表し、nil が表す変更なしとは異なる
@@ -338,8 +399,8 @@ func TestUpdateStatusDistinguishesClearFromUntouched(t *testing.T) {
 func TestDeletesTargetTheRightItem(t *testing.T) {
 	ctx := context.Background()
 	cases := map[string]struct {
-		seededPK string
-		remove   func(*Store) error
+		seededKey itemKey
+		remove    func(*Store) error
 	}{
 		"group":        {groupKey("dev"), func(s *Store) error { return s.DeleteGroup(ctx, "dev") }},
 		"override":     {overrideKey("dev"), func(s *Store) error { return s.DeleteOverride(ctx, "dev") }},
@@ -351,17 +412,17 @@ func TestDeletesTargetTheRightItem(t *testing.T) {
 			db, st := newFixture(t)
 			// 4 種すべてを投入し、対象のアイテムのみが削除されることを確かめる
 			seedGroup(db, "dev", model.ModePinned, model.DesiredStopped)
-			db.Seed(map[string]types.AttributeValue{"pk": s(overrideKey("dev")), "desired": s(model.DesiredRunning),
-				"expires_at": &types.AttributeValueMemberN{Value: "9999999999"}})
+			db.Seed(seeded(overrideKey("dev"), map[string]types.AttributeValue{"desired": s(model.DesiredRunning),
+				"expires_at": &types.AttributeValueMemberN{Value: "9999999999"}}))
 			seedGroupStatus(db, "dev", map[string]types.AttributeValue{"last_error": s("boom")})
 			seedStatus(db, "rds-instance#a", map[string]types.AttributeValue{"last_action": s("stop")})
 
 			require.NoError(t, tc.remove(st))
 
-			assert.Nil(t, db.Item(tc.seededPK), "%s must be deleted", tc.seededPK)
-			for _, pk := range []string{groupKey("dev"), overrideKey("dev"), groupStatusKey("dev"), statusKey("rds-instance#a")} {
-				if pk != tc.seededPK {
-					assert.NotNilf(t, db.Item(pk), "%s must survive", pk)
+			assert.Nil(t, stored(db, tc.seededKey), "%v must be deleted", tc.seededKey)
+			for _, key := range []itemKey{groupKey("dev"), overrideKey("dev"), groupStatusKey("dev"), statusKey("rds-instance#a")} {
+				if key != tc.seededKey {
+					assert.NotNilf(t, stored(db, key), "%v must survive", key)
 				}
 			}
 		})
@@ -378,10 +439,14 @@ func TestDeleteIsIdempotent(t *testing.T) {
 // pk を外部へ渡す唯一の経路であり、doctor が手作業による delete-item のために表示する文字列に一致する
 // キー構成を本パッケージへ限定する前提の上に成立するため、items.go の接頭辞の変更時にここが不一致となってはならない
 func TestPKAccessorsMatchTheStoredKeys(t *testing.T) {
-	assert.Equal(t, "group#dev", GroupPK("dev"))
-	assert.Equal(t, "override#dev", OverridePK("dev"))
-	assert.Equal(t, "status#group#dev", GroupStatusPK("dev"))
-	assert.Equal(t, "status#rds-instance#dev-db", StatusPK("rds-instance#dev-db"))
+	assert.Equal(t, "CONFIG", GroupPK("dev"))
+	assert.Equal(t, "GROUP#dev", GroupSK("dev"))
+	assert.Equal(t, "CONFIG", OverridePK("dev"))
+	assert.Equal(t, "OVERRIDE#dev", OverrideSK("dev"))
+	assert.Equal(t, "STATUS#group#dev", GroupStatusPK("dev"))
+	assert.Equal(t, "CURRENT", GroupStatusSK())
+	assert.Equal(t, "STATUS#rds-instance#dev-db", StatusPK("rds-instance#dev-db"))
+	assert.Equal(t, "CURRENT", StatusSK())
 
 	// グループ単位のステータスは、合成リソース ID を用いた status# アイテムでなければならない
 	assert.Equal(t, StatusPK(model.GroupStatusID("dev")), GroupStatusPK("dev"))

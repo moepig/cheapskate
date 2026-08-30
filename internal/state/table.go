@@ -11,15 +11,21 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
 
-// state テーブルが存在しない場合に作成する。pk をハッシュキー、expires_at を TTL とする
+// stateテーブルが存在しない場合に作成する。pkとskを複合キー、expires_atをTTLとする。
 // 冪等であり、`make dev` の再実行に対応する
 // 作成後はテーブルが active となるまで待機し、expires_at の TTL を有効化する
 func CreateTable(ctx context.Context, db *dynamodb.Client, name string) error {
 	_, err := db.CreateTable(ctx, &dynamodb.CreateTableInput{
-		TableName:            &name,
-		AttributeDefinitions: []types.AttributeDefinition{{AttributeName: aws.String("pk"), AttributeType: types.ScalarAttributeTypeS}},
-		KeySchema:            []types.KeySchemaElement{{AttributeName: aws.String("pk"), KeyType: types.KeyTypeHash}},
-		BillingMode:          types.BillingModePayPerRequest,
+		TableName: &name,
+		AttributeDefinitions: []types.AttributeDefinition{
+			{AttributeName: aws.String("pk"), AttributeType: types.ScalarAttributeTypeS},
+			{AttributeName: aws.String("sk"), AttributeType: types.ScalarAttributeTypeS},
+		},
+		KeySchema: []types.KeySchemaElement{
+			{AttributeName: aws.String("pk"), KeyType: types.KeyTypeHash},
+			{AttributeName: aws.String("sk"), KeyType: types.KeyTypeRange},
+		},
+		BillingMode: types.BillingModePayPerRequest,
 	})
 	if _, ok := errors.AsType[*types.ResourceInUseException](err); err != nil && !ok {
 		return fmt.Errorf("create table %s: %w", name, err)

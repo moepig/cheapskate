@@ -25,8 +25,8 @@ import (
 // それらを所有するのは CLI と web console であり、reconciler にとっては読み取り専用の入力である
 // 型で限定することにより、reconcile から設定を書き換える経路が存在しなくなる
 type Store interface {
-	ScanAll(ctx context.Context, now time.Time) (state.ScanResult, error)
-	GetStatus(ctx context.Context, resourceID string) (model.Status, error)
+	ListGroups(ctx context.Context, now time.Time) ([]state.GroupRow, error)
+	GetStatuses(ctx context.Context, resourceIDs []string) (map[string]state.StatusRecord, error)
 	UpdateStatus(ctx context.Context, resourceID string, p state.StatusPatch) error
 }
 
@@ -80,7 +80,7 @@ func Run(ctx context.Context, raw json.RawMessage, deps *Deps, now time.Time) (S
 		deps.Log.Info("event-received", "source", event.Source, "reason", "every invocation does a full reconcile")
 	}
 
-	sr, err := deps.Store.ScanAll(ctx, now)
+	rows, err := deps.Store.ListGroups(ctx, now)
 	if err != nil {
 		return Summary{}, err
 	}
@@ -88,7 +88,7 @@ func Run(ctx context.Context, raw json.RawMessage, deps *Deps, now time.Time) (S
 	claimed := newClaims()
 
 	var results []Result
-	for _, row := range sr.Groups {
+	for _, row := range rows {
 		if !row.HasGroup {
 			deps.Log.Warn("orphaned-group-data", "group", row.Name)
 			continue
@@ -154,7 +154,7 @@ func ReconcileGroup(ctx context.Context, row state.GroupRow, claimed *claims, de
 
 	desired, cfg, err := resolveGroup(row, deps, now)
 	if err != nil {
-		recordFailure(ctx, deps, row.Name, groupStatusID, err, now)
+		recordFailure(ctx, deps, row.Name, groupStatusID, row.Status, err, now)
 		return []Result{{Group: row.Name, Error: err.Error()}}
 	}
 	if desired == model.DesiredNone {
@@ -164,7 +164,16 @@ func ReconcileGroup(ctx context.Context, row state.GroupRow, claimed *claims, de
 
 	resources, err := deps.Discoverer.Discover(ctx, cfg.Selector)
 	if err != nil {
-		recordFailure(ctx, deps, row.Name, groupStatusID, err, now)
+		recordFailure(ctx, deps, row.Name, groupStatusID, row.Status, err, now)
+		return []Result{{Group: row.Name, Error: err.Error()}}
+	}
+	ids := make([]string, 0, len(resources))
+	for _, resource := range resources {
+		ids = append(ids, resource.ID())
+	}
+	statuses, err := deps.Store.GetStatuses(ctx, ids)
+	if err != nil {
+		recordFailure(ctx, deps, row.Name, groupStatusID, row.Status, err, now)
 		return []Result{{Group: row.Name, Error: err.Error()}}
 	}
 
@@ -184,9 +193,16 @@ func ReconcileGroup(ctx context.Context, row state.GroupRow, claimed *claims, de
 			continue
 		}
 
-		if err := reconcileResource(ctx, deps, row.Name, res, desired, now, &result); err != nil {
+		record := statuses[resourceID]
+		if record.Err != nil {
+			result.Error = record.Err.Error()
+			recordFailure(ctx, deps, row.Name, resourceID, record.Status, record.Err, now)
+			results = append(results, result)
+			continue
+		}
+		if err := reconcileResource(ctx, deps, row.Name, res, desired, record.Status, now, &result); err != nil {
 			result.Error = err.Error()
-			recordFailure(ctx, deps, row.Name, resourceID, err, now)
+			recordFailure(ctx, deps, row.Name, resourceID, record.Status, err, now)
 		}
 		results = append(results, result)
 	}
@@ -195,7 +211,7 @@ func ReconcileGroup(ctx context.Context, row state.GroupRow, claimed *claims, de
 	// リソースごとに記録した場合、同じグループのステータスアイテムを繰り返し上書きし、最後の 1 件のみが残る
 	// 文言をリソース ID のソート順で決定的にするのは、内容が変わらない限り再通知しないためである
 	if len(taken) > 0 {
-		recordFailure(ctx, deps, row.Name, groupStatusID,
+		recordFailure(ctx, deps, row.Name, groupStatusID, row.Status,
 			fmt.Errorf("selector overlaps other groups: %s", strings.Join(taken, ", ")), now)
 	} else {
 		clearRecoveredError(ctx, deps, row.Name, groupStatusID, row.Status, true, now)
@@ -224,15 +240,8 @@ func resolveGroup(row state.GroupRow, deps *Deps, now time.Time) (model.DesiredS
 // 発見されたリソース 1 件を処理する
 // ターゲットを解決し、desired と observed を比較し、差異があれば操作し、永続化して通知する
 // いずれかの手順が失敗した時点で中断する。記録は呼び出し側が行う
-func reconcileResource(ctx context.Context, deps *Deps, groupName string, res model.Resource, desired model.DesiredState, now time.Time, result *Result) error {
+func reconcileResource(ctx context.Context, deps *Deps, groupName string, res model.Resource, desired model.DesiredState, status model.Status, now time.Time, result *Result) error {
 	resourceID := res.ID()
-
-	// 最新のステータスを読み、後続のアクションと復旧検知の双方で用いる
-	// 1 サイクルあたり GetItem 1 回の追加により、直前までエラー状態であったかを判定できる
-	status, err := deps.Store.GetStatus(ctx, resourceID)
-	if err != nil {
-		return err
-	}
 
 	tgt, ok := deps.Targets[res.Type]
 	if !ok {
@@ -379,14 +388,9 @@ func clearRecoveredError(ctx context.Context, deps *Deps, group, resourceID stri
 
 // エラーは無条件に永続化するが、通知するのは以前に記録したものと内容が違うときだけである
 // そうしないと、継続する not-found や access-denied のエラーが毎サイクル永遠に呼び出しを鳴らし続ける
-func recordFailure(ctx context.Context, deps *Deps, group, resourceID string, err error, now time.Time) {
+func recordFailure(ctx context.Context, deps *Deps, group, resourceID string, prevStatus model.Status, err error, now time.Time) {
 	deps.Log.Error("error", "group", group, "resource_id", resourceID, "error", err.Error())
 	at := now.UTC().Format(time.RFC3339)
-
-	prevStatus, gerr := deps.Store.GetStatus(ctx, resourceID)
-	if gerr != nil {
-		deps.Log.Error("status-read-failed", "group", group, "resource_id", resourceID, "error", gerr.Error())
-	}
 
 	if serr := deps.Store.UpdateStatus(ctx, resourceID, state.StatusPatch{
 		LastError:   state.Set(err.Error()),
@@ -395,7 +399,7 @@ func recordFailure(ctx context.Context, deps *Deps, group, resourceID string, er
 		deps.Log.Error("error-record-failed", "group", group, "resource_id", resourceID, "error", serr.Error())
 	}
 
-	if gerr == nil && prevStatus.LastError == err.Error() {
+	if prevStatus.LastError == err.Error() {
 		return
 	}
 	if nerr := deps.Notifier.Publish(ctx,

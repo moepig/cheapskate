@@ -213,9 +213,9 @@ func TestCmdListRendersPerRowErrorWithoutAbortingOthers(t *testing.T) {
 	assert.Empty(t, groups["fine"].Error, "an unrelated group must not be affected by another group's error")
 }
 
-func TestCmdListPropagatesScanError(t *testing.T) {
+func TestCmdListPropagatesQueryError(t *testing.T) {
 	f, s := newTestStore(t)
-	f.FailOn("scan", "", assert.AnError)
+	f.FailOn("query", "", assert.AnError)
 
 	var buf bytes.Buffer
 	assert.Error(t, cmdList(context.Background(), s, &buf))
@@ -478,7 +478,8 @@ func TestCmdDoctorReportsAndPrunesOrphans(t *testing.T) {
 	assert.Equal(t, "doctor", got.Command)
 	require.Len(t, got.Findings, 1)
 	assert.Equal(t, doctor.KindOrphanOverride, got.Findings[0].Kind)
-	assert.Equal(t, "override#ghost", got.Findings[0].PK)
+	assert.Equal(t, "CONFIG", got.Findings[0].PK)
+	assert.Equal(t, "OVERRIDE#ghost", got.Findings[0].SK)
 	assert.True(t, got.Findings[0].Prunable)
 	assert.Equal(t, 1, got.Counts[doctor.KindOrphanOverride])
 	assert.Zero(t, got.Pruned, "a read-only run must delete nothing")

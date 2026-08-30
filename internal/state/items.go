@@ -1,32 +1,32 @@
 package state
 
-import (
-	"cheapskate/internal/core/model"
-)
+import "cheapskate/internal/core/model"
 
-// テーブルのキー構成であり、pk はすべて "<kind>#<identity>" の形式をとる
-// これらの接頭辞が現れるのは本ファイルに限る。アプリケーション層はグループとリソースを名前で指定し、キーを組み立てない
-//
-// groupKeyPrefix と model.GroupNamespace は、根拠の異なる同一の文字列であり、同じ定数としない
-// 本定数はグループの設定アイテムへ名前空間を与える
-// model 側は status キーにおいて、グループの合成リソース ID へ名前空間を与える
-// 一方の変更が他方へ波及してはならないためである
 const (
-	groupKeyPrefix    = "group#"
-	overrideKeyPrefix = "override#"
-	statusKeyPrefix   = "status#"
+	configPK         = "CONFIG"
+	lockPK           = "LOCK"
+	currentSK        = "CURRENT"
+	groupSKPrefix    = "GROUP#"
+	overrideSKPrefix = "OVERRIDE#"
+	statusPKPrefix   = "STATUS#"
 )
 
-func groupKey(name string) string            { return groupKeyPrefix + name }
-func overrideKey(name string) string         { return overrideKeyPrefix + name }
-func statusKey(resourceID string) string     { return statusKeyPrefix + resourceID }
-func groupStatusKey(groupName string) string { return statusKey(model.GroupStatusID(groupName)) }
+type itemKey struct {
+	PK string `dynamodbav:"pk"`
+	SK string `dynamodbav:"sk"`
+}
 
-// 設定操作が管理する `group#` アイテムの保存形状
-// 各フィールドを model の名前付き型ではなく string とするのは、これが保存形状であり、
-// ドメインの語彙との対応づけを spec と newGroupItem の 2 か所へ限定するためである
+func groupKey(name string) itemKey    { return itemKey{PK: configPK, SK: groupSKPrefix + name} }
+func overrideKey(name string) itemKey { return itemKey{PK: configPK, SK: overrideSKPrefix + name} }
+func statusKey(resourceID string) itemKey {
+	return itemKey{PK: statusPKPrefix + resourceID, SK: currentSK}
+}
+func groupStatusKey(name string) itemKey { return statusKey(model.GroupStatusID(name)) }
+func reconcileLockKey() itemKey          { return itemKey{PK: lockPK, SK: "RECONCILE"} }
+
 type groupItem struct {
 	PK        string   `dynamodbav:"pk"`
+	SK        string   `dynamodbav:"sk"`
 	Mode      string   `dynamodbav:"mode,omitempty"`
 	Desired   string   `dynamodbav:"desired,omitempty"`
 	StartCron string   `dynamodbav:"start_cron,omitempty"`
@@ -38,8 +38,10 @@ type groupItem struct {
 }
 
 func newGroupItem(spec model.GroupSpec) groupItem {
+	k := groupKey(spec.Name)
 	return groupItem{
-		PK:        groupKey(spec.Name),
+		PK:        k.PK,
+		SK:        k.SK,
 		Mode:      string(spec.Mode),
 		Desired:   string(spec.Desired),
 		StartCron: spec.StartCron,
@@ -51,13 +53,6 @@ func newGroupItem(spec model.GroupSpec) groupItem {
 	}
 }
 
-// アイテムをドメインの型へ復号する
-// グループ名は i.PK から解析せず、引数で受け取る
-// いずれの読み取り経路も、キーの組み立てまたは scan 中の接頭辞の照合により、すでに名前を保持するためである
-// したがって、壊れたキーに対する分岐を持たない
-//
-// 未知の mode と desired は、ここでは拒否しない
-// 保存された内容をそのまま返すことが GroupSpec の役割であり、妥当性の判定は model.ParseGroup が行う
 func (i groupItem) spec(name string) model.GroupSpec {
 	return model.GroupSpec{
 		Name:      name,
@@ -72,9 +67,9 @@ func (i groupItem) spec(name string) model.GroupSpec {
 	}
 }
 
-// `override#` アイテムの保存形状
-// expires_at はテーブルの TTL 属性を兼ねるため、失効した override は DynamoDB が削除する
 type overrideItem struct {
+	PK        string `dynamodbav:"pk"`
+	SK        string `dynamodbav:"sk"`
 	Desired   string `dynamodbav:"desired"`
 	ExpiresAt int64  `dynamodbav:"expires_at"`
 }
@@ -83,8 +78,9 @@ func (i overrideItem) override() model.Override {
 	return model.Override{Desired: model.DesiredState(i.Desired), ExpiresAt: i.ExpiresAt}
 }
 
-// reconciler が所有する `status#` アイテムの保存形状
 type statusItem struct {
+	PK                 string `dynamodbav:"pk"`
+	SK                 string `dynamodbav:"sk"`
 	ObservedState      string `dynamodbav:"observed_state,omitempty"`
 	LastAction         string `dynamodbav:"last_action,omitempty"`
 	LastActionAt       string `dynamodbav:"last_action_at,omitempty"`
@@ -104,13 +100,21 @@ func (i statusItem) status() model.Status {
 	}
 }
 
-// status アイテムの部分更新
-// nil のフィールドは対応する属性を変更せず、非 nil のフィールドはその値へ上書きする
-// 属性を空にする場合は空文字を指す (Set("") を参照)
-//
-// ポインタとするのは、変更しないことと空にすることを型で区別するためである
-// 属性名とドメインの型の対応も本ファイルへ限定するため、アプリケーション層が DynamoDB の属性名を文字列で記述する経路は存在しない
-// これにより、属性名の誤記が別の属性の生成として現れることはない
+// GroupPatchはグループ設定の属性単位の変更を表す。
+// nilは変更しないことを表し、stringとsliceの空値は属性の削除を表す。
+type GroupPatch struct {
+	Mode      *model.Mode
+	Desired   *model.DesiredState
+	StartCron *string
+	StopCron  *string
+	Timezone  *string
+	TagKey    *string
+	TagValue  *string
+	Types     *[]model.ResourceType
+}
+
+// StatusPatchはstatusアイテムの属性単位の変更を表す。
+// nilは変更しないことを表し、空文字列は空値への更新を表す。
 type StatusPatch struct {
 	ObservedState      *model.ObservedState
 	LastAction         *model.Action
@@ -120,19 +124,14 @@ type StatusPatch struct {
 	TransitioningSince *string
 }
 
-// StatusPatch のフィールドへ渡すポインタを返す
-// 属性を空にする場合は Set("") とし、変更しない場合はフィールドを nil のままとする
-func Set[T ~string](v T) *T { return &v }
+// Setは変更対象の値を指すポインタを返す。
+func Set[T any](v T) *T { return &v }
 
-// 保存属性名と値の組
 type statusAttr struct {
 	name  string
 	value string
 }
 
-// パッチが設定しているフィールドを、保存属性名と値の組として返す
-// 順序は決定的であり、statusItem の dynamodbav タグと 1 対 1 で対応する
-// status アイテムの属性はすべて文字列であるため、値の型は 1 つで足りる
 func (p StatusPatch) attributes() []statusAttr {
 	var out []statusAttr
 	if p.ObservedState != nil {

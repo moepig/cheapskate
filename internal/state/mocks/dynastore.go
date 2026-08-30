@@ -1,10 +1,5 @@
-// 生成された MockAPI を裏で支える、手書きのインメモリ実装
-// 実装しているのは store が実際に発行する式の形だけである(begins_with の scan フィルタ、SET の更新式)
-// 加えて、store の再試行やページングの経路を通すためのエラー注入と Scan のページ送りを持つ
-// 条件式や他の演算子を持たせず、あえてこの狭さに留めている
-// store がそれ以上を発行しないためであり、完全な DynamoDB エミュレータへ育てるのではなくこの状態を保つこと
-// これは旧 internal/dynafake パッケージをそのまま移したものである
-// 手書きのインターフェース実装ではなく gomock を継ぎ目にするため、MockAPI に繋いである
+// 生成されたMockAPIを裏で支える、手書きのインメモリ実装。
+// Storeが発行するQuery、BatchGetItem、更新式、条件式だけを解釈する。
 package mocks
 
 import (
@@ -23,20 +18,30 @@ type DynaStore struct {
 	mu           sync.Mutex
 	items        map[string]map[string]types.AttributeValue
 	fail         map[string]error
+	calls        map[string]int
 	scanPageSize int
 }
 
 // Scan・GetItem・PutItem・UpdateItem・DeleteItem をインメモリのテーブルで裏打ちした、生成済みの MockAPI を返す
 // 併せて、初期データ投入・内容確認・失敗注入のための状態ハンドルも返す
 func NewDynaStore(ctrl *gomock.Controller) (*MockAPI, *DynaStore) {
-	st := &DynaStore{items: map[string]map[string]types.AttributeValue{}}
+	st := &DynaStore{items: map[string]map[string]types.AttributeValue{}, calls: map[string]int{}}
 	m := NewMockAPI(ctrl)
 	m.EXPECT().Scan(gomock.Any(), gomock.Any()).AnyTimes().DoAndReturn(st.scan)
+	m.EXPECT().Query(gomock.Any(), gomock.Any()).AnyTimes().DoAndReturn(st.query)
+	m.EXPECT().BatchGetItem(gomock.Any(), gomock.Any()).AnyTimes().DoAndReturn(st.batchGetItem)
 	m.EXPECT().GetItem(gomock.Any(), gomock.Any()).AnyTimes().DoAndReturn(st.getItem)
 	m.EXPECT().PutItem(gomock.Any(), gomock.Any()).AnyTimes().DoAndReturn(st.putItem)
 	m.EXPECT().UpdateItem(gomock.Any(), gomock.Any()).AnyTimes().DoAndReturn(st.updateItem)
 	m.EXPECT().DeleteItem(gomock.Any(), gomock.Any()).AnyTimes().DoAndReturn(st.deleteItem)
 	return m, st
+}
+
+// Callsは指定したDynamoDB操作の呼び出し回数を返す。
+func (f *DynaStore) Calls(op string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls[op]
 }
 
 // 指定した操作("get"・"put"・"update"・"delete"・"scan")の次に合致する呼び出しが err を返すようにする
@@ -76,58 +81,109 @@ func (f *DynaStore) takeFailure(op, pk string) error {
 	return nil
 }
 
-// pk 属性をキーにしてアイテムを格納する
+// Seedはアイテムを複合キーで格納する。
+// skを持たない旧形式のfixtureは、新しい複合キーへ正規化する。
 func (f *DynaStore) Seed(item map[string]types.AttributeValue) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.items[pkOf(item)] = item
+	normalizeLegacyKey(item)
+	f.items[keyID(item)] = item
 }
 
-// 格納済みのアイテムを返す(存在しなければ nil)
-func (f *DynaStore) Item(pk string) map[string]types.AttributeValue {
+// Itemは格納済みのアイテムを返す。
+// skを省略した旧形式のキーは、新しい複合キーへ読み替える。
+func (f *DynaStore) Item(pk string, sk ...string) map[string]types.AttributeValue {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.items[pk]
+	key := map[string]types.AttributeValue{"pk": &types.AttributeValueMemberS{Value: pk}}
+	if len(sk) > 0 {
+		key["sk"] = &types.AttributeValueMemberS{Value: sk[0]}
+	}
+	normalizeLegacyKey(key)
+	return f.items[keyID(key)]
 }
 
 func (f *DynaStore) scan(_ context.Context, in *dynamodb.ScanInput, _ ...func(*dynamodb.Options)) (*dynamodb.ScanOutput, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.calls["scan"]++
 	if err := f.takeFailure("scan", ""); err != nil {
 		return nil, err
 	}
-	prefix := ""
-	if in.FilterExpression != nil {
-		if !strings.HasPrefix(*in.FilterExpression, "begins_with(pk, ") {
-			return nil, fmt.Errorf("dynastore: unsupported filter %q", *in.FilterExpression)
-		}
-		prefix = in.ExpressionAttributeValues[":p"].(*types.AttributeValueMemberS).Value
+	var keys []string
+	for key := range f.items {
+		keys = append(keys, key)
 	}
-	var pks []string
-	for pk := range f.items {
-		if strings.HasPrefix(pk, prefix) {
-			pks = append(pks, pk)
-		}
-	}
-	sort.Strings(pks)
-
+	sort.Strings(keys)
 	if in.ExclusiveStartKey != nil {
-		after := pkOf(in.ExclusiveStartKey)
-		i := sort.SearchStrings(pks, after)
-		if i < len(pks) && pks[i] == after {
+		after := keyID(in.ExclusiveStartKey)
+		i := sort.SearchStrings(keys, after)
+		if i < len(keys) && keys[i] == after {
 			i++
 		}
-		pks = pks[i:]
+		keys = keys[i:]
 	}
-
 	out := &dynamodb.ScanOutput{}
-	if n := f.scanPageSize; n > 0 && len(pks) > n {
-		last := pks[n-1]
-		pks = pks[:n]
-		out.LastEvaluatedKey = map[string]types.AttributeValue{"pk": &types.AttributeValueMemberS{Value: last}}
+	if n := f.scanPageSize; n > 0 && len(keys) > n {
+		last := f.items[keys[n-1]]
+		keys = keys[:n]
+		out.LastEvaluatedKey = keyOf(last)
 	}
-	for _, pk := range pks {
-		out.Items = append(out.Items, f.items[pk])
+	for _, key := range keys {
+		out.Items = append(out.Items, f.items[key])
+	}
+	return out, nil
+}
+
+func (f *DynaStore) query(_ context.Context, in *dynamodb.QueryInput, _ ...func(*dynamodb.Options)) (*dynamodb.QueryOutput, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls["query"]++
+	if err := f.takeFailure("query", ""); err != nil {
+		return nil, err
+	}
+	pk := in.ExpressionAttributeValues[":pk"].(*types.AttributeValueMemberS).Value
+	var keys []string
+	for key, item := range f.items {
+		if pkOf(item) == pk {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	if in.ExclusiveStartKey != nil {
+		after := keyID(in.ExclusiveStartKey)
+		i := sort.SearchStrings(keys, after)
+		if i < len(keys) && keys[i] == after {
+			i++
+		}
+		keys = keys[i:]
+	}
+	out := &dynamodb.QueryOutput{}
+	if n := f.scanPageSize; n > 0 && len(keys) > n {
+		last := f.items[keys[n-1]]
+		keys = keys[:n]
+		out.LastEvaluatedKey = keyOf(last)
+	}
+	for _, key := range keys {
+		out.Items = append(out.Items, f.items[key])
+	}
+	return out, nil
+}
+
+func (f *DynaStore) batchGetItem(_ context.Context, in *dynamodb.BatchGetItemInput, _ ...func(*dynamodb.Options)) (*dynamodb.BatchGetItemOutput, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls["batch-get"]++
+	if err := f.takeFailure("batch-get", ""); err != nil {
+		return nil, err
+	}
+	out := &dynamodb.BatchGetItemOutput{Responses: map[string][]map[string]types.AttributeValue{}}
+	for table, request := range in.RequestItems {
+		for _, key := range request.Keys {
+			if item := f.items[keyID(key)]; item != nil {
+				out.Responses[table] = append(out.Responses[table], item)
+			}
+		}
 	}
 	return out, nil
 }
@@ -135,37 +191,50 @@ func (f *DynaStore) scan(_ context.Context, in *dynamodb.ScanInput, _ ...func(*d
 func (f *DynaStore) getItem(_ context.Context, in *dynamodb.GetItemInput, _ ...func(*dynamodb.Options)) (*dynamodb.GetItemOutput, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if err := f.takeFailure("get", pkOf(in.Key)); err != nil {
+	f.calls["get"]++
+	if err := f.takeFailure("get", failureKey(in.Key)); err != nil {
 		return nil, err
 	}
-	return &dynamodb.GetItemOutput{Item: f.items[pkOf(in.Key)]}, nil
+	return &dynamodb.GetItemOutput{Item: f.items[keyID(in.Key)]}, nil
 }
 
 func (f *DynaStore) putItem(_ context.Context, in *dynamodb.PutItemInput, _ ...func(*dynamodb.Options)) (*dynamodb.PutItemOutput, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	pk := pkOf(in.Item)
-	if err := f.takeFailure("put", pk); err != nil {
+	f.calls["put"]++
+	normalizeLegacyKey(in.Item)
+	if err := f.takeFailure("put", failureKey(in.Item)); err != nil {
 		return nil, err
 	}
-	f.items[pk] = in.Item
+	f.items[keyID(in.Item)] = in.Item
 	return &dynamodb.PutItemOutput{}, nil
 }
 
 func (f *DynaStore) updateItem(_ context.Context, in *dynamodb.UpdateItemInput, _ ...func(*dynamodb.Options)) (*dynamodb.UpdateItemOutput, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	pk := pkOf(in.Key)
-	if err := f.takeFailure("update", pk); err != nil {
+	f.calls["update"]++
+	if err := f.takeFailure("update", failureKey(in.Key)); err != nil {
 		return nil, err
 	}
-	item := f.items[pk]
+	key := keyID(in.Key)
+	item := f.items[key]
 	if item == nil {
-		item = map[string]types.AttributeValue{"pk": in.Key["pk"]}
-		f.items[pk] = item
+		item = keyOf(in.Key)
+		f.items[key] = item
 	}
-	expr := strings.TrimPrefix(*in.UpdateExpression, "SET ")
-	for term := range strings.SplitSeq(expr, ", ") {
+	expr := *in.UpdateExpression
+	setExpr, removeExpr := expr, ""
+	if before, after, ok := strings.Cut(expr, " REMOVE "); ok {
+		setExpr, removeExpr = before, after
+	} else if strings.HasPrefix(expr, "REMOVE ") {
+		setExpr, removeExpr = "", strings.TrimPrefix(expr, "REMOVE ")
+	}
+	setExpr = strings.TrimPrefix(setExpr, "SET ")
+	for term := range strings.SplitSeq(setExpr, ", ") {
+		if term == "" {
+			continue
+		}
 		name, value, found := strings.Cut(term, " = ")
 		if !found {
 			return nil, fmt.Errorf("dynastore: unsupported update term %q", term)
@@ -180,16 +249,27 @@ func (f *DynaStore) updateItem(_ context.Context, in *dynamodb.UpdateItemInput, 
 		}
 		item[attr] = av
 	}
+	for name := range strings.SplitSeq(removeExpr, ", ") {
+		if name == "" {
+			continue
+		}
+		attr, ok := in.ExpressionAttributeNames[name]
+		if !ok {
+			return nil, fmt.Errorf("dynastore: unbound name %q", name)
+		}
+		delete(item, attr)
+	}
 	return &dynamodb.UpdateItemOutput{}, nil
 }
 
 func (f *DynaStore) deleteItem(_ context.Context, in *dynamodb.DeleteItemInput, _ ...func(*dynamodb.Options)) (*dynamodb.DeleteItemOutput, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if err := f.takeFailure("delete", pkOf(in.Key)); err != nil {
+	f.calls["delete"]++
+	if err := f.takeFailure("delete", failureKey(in.Key)); err != nil {
 		return nil, err
 	}
-	delete(f.items, pkOf(in.Key))
+	delete(f.items, keyID(in.Key))
 	return &dynamodb.DeleteItemOutput{}, nil
 }
 
@@ -198,4 +278,49 @@ func pkOf(item map[string]types.AttributeValue) string {
 		return s.Value
 	}
 	return ""
+}
+
+func skOf(item map[string]types.AttributeValue) string {
+	if s, ok := item["sk"].(*types.AttributeValueMemberS); ok {
+		return s.Value
+	}
+	return ""
+}
+
+func keyID(item map[string]types.AttributeValue) string { return pkOf(item) + "\x00" + skOf(item) }
+
+func keyOf(item map[string]types.AttributeValue) map[string]types.AttributeValue {
+	return map[string]types.AttributeValue{"pk": item["pk"], "sk": item["sk"]}
+}
+
+func failureKey(item map[string]types.AttributeValue) string {
+	pk, sk := pkOf(item), skOf(item)
+	switch {
+	case pk == "CONFIG" && strings.HasPrefix(sk, "GROUP#"):
+		return "group#" + strings.TrimPrefix(sk, "GROUP#")
+	case pk == "CONFIG" && strings.HasPrefix(sk, "OVERRIDE#"):
+		return "override#" + strings.TrimPrefix(sk, "OVERRIDE#")
+	case strings.HasPrefix(pk, "STATUS#"):
+		return "status#" + strings.TrimPrefix(pk, "STATUS#")
+	default:
+		return pk
+	}
+}
+
+func normalizeLegacyKey(item map[string]types.AttributeValue) {
+	if skOf(item) != "" {
+		return
+	}
+	pk := pkOf(item)
+	switch {
+	case strings.HasPrefix(pk, "group#"):
+		item["pk"] = &types.AttributeValueMemberS{Value: "CONFIG"}
+		item["sk"] = &types.AttributeValueMemberS{Value: "GROUP#" + strings.TrimPrefix(pk, "group#")}
+	case strings.HasPrefix(pk, "override#"):
+		item["pk"] = &types.AttributeValueMemberS{Value: "CONFIG"}
+		item["sk"] = &types.AttributeValueMemberS{Value: "OVERRIDE#" + strings.TrimPrefix(pk, "override#")}
+	case strings.HasPrefix(pk, "status#"):
+		item["pk"] = &types.AttributeValueMemberS{Value: "STATUS#" + strings.TrimPrefix(pk, "status#")}
+		item["sk"] = &types.AttributeValueMemberS{Value: "CURRENT"}
+	}
 }
