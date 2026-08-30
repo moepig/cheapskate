@@ -392,12 +392,29 @@ func (s *Store) GetStatuses(ctx context.Context, resourceIDs []string) (map[stri
 }
 
 func (s *Store) UpdateStatus(ctx context.Context, resourceID string, patch StatusPatch) error {
+	return s.updateStatus(ctx, resourceID, patch, "", nil, nil)
+}
+
+func (s *Store) updateStatus(
+	ctx context.Context,
+	resourceID string,
+	patch StatusPatch,
+	condition string,
+	conditionNames map[string]string,
+	conditionValues map[string]types.AttributeValue,
+) error {
 	attrs := patch.attributes()
 	if len(attrs) == 0 {
 		return nil
 	}
-	names := make(map[string]string, len(attrs))
-	values := make(map[string]types.AttributeValue, len(attrs))
+	names := make(map[string]string, len(attrs)+len(conditionNames))
+	values := make(map[string]types.AttributeValue, len(attrs)+len(conditionValues))
+	for name, value := range conditionNames {
+		names[name] = value
+	}
+	for name, value := range conditionValues {
+		values[name] = value
+	}
 	terms := make([]string, 0, len(attrs))
 	for i, attr := range attrs {
 		n, v := fmt.Sprintf("#a%d", i), fmt.Sprintf(":v%d", i)
@@ -405,10 +422,14 @@ func (s *Store) UpdateStatus(ctx context.Context, resourceID string, patch Statu
 		values[v] = &types.AttributeValueMemberS{Value: attr.value}
 		terms = append(terms, n+" = "+v)
 	}
-	_, err := s.db.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+	in := &dynamodb.UpdateItemInput{
 		TableName: &s.table, Key: marshalKey(statusKey(resourceID)), UpdateExpression: aws.String("SET " + strings.Join(terms, ", ")),
 		ExpressionAttributeNames: names, ExpressionAttributeValues: values,
-	})
+	}
+	if condition != "" {
+		in.ConditionExpression = aws.String(condition)
+	}
+	_, err := s.db.UpdateItem(ctx, in)
 	return err
 }
 

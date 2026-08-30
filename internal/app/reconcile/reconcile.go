@@ -32,6 +32,10 @@ type Store interface {
 	ListGroups(ctx context.Context, now time.Time) ([]state.GroupRow, error)
 	GetStatuses(ctx context.Context, resourceIDs []string) (map[string]state.StatusRecord, error)
 	UpdateStatus(ctx context.Context, resourceID string, p state.StatusPatch) error
+	BeginOperation(ctx context.Context, resourceID string, op state.PendingOperation) error
+	CompleteOperation(ctx context.Context, resourceID string, op state.PendingOperation) error
+	AbandonOperation(ctx context.Context, resourceID, operationID string) error
+	AcknowledgeNotification(ctx context.Context, resourceID, operationID string) error
 }
 
 // reconcile 1 回分の依存をまとめたコンテナ
@@ -304,6 +308,51 @@ func reconcileResource(ctx context.Context, deps *Deps, groupName string, res mo
 	}
 	result.Desired, result.Observed = desired, obs.State
 
+	if err := retryActionNotification(ctx, deps, groupName, resourceID, status); err != nil {
+		return err
+	}
+
+	if status.PendingOperationID != "" {
+		op, startedAt, err := pendingOperation(status)
+		if err != nil {
+			return err
+		}
+		if observationMatchesDesired(obs.State, op.Desired) {
+			if err := deps.Store.CompleteOperation(ctx, resourceID, op); err != nil {
+				return fmt.Errorf("complete recovered operation %s: %w", op.ID, err)
+			}
+			result.Action = op.Action
+			deps.Log.Info("action-recovered", "group", groupName, "resource_id", resourceID,
+				"operation_id", op.ID, "action", op.Action, "desired", op.Desired)
+			deliverActionNotification(ctx, deps, groupName, resourceID, op.ID, op.Action, op.Desired, op.StartedAt)
+			clearRecoveredError(ctx, deps, groupName, resourceID, status, false, now)
+			status.PendingOperationID = ""
+			status.PendingAction = model.ActionNone
+			status.PendingDesired = model.DesiredNone
+			status.PendingObserved = ""
+			status.PendingStartedAt = ""
+			status.LastAction = op.Action
+			status.LastDesired = op.Desired
+			status.LastActionAt = op.StartedAt
+		} else if obs.State == model.StateTransitioning {
+			markTransitioning(ctx, deps, resourceID, status, now)
+			deps.Log.Info("skip-pending-transition", "resource_id", resourceID, "operation_id", op.ID,
+				"detail", obs.Detail, "since", firstNonEmpty(status.TransitioningSince, now.UTC().Format(time.RFC3339)))
+			result.Skipped = "pending-action"
+			return nil
+		} else if now.Sub(startedAt) < pendingRecoveryAfter {
+			deps.Log.Info("skip-pending-action", "resource_id", resourceID, "operation_id", op.ID,
+				"observed", obs.State, "age", now.Sub(startedAt))
+			result.Skipped = "pending-action"
+			return nil
+		} else {
+			if err := deps.Store.AbandonOperation(ctx, resourceID, op.ID); err != nil {
+				return fmt.Errorf("abandon stale operation %s: %w", op.ID, err)
+			}
+			return fmt.Errorf("operation %s did not converge within %s", op.ID, pendingRecoveryAfter)
+		}
+	}
+
 	if obs.State == model.StateTransitioning {
 		markTransitioning(ctx, deps, resourceID, status, now)
 		deps.Log.Info("skip-transitioning", "resource_id", resourceID, "detail", obs.Detail,
@@ -332,22 +381,62 @@ func reconcileResource(ctx context.Context, deps *Deps, groupName string, res mo
 		return nil // 書き込みもアクション通知もなし
 	}
 
-	if err := performAction(ctx, res, action, tgt); err != nil {
-		return err
+	operationID, err := newOperationID()
+	if err != nil {
+		return fmt.Errorf("create operation ID: %w", err)
 	}
-	if err := deps.Store.UpdateStatus(ctx, resourceID, state.StatusPatch{
-		ObservedState: state.Set(obs.State),
-		LastAction:    state.Set(action),
-		LastActionAt:  state.Set(now.UTC().Format(time.RFC3339)),
-	}); err != nil {
+	op := state.PendingOperation{
+		ID: operationID, Action: action, Desired: desired, Observed: obs.State,
+		StartedAt: now.UTC().Format(time.RFC3339),
+	}
+	if err := deps.Store.BeginOperation(ctx, resourceID, op); err != nil {
+		return fmt.Errorf("record pending operation %s: %w", operationID, err)
+	}
+	if err := performAction(ctx, res, action, tgt); err != nil {
+		if abandonErr := deps.Store.AbandonOperation(ctx, resourceID, operationID); abandonErr != nil {
+			deps.Log.Error("pending-operation-abandon-failed", "resource_id", resourceID,
+				"operation_id", operationID, "error", abandonErr.Error())
+		}
 		return err
 	}
 	result.Action = action
-	deps.Log.Info("action", "group", groupName, "resource_id", resourceID, "action", action, "desired", desired)
+	deps.Log.Info("action", "group", groupName, "resource_id", resourceID, "operation_id", operationID,
+		"action", action, "desired", desired)
+	if err := deps.Store.CompleteOperation(ctx, resourceID, op); err != nil {
+		return fmt.Errorf("complete operation %s: %w", operationID, err)
+	}
 
-	notifyAction(ctx, deps, groupName, resourceID, action, desired, now)
+	deliverActionNotification(ctx, deps, groupName, resourceID, operationID, action, desired, op.StartedAt)
 	clearRecoveredError(ctx, deps, groupName, resourceID, status, false, now)
 	return nil
+}
+
+func pendingOperation(status model.Status) (state.PendingOperation, time.Time, error) {
+	op := state.PendingOperation{
+		ID: status.PendingOperationID, Action: status.PendingAction, Desired: status.PendingDesired,
+		Observed: status.PendingObserved, StartedAt: status.PendingStartedAt,
+	}
+	startedAt, err := time.Parse(time.RFC3339, op.StartedAt)
+	if err != nil {
+		return state.PendingOperation{}, time.Time{}, fmt.Errorf("pending operation %s has invalid started_at: %w", op.ID, err)
+	}
+	if op.Action != model.ActionStart && op.Action != model.ActionStop {
+		return state.PendingOperation{}, time.Time{}, fmt.Errorf("pending operation %s has invalid action %q", op.ID, op.Action)
+	}
+	if err := op.Desired.Validate(); err != nil {
+		return state.PendingOperation{}, time.Time{}, fmt.Errorf("pending operation %s has invalid desired state: %w", op.ID, err)
+	}
+	if op.Observed != model.StateRunning && op.Observed != model.StateStopped {
+		return state.PendingOperation{}, time.Time{}, fmt.Errorf("pending operation %s has invalid observed state %q", op.ID, op.Observed)
+	}
+	if model.DecideAction(op.Desired, op.Observed) != op.Action {
+		return state.PendingOperation{}, time.Time{}, fmt.Errorf("pending operation %s has inconsistent action %q", op.ID, op.Action)
+	}
+	return op, startedAt, nil
+}
+
+func observationMatchesDesired(observed model.ObservedState, desired model.DesiredState) bool {
+	return observed == model.ObservedState(desired)
 }
 
 // 遷移の開始時刻を、未記録の場合に限り記録する
@@ -399,15 +488,50 @@ func performAction(ctx context.Context, res model.Resource, action model.Action,
 	return fmt.Errorf("unknown action %q", action)
 }
 
-// ベストエフォートで通知する
-// 通知の失敗はログに残すだけで、reconcile のエラーとしては扱わない
-// アクション自体はすでに成功し、永続化も済んでいるためである
-func notifyAction(ctx context.Context, deps *Deps, group, resourceID string, action model.Action, desired model.DesiredState, now time.Time) {
+// 前回完了した操作の未送信通知を再試行する。
+// 通知先の一時的な障害はエラーとして返さず、notification_pending を次回まで残す。
+func retryActionNotification(ctx context.Context, deps *Deps, group, resourceID string, status model.Status) error {
+	if status.NotificationPending == "" {
+		return nil
+	}
+	if status.LastAction != model.ActionStart && status.LastAction != model.ActionStop {
+		return fmt.Errorf("notification %s has invalid action %q", status.NotificationPending, status.LastAction)
+	}
+	if err := status.LastDesired.Validate(); err != nil {
+		return fmt.Errorf("notification %s has invalid desired state: %w", status.NotificationPending, err)
+	}
+	if status.LastActionAt == "" {
+		return fmt.Errorf("notification %s has no action timestamp", status.NotificationPending)
+	}
+	deliverActionNotification(ctx, deps, group, resourceID, status.NotificationPending,
+		status.LastAction, status.LastDesired, status.LastActionAt)
+	return nil
+}
+
+// 完了済みの操作を通知し、成功した場合だけ通知待ちを解除する。
+// Publish と解除の間で停止した場合は同じ operation_id の通知が再送される。
+func deliverActionNotification(
+	ctx context.Context,
+	deps *Deps,
+	group, resourceID, operationID string,
+	action model.Action,
+	desired model.DesiredState,
+	at string,
+) {
 	if err := deps.Notifier.Publish(ctx,
 		fmt.Sprintf("[cheapskate] %s: %s/%s", action, group, resourceID),
-		map[string]any{"group": group, "resource_id": resourceID, "action": action, "desired": desired, "at": now.UTC().Format(time.RFC3339)},
+		map[string]any{
+			"group": group, "resource_id": resourceID, "operation_id": operationID,
+			"action": action, "desired": desired, "at": at,
+		},
 	); err != nil {
-		deps.Log.Error("action-notify-failed", "group", group, "resource_id", resourceID, "error", err.Error())
+		deps.Log.Error("action-notify-failed", "group", group, "resource_id", resourceID,
+			"operation_id", operationID, "error", err.Error())
+		return
+	}
+	if err := deps.Store.AcknowledgeNotification(ctx, resourceID, operationID); err != nil {
+		deps.Log.Error("action-notify-ack-failed", "group", group, "resource_id", resourceID,
+			"operation_id", operationID, "error", err.Error())
 	}
 }
 

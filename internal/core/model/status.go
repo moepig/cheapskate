@@ -15,12 +15,19 @@ import (
 // 遷移中のリソースは skip の対象であり、エラーにも通知にも現れないためである
 // 遷移が停滞したとみなす経過時間は reconciler では判定せず、doctor と各 UI が経過時間として提示する
 type Status struct {
-	ObservedState      ObservedState `json:"observed_state,omitempty"`
-	LastAction         Action        `json:"last_action,omitempty"`
-	LastActionAt       string        `json:"last_action_at,omitempty"`
-	LastError          string        `json:"last_error,omitempty"`
-	LastErrorAt        string        `json:"last_error_at,omitempty"`
-	TransitioningSince string        `json:"transitioning_since,omitempty"`
+	ObservedState       ObservedState `json:"observed_state,omitempty"`
+	LastAction          Action        `json:"last_action,omitempty"`
+	LastDesired         DesiredState  `json:"last_desired,omitempty"`
+	LastActionAt        string        `json:"last_action_at,omitempty"`
+	LastError           string        `json:"last_error,omitempty"`
+	LastErrorAt         string        `json:"last_error_at,omitempty"`
+	TransitioningSince  string        `json:"transitioning_since,omitempty"`
+	PendingOperationID  string        `json:"pending_operation_id,omitempty"`
+	PendingAction       Action        `json:"pending_action,omitempty"`
+	PendingDesired      DesiredState  `json:"pending_desired,omitempty"`
+	PendingObserved     ObservedState `json:"pending_observed,omitempty"`
+	PendingStartedAt    string        `json:"pending_started_at,omitempty"`
+	NotificationPending string        `json:"notification_pending,omitempty"`
 }
 
 // グループ自身のステータスを記録する合成リソース ID の接頭辞

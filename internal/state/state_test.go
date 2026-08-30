@@ -464,3 +464,54 @@ func TestGetPutStatusForGroupPseudoID(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "discover: access denied", got.LastError)
 }
+
+func TestReconcileLeaseExcludesConcurrentOwnerAndCanBeTakenAfterExpiry(t *testing.T) {
+	_, st := newFixture(t)
+	ctx := context.Background()
+	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
+
+	acquired, err := st.AcquireLease(ctx, "owner-a", now, now.Add(time.Minute))
+	require.NoError(t, err)
+	assert.True(t, acquired)
+
+	acquired, err = st.AcquireLease(ctx, "owner-b", now.Add(30*time.Second), now.Add(2*time.Minute))
+	require.NoError(t, err)
+	assert.False(t, acquired)
+
+	acquired, err = st.AcquireLease(ctx, "owner-b", now.Add(61*time.Second), now.Add(3*time.Minute))
+	require.NoError(t, err)
+	assert.True(t, acquired)
+	assert.Error(t, st.ReleaseLease(ctx, "owner-a"), "以前の所有者は新しいリースを解除できない")
+	assert.NoError(t, st.ReleaseLease(ctx, "owner-b"))
+}
+
+func TestPendingOperationRequiresMatchingOperationID(t *testing.T) {
+	_, st := newFixture(t)
+	ctx := context.Background()
+	resourceID := "rds-instance#dev"
+	op := PendingOperation{
+		ID: "op-a", Action: model.ActionStop, Desired: model.DesiredStopped,
+		Observed: model.StateRunning, StartedAt: "2026-08-30T12:00:00Z",
+	}
+
+	require.NoError(t, st.BeginOperation(ctx, resourceID, op))
+	assert.Error(t, st.BeginOperation(ctx, resourceID, PendingOperation{ID: "op-b"}),
+		"未完了の操作を別の操作で上書きしてはならない")
+	assert.Error(t, st.CompleteOperation(ctx, resourceID, PendingOperation{ID: "op-b"}),
+		"異なる操作IDでは完了へ進めてはならない")
+	require.NoError(t, st.CompleteOperation(ctx, resourceID, op))
+
+	got, err := st.GetStatus(ctx, resourceID)
+	require.NoError(t, err)
+	assert.Empty(t, got.PendingOperationID)
+	assert.Equal(t, model.ActionStop, got.LastAction)
+	assert.Equal(t, model.DesiredStopped, got.LastDesired)
+	assert.Equal(t, "op-a", got.NotificationPending)
+
+	assert.Error(t, st.AcknowledgeNotification(ctx, resourceID, "op-b"),
+		"異なる操作IDでは通知待ちを解除してはならない")
+	require.NoError(t, st.AcknowledgeNotification(ctx, resourceID, "op-a"))
+	got, err = st.GetStatus(ctx, resourceID)
+	require.NoError(t, err)
+	assert.Empty(t, got.NotificationPending)
+}

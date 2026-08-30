@@ -383,6 +383,30 @@ func TestNotifyFailureAfterSuccessfulActionIsNotAnError(t *testing.T) {
 	status := f.db.Item("status#rds-instance#dev-db")
 	require.NotNil(t, status)
 	assert.Nil(t, status["last_error"], "notify failure must not be written as last_error")
+	assert.NotEmpty(t, status["notification_pending"], "失敗した通知は次回の再試行まで残す")
+}
+
+func TestFailedActionNotificationIsRetriedWithSameOperationID(t *testing.T) {
+	f := newFixture(t)
+	f.pinnedStoppedGroup("dev-db", rdsInstance("dev-db"))
+	f.rds.Observations["dev-db"] = model.Observation{State: model.StateRunning}
+	f.notifier.Err = fmt.Errorf("sns down")
+
+	runEmpty(t, f)
+	require.Len(t, f.notifier.Published, 1)
+	firstOperationID := f.notifier.Published[0].Payload["operation_id"]
+	require.NotEmpty(t, firstOperationID)
+
+	f.notifier.Err = nil
+	f.rds.Observations["dev-db"] = model.Observation{State: model.StateTransitioning, Detail: "stopping"}
+	runEmpty(t, f)
+
+	require.Len(t, f.notifier.Published, 2)
+	assert.Equal(t, firstOperationID, f.notifier.Published[1].Payload["operation_id"])
+	status := f.db.Item("status#rds-instance#dev-db")
+	require.NotNil(t, status)
+	assert.Equal(t, "", status["notification_pending"].(*types.AttributeValueMemberS).Value)
+	assert.Len(t, f.rds.Stopped, 1, "通知の再試行では停止操作を再実行しない")
 }
 
 // アクションの成功後における PutStatus の失敗は、そのサイクルのエラーとして記録し、他のリソースの reconcile を継続する
@@ -400,6 +424,46 @@ func TestPutStatusFailureAfterActionIsRecordedButIsolated(t *testing.T) {
 	require.Len(t, summary.Errors, 1)
 	assert.Equal(t, "rds-instance#dev-db", summary.Errors[0].ResourceID)
 	assert.Len(t, f.cluster.Stopped, 1, "second resource must still be reconciled")
+}
+
+func TestPendingOperationRecoversWithoutRepeatingAWSAction(t *testing.T) {
+	f := newFixture(t)
+	f.pinnedStoppedGroup("dev-db", rdsInstance("dev-db"))
+	f.rds.Observations["dev-db"] = model.Observation{State: model.StateRunning}
+	f.db.FailOnNth("update", "status#rds-instance#dev-db", 2, fmt.Errorf("dynamodb unavailable after action"))
+
+	first := runEmpty(t, f)
+	require.Len(t, first.Errors, 1)
+	assert.Len(t, f.rds.Stopped, 1)
+	status := f.db.Item("status#rds-instance#dev-db")
+	require.NotNil(t, status)
+	require.NotNil(t, status["pending_operation_id"])
+	assert.NotEmpty(t, status["pending_operation_id"].(*types.AttributeValueMemberS).Value)
+	assert.Nil(t, status["last_action"], "完了記録に失敗した操作を完了済みとして扱わない")
+
+	f.rds.Observations["dev-db"] = model.Observation{State: model.StateTransitioning, Detail: "stopping"}
+	second := runEmpty(t, f)
+	assert.Empty(t, second.Errors)
+	assert.Len(t, f.rds.Stopped, 1, "遷移中は停止操作を再実行しない")
+
+	f.rds.Observations["dev-db"] = model.Observation{State: model.StateStopped}
+	third := runEmpty(t, f)
+	assert.Empty(t, third.Errors)
+	require.Len(t, third.Actions, 1, "観測結果から未完了の操作を完了へ進める")
+	assert.Equal(t, model.ActionStop, third.Actions[0].Action)
+	assert.Len(t, f.rds.Stopped, 1, "収束確認後も停止操作を再実行しない")
+
+	status = f.db.Item("status#rds-instance#dev-db")
+	assert.Equal(t, "", status["pending_operation_id"].(*types.AttributeValueMemberS).Value)
+	assert.Equal(t, "stop", status["last_action"].(*types.AttributeValueMemberS).Value)
+	assert.Equal(t, "", status["last_error"].(*types.AttributeValueMemberS).Value)
+	var actionNotifications int
+	for _, notification := range f.notifier.Published {
+		if strings.Contains(notification.Subject, " stop: ") {
+			actionNotifications++
+		}
+	}
+	assert.Equal(t, 1, actionNotifications)
 }
 
 // エラー記録用の PutStatus が失敗した場合も、Run は panic せず他のリソースの処理を継続しなければならない

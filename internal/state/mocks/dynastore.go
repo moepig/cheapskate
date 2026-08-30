@@ -19,8 +19,14 @@ type DynaStore struct {
 	mu           sync.Mutex
 	items        map[string]map[string]types.AttributeValue
 	fail         map[string]error
+	failNth      map[string]delayedFailure
 	calls        map[string]int
 	scanPageSize int
+}
+
+type delayedFailure struct {
+	remaining int
+	err       error
 }
 
 // Scan・GetItem・PutItem・UpdateItem・DeleteItem をインメモリのテーブルで裏打ちした、生成済みの MockAPI を返す
@@ -57,6 +63,19 @@ func (f *DynaStore) FailOn(op, pk string, err error) {
 	f.fail[op+"|"+pk] = err
 }
 
+// FailOnNth は条件に合致する n 回目の呼び出しだけを失敗させる。
+func (f *DynaStore) FailOnNth(op, pk string, n int, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if n < 1 {
+		panic("DynaStore.FailOnNth: n must be at least 1")
+	}
+	if f.failNth == nil {
+		f.failNth = map[string]delayedFailure{}
+	}
+	f.failNth[op+"|"+pk] = delayedFailure{remaining: n, err: err}
+}
+
 // Scan が 1 回あたり最大 n 件だけ返すようにし、LastEvaluatedKey を報告して呼び出し側に残りのページ送りを強いる
 // 既定値の 0 は無制限(1 ページ)を意味する
 func (f *DynaStore) SetScanPageSize(n int) {
@@ -68,16 +87,24 @@ func (f *DynaStore) SetScanPageSize(n int) {
 // (op, pk) に注入された失敗を取り出して返す
 // 操作全体に対する "" の指定よりも、キー個別の指定を優先する
 func (f *DynaStore) takeFailure(op, pk string) error {
-	if f.fail == nil {
-		return nil
+	keys := []string{op + "|" + pk, op + "|"}
+	for _, key := range keys {
+		if err, ok := f.fail[key]; ok {
+			delete(f.fail, key)
+			return err
+		}
 	}
-	if err, ok := f.fail[op+"|"+pk]; ok {
-		delete(f.fail, op+"|"+pk)
-		return err
-	}
-	if err, ok := f.fail[op+"|"]; ok {
-		delete(f.fail, op+"|")
-		return err
+	for _, key := range keys {
+		failure, ok := f.failNth[key]
+		if !ok {
+			continue
+		}
+		failure.remaining--
+		if failure.remaining == 0 {
+			delete(f.failNth, key)
+			return failure.err
+		}
+		f.failNth[key] = failure
 	}
 	return nil
 }
