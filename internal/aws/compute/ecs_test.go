@@ -22,6 +22,7 @@ func ecsDescribe(e *mocks.MockEcsAPI, desiredCount int32) {
 	e.EXPECT().DescribeServices(gomock.Any(), gomock.Any()).Return(&ecs.DescribeServicesOutput{Services: []ecstypes.Service{{
 		Status:       aws.String("ACTIVE"),
 		DesiredCount: desiredCount,
+		RunningCount: desiredCount,
 	}}}, nil)
 }
 
@@ -228,7 +229,7 @@ func TestEcsDescribeStates(t *testing.T) {
 	obs, err := tgt.Describe(context.Background(), "dev/api")
 	require.NoError(t, err)
 	assert.Equal(t, model.StateRunning, obs.State)
-	assert.Equal(t, "desiredCount=2", obs.Detail, "種別固有の細部は Detail が運ぶ")
+	assert.Equal(t, "desiredCount=2 runningCount=2 pendingCount=0", obs.Detail, "種別固有の細部は Detail が運ぶ")
 
 	e2 := mocks.NewMockEcsAPI(ctrl)
 	ecsDescribe(e2, 0)
@@ -239,6 +240,39 @@ func TestEcsDescribeStates(t *testing.T) {
 
 	_, err = tgt.Describe(context.Background(), "noslash")
 	require.Error(t, err, "want error for malformed ecs ref")
+}
+
+func TestEcsDescribeTreatsTaskCountMismatchAsTransitioning(t *testing.T) {
+	cases := map[string]ecstypes.Service{
+		"stopping tasks remain": {
+			Status: aws.String("ACTIVE"), DesiredCount: 0, RunningCount: 1,
+		},
+		"starting task is pending": {
+			Status: aws.String("ACTIVE"), DesiredCount: 1, PendingCount: 1,
+		},
+		"scale out is incomplete": {
+			Status: aws.String("ACTIVE"), DesiredCount: 3, RunningCount: 2, PendingCount: 1,
+		},
+		"scale in is incomplete": {
+			Status: aws.String("ACTIVE"), DesiredCount: 1, RunningCount: 2,
+		},
+	}
+	for name, service := range cases {
+		t.Run(name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			e := mocks.NewMockEcsAPI(ctrl)
+			e.EXPECT().DescribeServices(gomock.Any(), gomock.Any()).Return(
+				&ecs.DescribeServicesOutput{Services: []ecstypes.Service{service}}, nil)
+			tgt := &EcsServiceTarget{Ecs: e, AutoScaling: mocks.NewMockAutoScalingAPI(ctrl)}
+
+			obs, err := tgt.Describe(context.Background(), "dev/api")
+
+			require.NoError(t, err)
+			assert.Equal(t, model.StateTransitioning, obs.State)
+			assert.Contains(t, obs.Detail, "runningCount=")
+			assert.Contains(t, obs.Detail, "pendingCount=")
+		})
+	}
 }
 
 // 削除済みのサービスと INACTIVE なサービスは、StateNotFound とする

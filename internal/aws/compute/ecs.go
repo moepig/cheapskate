@@ -51,17 +51,25 @@ func (t *EcsServiceTarget) Describe(ctx context.Context, ref string) (model.Obse
 	}
 	for _, s := range out.Services {
 		if s.Status != nil && *s.Status == "ACTIVE" {
-			state := model.StateStopped
-			if s.DesiredCount > 0 {
-				state = model.StateRunning
-			}
 			return model.Observation{
-				State:  state,
-				Detail: fmt.Sprintf("desiredCount=%d", s.DesiredCount),
+				State:  ecsServiceState(s.DesiredCount, s.RunningCount, s.PendingCount),
+				Detail: fmt.Sprintf("desiredCount=%d runningCount=%d pendingCount=%d", s.DesiredCount, s.RunningCount, s.PendingCount),
 			}, nil
 		}
 	}
 	return model.Observation{State: model.StateNotFound}, nil
+}
+
+// ECS サービスの稼働状態をタスク数だけから判定する。
+// desiredCount の変更がタスクへ反映される途中では、追加の start/stop を送らない。
+func ecsServiceState(desired, running, pending int32) model.ObservedState {
+	if desired == 0 && running == 0 && pending == 0 {
+		return model.StateStopped
+	}
+	if desired > 0 && running == desired && pending == 0 {
+		return model.StateRunning
+	}
+	return model.StateTransitioning
 }
 
 // stop はスケーラブルターゲットの 0/0 化と desiredCount の 0 化の 2 段階からなり、原子的ではない
