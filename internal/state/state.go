@@ -2,6 +2,7 @@ package state
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -409,6 +410,53 @@ func (s *Store) UpdateStatus(ctx context.Context, resourceID string, patch Statu
 		ExpressionAttributeNames: names, ExpressionAttributeValues: values,
 	})
 	return err
+}
+
+// AcquireLease は期限切れのときだけ全体 reconcile のリースを取得する。
+func (s *Store) AcquireLease(ctx context.Context, owner string, now, expiresAt time.Time) (bool, error) {
+	_, err := s.db.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName:           &s.table,
+		Key:                 marshalKey(reconcileLockKey()),
+		UpdateExpression:    aws.String("SET #owner = :owner, #expires_at = :expires_at"),
+		ConditionExpression: aws.String("attribute_not_exists(#pk) OR #expires_at < :now"),
+		ExpressionAttributeNames: map[string]string{
+			"#pk": "pk", "#owner": "owner", "#expires_at": "expires_at",
+		},
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":owner":      &types.AttributeValueMemberS{Value: owner},
+			":now":        &types.AttributeValueMemberN{Value: fmt.Sprint(now.Unix())},
+			":expires_at": &types.AttributeValueMemberN{Value: fmt.Sprint(expiresAt.Unix())},
+		},
+	})
+	if err == nil {
+		return true, nil
+	}
+	if isConditionalCheckFailed(err) {
+		return false, nil
+	}
+	return false, fmt.Errorf("acquire reconcile lease: %w", err)
+}
+
+// ReleaseLease は所有者が一致するリースだけを削除する。
+func (s *Store) ReleaseLease(ctx context.Context, owner string) error {
+	_, err := s.db.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+		TableName:                &s.table,
+		Key:                      marshalKey(reconcileLockKey()),
+		ConditionExpression:      aws.String("#owner = :owner"),
+		ExpressionAttributeNames: map[string]string{"#owner": "owner"},
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":owner": &types.AttributeValueMemberS{Value: owner},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("release reconcile lease: %w", err)
+	}
+	return nil
+}
+
+func isConditionalCheckFailed(err error) bool {
+	var target *types.ConditionalCheckFailedException
+	return errors.As(err, &target)
 }
 
 func (s *Store) DeleteGroup(ctx context.Context, name string) error {

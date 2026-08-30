@@ -136,6 +136,25 @@ func TestRunDoesNotScanOrReadStatusesOneByOne(t *testing.T) {
 	assert.Zero(t, f.db.Calls("get"))
 }
 
+func TestRunSkipsAllWorkWhileAnotherInvocationHoldsLease(t *testing.T) {
+	f := newFixture(t)
+	f.pinnedStoppedGroup("dev-db", rdsInstance("dev-db"))
+	f.rds.Observations["dev-db"] = model.Observation{State: model.StateRunning}
+	acquired, err := f.deps.Store.AcquireLease(context.Background(), "other-invocation", now, now.Add(time.Minute))
+	require.NoError(t, err)
+	require.True(t, acquired)
+
+	summary := runEmpty(t, f)
+
+	assert.Equal(t, "lease-held", summary.Skipped)
+	assert.Zero(t, summary.Reconciled)
+	assert.Empty(t, summary.Actions)
+	assert.Empty(t, summary.Errors)
+	assert.Zero(t, f.db.Calls("query"), "リースを取得できない呼び出しは設定を読み取らない")
+	assert.Zero(t, f.discoverer.Calls(), "リースを取得できない呼び出しはAWSを探索しない")
+	assert.Empty(t, f.rds.Stopped)
+}
+
 // model.TypeEc2Instance を Deps.Targets 内の Target へ解決する経路を検証する
 // 他の種別と同じ pin/stop のディスパッチを、ec2-instance についても通す
 func TestStopsRunningPinnedEc2Instance(t *testing.T) {

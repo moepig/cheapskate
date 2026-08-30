@@ -6,6 +6,8 @@ package reconcile
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -25,6 +27,8 @@ import (
 // それらを所有するのは CLI と web console であり、reconciler にとっては読み取り専用の入力である
 // 型で限定することにより、reconcile から設定を書き換える経路が存在しなくなる
 type Store interface {
+	AcquireLease(ctx context.Context, owner string, now, expiresAt time.Time) (bool, error)
+	ReleaseLease(ctx context.Context, owner string) error
 	ListGroups(ctx context.Context, now time.Time) ([]state.GroupRow, error)
 	GetStatuses(ctx context.Context, resourceIDs []string) (map[string]state.StatusRecord, error)
 	UpdateStatus(ctx context.Context, resourceID string, p state.StatusPatch) error
@@ -56,6 +60,7 @@ type Summary struct {
 	Reconciled int      `json:"reconciled"`
 	Actions    []Result `json:"actions"`
 	Errors     []Result `json:"errors"`
+	Skipped    string   `json:"skipped,omitempty"`
 }
 
 // 呼び出しペイロードであり、任意の JSON オブジェクトが全体 reconcile を起動する
@@ -79,6 +84,26 @@ func Run(ctx context.Context, raw json.RawMessage, deps *Deps, now time.Time) (S
 	if event.Source != "" {
 		deps.Log.Info("event-received", "source", event.Source, "reason", "every invocation does a full reconcile")
 	}
+
+	owner, err := newOperationID()
+	if err != nil {
+		return Summary{}, fmt.Errorf("create reconcile lease owner: %w", err)
+	}
+	acquired, err := deps.Store.AcquireLease(ctx, owner, now, leaseExpiration(ctx, now))
+	if err != nil {
+		return Summary{}, err
+	}
+	if !acquired {
+		deps.Log.Info("skip-lease-held")
+		return Summary{Actions: []Result{}, Errors: []Result{}, Skipped: "lease-held"}, nil
+	}
+	defer func() {
+		releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		if err := deps.Store.ReleaseLease(releaseCtx, owner); err != nil {
+			deps.Log.Error("lease-release-failed", "owner", owner, "error", err.Error())
+		}
+	}()
 
 	rows, err := deps.Store.ListGroups(ctx, now)
 	if err != nil {
@@ -110,6 +135,32 @@ func Run(ctx context.Context, raw json.RawMessage, deps *Deps, now time.Time) (S
 		"actions", len(summary.Actions),
 		"errors", len(summary.Errors))
 	return summary, nil
+}
+
+const (
+	defaultLeaseDuration = 3 * time.Minute
+	leaseSafetyMargin    = 15 * time.Second
+	pendingRecoveryAfter = 30 * time.Minute
+)
+
+func leaseExpiration(ctx context.Context, now time.Time) time.Time {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return now.Add(defaultLeaseDuration)
+	}
+	remaining := time.Until(deadline)
+	if remaining < 0 {
+		remaining = 0
+	}
+	return now.Add(remaining + leaseSafetyMargin)
+}
+
+func newOperationID() (string, error) {
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(raw[:]), nil
 }
 
 // 1 つのリソースを 1 つのグループのみが管理するという規則を、1 回の reconcile を通して保つ所有権の台帳

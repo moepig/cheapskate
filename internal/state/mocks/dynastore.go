@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -219,6 +220,9 @@ func (f *DynaStore) updateItem(_ context.Context, in *dynamodb.UpdateItemInput, 
 	}
 	key := keyID(in.Key)
 	item := f.items[key]
+	if !updateConditionMatches(item, in) {
+		return nil, &types.ConditionalCheckFailedException{}
+	}
 	if item == nil {
 		item = keyOf(in.Key)
 		f.items[key] = item
@@ -269,8 +273,68 @@ func (f *DynaStore) deleteItem(_ context.Context, in *dynamodb.DeleteItemInput, 
 	if err := f.takeFailure("delete", failureKey(in.Key)); err != nil {
 		return nil, err
 	}
-	delete(f.items, keyID(in.Key))
+	key := keyID(in.Key)
+	if !deleteConditionMatches(f.items[key], in) {
+		return nil, &types.ConditionalCheckFailedException{}
+	}
+	delete(f.items, key)
 	return &dynamodb.DeleteItemOutput{}, nil
+}
+
+func updateConditionMatches(item map[string]types.AttributeValue, in *dynamodb.UpdateItemInput) bool {
+	if in.ConditionExpression == nil {
+		return true
+	}
+	switch *in.ConditionExpression {
+	case "attribute_not_exists(#pk) OR #expires_at < :now":
+		if item == nil || item[in.ExpressionAttributeNames["#pk"]] == nil {
+			return true
+		}
+		actual, aok := numberValue(item[in.ExpressionAttributeNames["#expires_at"]])
+		expected, eok := numberValue(in.ExpressionAttributeValues[":now"])
+		return aok && eok && actual < expected
+	case "attribute_not_exists(#pending_operation_id) OR #pending_operation_id = :empty":
+		attr := in.ExpressionAttributeNames["#pending_operation_id"]
+		return item == nil || item[attr] == nil || equalAttributeValue(item[attr], in.ExpressionAttributeValues[":empty"])
+	case "#pending_operation_id = :operation_id":
+		return item != nil && equalAttributeValue(item[in.ExpressionAttributeNames["#pending_operation_id"]], in.ExpressionAttributeValues[":operation_id"])
+	case "#notification_pending = :operation_id":
+		return item != nil && equalAttributeValue(item[in.ExpressionAttributeNames["#notification_pending"]], in.ExpressionAttributeValues[":operation_id"])
+	default:
+		panic(fmt.Sprintf("dynastore: unsupported update condition %q", *in.ConditionExpression))
+	}
+}
+
+func deleteConditionMatches(item map[string]types.AttributeValue, in *dynamodb.DeleteItemInput) bool {
+	if in.ConditionExpression == nil {
+		return true
+	}
+	if *in.ConditionExpression != "#owner = :owner" {
+		panic(fmt.Sprintf("dynastore: unsupported delete condition %q", *in.ConditionExpression))
+	}
+	return item != nil && equalAttributeValue(item[in.ExpressionAttributeNames["#owner"]], in.ExpressionAttributeValues[":owner"])
+}
+
+func equalAttributeValue(a, b types.AttributeValue) bool {
+	switch av := a.(type) {
+	case *types.AttributeValueMemberS:
+		bv, ok := b.(*types.AttributeValueMemberS)
+		return ok && av.Value == bv.Value
+	case *types.AttributeValueMemberN:
+		bv, ok := b.(*types.AttributeValueMemberN)
+		return ok && av.Value == bv.Value
+	default:
+		return false
+	}
+}
+
+func numberValue(v types.AttributeValue) (int64, bool) {
+	n, ok := v.(*types.AttributeValueMemberN)
+	if !ok {
+		return 0, false
+	}
+	parsed, err := strconv.ParseInt(n.Value, 10, 64)
+	return parsed, err == nil
 }
 
 func pkOf(item map[string]types.AttributeValue) string {
