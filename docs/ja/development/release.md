@@ -23,6 +23,8 @@ git push origin v0.1.0
 | `cheapskate-webconsole` イメージ | `ghcr.io/moepig/cheapskate-webconsole` | バージョン、`latest` |
 | `cheapskate-cli` アーカイブ | GitHub リリース | — |
 
+`latest` は試用と最新版の発見のために残す移動タグであり、デプロイには使わない。Lambda へ配置するイメージはバージョンタグ、厳密に同じ内容を再現する必要がある環境では digest で参照する。
+
 どちらのイメージもマルチアーキテクチャ(`linux/amd64`、`linux/arm64`)である。goreleaser がクロスコンパイルしたバイナリを、`build/Dockerfile.reconciler` と `build/Dockerfile.webconsole` により buildx が組み立てる。ソースからビルドするのはリポジトリルートの `Dockerfile` であり、ローカルのビルドとイメージテストにとってはそちらが正となる。ローカルビルドの手順は、[build.md](build.md) のコンテナイメージを参照。
 
 > [!IMPORTANT]
@@ -39,7 +41,7 @@ GHCR への push はワークフローの `GITHUB_TOKEN`(`packages: write`)で�
 
 Dependabot が週次で pull request を作る(`.github/dependabot.yml`)。対象は Go モジュール、Actions、ルートおよびリリース用 Dockerfile のベースイメージである。常に一括で動くもの(AWS SDK のモジュール群、Actions、イメージ)が 1 つの pull request になるよう、グループ化している。いずれも `ci.yml` によって検査され、イメージテストも含まれる。
 
-Lambda Web Adapter は Web コンソール用 Dockerfile にタグで固定されており、docker の更新対象に含まれる。Go の依存と異なり `go.mod` には現れないため、これがなければバージョンの移動を検知する仕組みが存在しない。
+Dockerfile frontend、Go ビルダー、Lambda ベースイメージ、Lambda Web Adapter はタグと digest の両方で固定し、docker の更新対象に含める。Go の依存と異なり `go.mod` には現れないため、Dependabot がタグと digest を同時に更新する。
 
 ### リリースからの経過日数
 

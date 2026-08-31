@@ -30,9 +30,9 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     -o /bootstrap ./cmd/reconciler
 
 # The Lambda Web Adapter, an external extension that speaks the Lambda Runtime API on the web
-# console's behalf and forwards each invocation to it as an ordinary HTTP request. Multi-arch, so
-# the tag alone resolves to the right build for --platform. Pinned to an exact version: unlike the
-# Go dependencies it is not in go.mod, so nothing else would notice it moving.
+# console's behalf and forwards each invocation to it as an ordinary HTTP request. The pinned
+# multi-arch manifest resolves the right build for --platform. Unlike Go dependencies, the adapter
+# is not in go.mod, so its version tag and digest are maintained as a Docker dependency.
 FROM public.ecr.aws/awsguru/aws-lambda-adapter:1.1.0@sha256:3a108c4ceee9e0346a61fc0fc7085017945c664be4eaa2925855b8dd2467227b AS lambda-adapter
 
 FROM public.ecr.aws/lambda/provided:al2023@sha256:8584408dac0c2536dfb4557ca91b08bc4fc727f785f3df6458b2145a10bc9978 AS webconsole

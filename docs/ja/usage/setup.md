@@ -46,7 +46,7 @@ make push \
   TAG=v0.1.0
 ```
 
-Web コンソールを使わない場合は `make push-reconciler ECR_REPO_RECONCILER=... TAG=v0.1.0` で足りる。Lambda 関数からは push した URI を参照する。参照は digest 指定を推奨する。
+Web コンソールを使わない場合は `make push-reconciler ECR_REPO_RECONCILER=... TAG=v0.1.0` で足りる。Lambda 関数からは push した URI を参照する。デプロイには `latest` を使わず、バージョンタグ、さらに再現性が必要な環境では ECR が返す digest を指定する。`latest` は試用と発見のために残してある移動タグである。
 
 既定のプラットフォームは `linux/arm64` である。x86 を使う場合は `make push PLATFORM=linux/amd64 ...` とし、Lambda アーキテクチャを `x86_64` とする。
 
@@ -57,18 +57,21 @@ Web コンソールを使わない場合は `make push-reconciler ECR_REPO_RECON
 | 項目 | 値 |
 |---|---|
 | パーティションキー | `pk`(String) |
-| ソートキー / GSI | なし |
+| ソートキー | `sk`(String) |
+| GSI / LSI | なし |
 | TTL | 属性 `expires_at` で有効化する |
 | 課金モード | 任意(オンデマンド推奨) |
 
 ```console
 aws dynamodb create-table --table-name cheapskate-state \
-  --attribute-definitions AttributeName=pk,AttributeType=S \
-  --key-schema AttributeName=pk,KeyType=HASH \
+  --attribute-definitions AttributeName=pk,AttributeType=S AttributeName=sk,AttributeType=S \
+  --key-schema AttributeName=pk,KeyType=HASH AttributeName=sk,KeyType=RANGE \
   --billing-mode PAY_PER_REQUEST
 aws dynamodb update-time-to-live --table-name cheapskate-state \
   --time-to-live-specification "Enabled=true,AttributeName=expires_at"
 ```
+
+この複合キーは v2 の破壊的な保存形式である。`pk` だけを持つ旧テーブルの読み取りや移行処理は実装していないため、旧テーブルをそのまま関数へ指定してはならない。新しい空テーブルを作成し、グループ設定を改めて投入する。
 
 ## 3. SNS トピックと監視(オプション)
 
@@ -92,7 +95,7 @@ aws sns subscribe --topic-arn arn:aws:sns:ap-northeast-1:123456789012:cheapskate
 
 ### メトリクス
 
-reconciler は毎サイクル、4 つのメトリクスを出力する。名前空間は `METRICS_NAMESPACE`(既定 `cheapskate`)、次元なし、単位は Count である。`PutMetricData` を呼ばず CloudWatch Logs 経由で生成されるため、追加の IAM 権限を要しない。出力するメトリクスを、以下に示す。
+`METRICS_ENABLED=true` を明示した場合、reconciler は毎サイクル、4 つのメトリクスを出力する。既定では無効である。名前空間は `METRICS_NAMESPACE`(既定 `cheapskate`)、次元なし、単位は Count である。`PutMetricData` を呼ばず CloudWatch Logs 経由で生成されるため、追加の IAM 権限を要しない。出力するメトリクスを、以下に示す。
 
 | メトリクス | 意味 |
 | --- | --- |
@@ -101,14 +104,14 @@ reconciler は毎サイクル、4 つのメトリクスを出力する。名前�
 | `ReconcileErrors` | リソース単位・グループ単位の失敗件数 |
 | `ReconcileAborted` | サイクル自体が立ち上がらなかったとき 1、通常は 0 |
 
-この 4 本はカスタムメトリクスとして課金される(合計で月 1 ドル強)。不要であれば `METRICS_ENABLED=false` で発行を止められる。
+この 4 本はカスタムメトリクスとして課金される(合計で月 1 ドル強)。必要な環境だけ `METRICS_ENABLED=true` を設定する。
 
 ### 失敗検知のアラーム
 
-通知とは別に、失敗の検知には Lambda の `Errors` メトリクスへのアラームを設定する。設定するアラームの具体例と、それぞれが何を捉えるかは、[troubleshooting.md](troubleshooting.md) の障害の検知を参照。
+Lambda の `Errors` は payload 不正や初期読取失敗など、サイクル全体の中断だけを捉える。リソース単位の失敗は Lambda 成功応答の `errors`、Status、ログ、SNS 通知へ報告される。メトリクスを有効にした場合は `ReconcileErrors` でも検知できる。具体例は [troubleshooting.md](troubleshooting.md) の障害の検知を参照する。
 
 > [!WARNING]
-> SNS トピックと `Errors` アラームのいずれも用意しない場合、全リソースが失敗し続けても検知経路が存在しない。少なくとも一方を設定すること。
+> SNS トピック、Status／ログの監視、有効化した `ReconcileErrors` アラームのいずれも用意しない場合、リソース単位の失敗を能動的に検知できない。少なくとも 1 つを設定すること。
 
 ## 4. Lambda 実行ロール
 
@@ -131,8 +134,11 @@ reconciler は毎サイクル、4 つのメトリクスを出力する。名前�
     {
       "Sid": "StateRead",
       "Effect": "Allow",
-      "Action": ["dynamodb:Scan", "dynamodb:GetItem"],
-      "Resource": "arn:aws:dynamodb:ap-northeast-1:123456789012:table/cheapskate-state"
+      "Action": ["dynamodb:Query", "dynamodb:BatchGetItem"],
+      "Resource": "arn:aws:dynamodb:ap-northeast-1:123456789012:table/cheapskate-state",
+      "Condition": {
+        "ForAllValues:StringLike": {"dynamodb:LeadingKeys": ["CONFIG", "STATUS#*"]}
+      }
     },
     {
       "Sid": "StateWriteStatusOnly",
@@ -140,7 +146,16 @@ reconciler は毎サイクル、4 つのメトリクスを出力する。名前�
       "Action": ["dynamodb:UpdateItem"],
       "Resource": "arn:aws:dynamodb:ap-northeast-1:123456789012:table/cheapskate-state",
       "Condition": {
-        "ForAllValues:StringLike": {"dynamodb:LeadingKeys": ["status#*"]}
+        "ForAllValues:StringLike": {"dynamodb:LeadingKeys": ["STATUS#*", "LOCK"]}
+      }
+    },
+    {
+      "Sid": "StateReleaseLeaseOnly",
+      "Effect": "Allow",
+      "Action": ["dynamodb:DeleteItem"],
+      "Resource": "arn:aws:dynamodb:ap-northeast-1:123456789012:table/cheapskate-state",
+      "Condition": {
+        "ForAllValues:StringEquals": {"dynamodb:LeadingKeys": ["LOCK"]}
       }
     },
     {
@@ -213,9 +228,9 @@ aws iam put-role-policy --role-name cheapskate-reconciler \
 
 ### DynamoDB の権限を分けている理由
 
-reconciler が書くのは `status#` アイテムだけである。したがって `dynamodb:PutItem` は一切付与せず、`UpdateItem` も `dynamodb:LeadingKeys` 条件で `status#*` に閉じる。`Scan` は `LeadingKeys` 条件と併用できないため、読み取り専用の別ステートメントに分けてある。
+reconciler が更新するのは `STATUS#*` と多重実行防止用の `LOCK` だけである。`UpdateItem` をこの 2 種類、`DeleteItem` を `LOCK` だけに `dynamodb:LeadingKeys` で限定し、`PutItem` は付与しない。読取も通常処理に必要な `CONFIG` と `STATUS#*` に限定する。テーブル全体の `Scan` は `doctor` だけが使う。
 
-1 つにまとめる場合は条件なしの `["dynamodb:Scan", "dynamodb:GetItem", "dynamodb:UpdateItem"]` でよいが、関数からスケジュールを書き換えられないという保証は失われる。
+条件を外して権限をまとめると、関数からグループ設定を書き換えられないという保証は失われる。
 
 ### Resource をワイルドカードにしている理由
 
@@ -240,7 +255,7 @@ reconciler が書くのは `status#` アイテムだけである。したがっ�
 | パッケージタイプ | `Image`(§1 の URI) |
 | アーキテクチャ | `arm64`(または `x86_64` — イメージのプラットフォームと一致させる) |
 | メモリ / タイムアウト | 256 MB / 120 秒 |
-| 予約同時実行数 | 1(reconcile の多重実行を防止する) |
+| 予約同時実行数 | 1(重複呼び出しのコストを抑える。排他性は DynamoDB リースでも担保する) |
 
 関数に設定する環境変数の一覧と既定値は [config.md](config.md) にある。
 
@@ -331,7 +346,7 @@ aws lambda add-permission --function-name cheapskate-reconciler \
 
 ### 実行ロール
 
-state テーブルへの `dynamodb:Scan/GetItem/PutItem/DeleteItem`、`tag:GetResources`、現在の状態を表示するための下記の読み取り専用 `Describe*`、および §4 と同じ `Logs` のみを付与する。RDS/ECS/EC2 の制御系権限は付与しない。`dynamodb:UpdateItem` も付与しない。これは `status#` レコードを書ける唯一の経路であるためである。
+state テーブルへの `dynamodb:Scan/Query/BatchGetItem/GetItem/PutItem/UpdateItem/DeleteItem`、`tag:GetResources`、現在の状態を表示するための下記の読み取り専用 `Describe*`、および §4 と同じ `Logs` のみを付与する。RDS/ECS/EC2 の制御系権限は付与しない。書き込みは `dynamodb:LeadingKeys` により `CONFIG` に限定し、Status の削除は `doctor --prune` 用の `STATUS#*` に限定する。
 
 ```json
 {

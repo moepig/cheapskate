@@ -70,7 +70,7 @@ webconsole に送るペイロードと期待は次のとおりである。
 | API Gateway REST API(v1)の `GET /` プロキシイベント | HTTP 200 のプロキシレスポンス。アダプタが拡張として起動し、イベントをループバック越しの HTTP に組み替え、応答をイベントの応答形式へ戻せていること |
 | 同じイベントに、クライアントが `x-amzn-request-context` を詐称して付けたもの | ログに残る `client` がイベントの `requestContext` 由来であり、詐称した IP がログのどこにも現れないこと |
 
-`integration` とは別のタグにしてあるのは、先にイメージをビルドするためである。`Dockerfile` の `COPY . .` により、リポジトリ内のファイルが 1 つでも変われば、レイヤキャッシュは無効になる。
+`integration` とは別のタグにしてあるのは、先にイメージをビルドするためである。ビルドコンテキストは `.dockerignore` の allowlist、コピー対象は `cmd/` と `internal/` に限定しているため、ドキュメントなど無関係な変更では Go ビルドのレイヤキャッシュが無効にならない。
 
 イメージのビルドを testcontainers-go ではなく `docker build` へ委ねているのは、BuildKit の要否によるものである。この判断の根拠は、[../architecture/emulation_local.md](../architecture/emulation_local.md) のイメージビルドの扱いを参照。
 

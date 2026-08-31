@@ -46,7 +46,7 @@ make push \
   TAG=v0.1.0
 ```
 
-Without the web console, `make push-reconciler ECR_REPO_RECONCILER=... TAG=v0.1.0` is enough. The Lambda function then refers to the pushed URI, and referring to it by digest is recommended.
+Without the web console, `make push-reconciler ECR_REPO_RECONCILER=... TAG=v0.1.0` is enough. Do not deploy `latest`: use a version tag, or the digest returned by ECR where reproducibility matters. `latest` remains a moving tag for trial and discovery.
 
 The default platform is `linux/arm64`. For x86, use `make push PLATFORM=linux/amd64 ...` and set the Lambda architecture to `x86_64`.
 
@@ -57,18 +57,21 @@ What the table is required to provide is given below.
 | Item | Value |
 |---|---|
 | Partition key | `pk` (String) |
-| Sort key / GSI | none |
+| Sort key | `sk` (String) |
+| GSI / LSI | none |
 | TTL | enabled on the `expires_at` attribute |
 | Billing mode | any (on-demand recommended) |
 
 ```console
 aws dynamodb create-table --table-name cheapskate-state \
-  --attribute-definitions AttributeName=pk,AttributeType=S \
-  --key-schema AttributeName=pk,KeyType=HASH \
+  --attribute-definitions AttributeName=pk,AttributeType=S AttributeName=sk,AttributeType=S \
+  --key-schema AttributeName=pk,KeyType=HASH AttributeName=sk,KeyType=RANGE \
   --billing-mode PAY_PER_REQUEST
 aws dynamodb update-time-to-live --table-name cheapskate-state \
   --time-to-live-specification "Enabled=true,AttributeName=expires_at"
 ```
+
+This composite key is the breaking v2 storage format. There is no reader or migration for the old table with only `pk`; do not point the function at one. Create a new empty table and enter the group configuration again.
 
 ## 3. SNS topic and monitoring (optional)
 
@@ -92,7 +95,7 @@ There are three kinds of notification. The subject is `[cheapskate] <kind>: <gro
 
 ### Metrics
 
-The reconciler emits four metrics every cycle. The namespace is `METRICS_NAMESPACE` (default `cheapskate`), there are no dimensions, and the unit is Count. They are produced through CloudWatch Logs rather than `PutMetricData`, so they need no extra IAM permission. The metrics emitted are given below.
+When `METRICS_ENABLED=true` is explicitly set, the reconciler emits four metrics every cycle. They are disabled by default. The namespace is `METRICS_NAMESPACE` (default `cheapskate`), there are no dimensions, and the unit is Count. They are produced through CloudWatch Logs rather than `PutMetricData`, so they need no extra IAM permission. The metrics emitted are given below.
 
 | Metric | Meaning |
 | --- | --- |
@@ -101,14 +104,14 @@ The reconciler emits four metrics every cycle. The namespace is `METRICS_NAMESPA
 | `ReconcileErrors` | Per-resource and per-group failures |
 | `ReconcileAborted` | 1 when the cycle never got going, 0 normally |
 
-These four are billed as custom metrics (a little over a dollar a month in total). If they are not wanted, `METRICS_ENABLED=false` stops them being emitted.
+These four are billed as custom metrics (a little over a dollar a month in total). Set `METRICS_ENABLED=true` only where they are needed.
 
 ### An alarm for detecting failures
 
-Separately from the notifications, detecting failures calls for an alarm on the Lambda `Errors` metric. For concrete alarms and what each of them catches, see the failure detection section in [troubleshooting.md](troubleshooting.md).
+Lambda `Errors` catches only a cycle-wide abort such as a malformed payload or an initial read failure. Per-resource failures are reported in the successful Lambda response's `errors`, status, logs, and SNS; with custom metrics enabled they also appear in `ReconcileErrors`. For concrete alarms, see the failure detection section in [troubleshooting.md](troubleshooting.md).
 
 > [!WARNING]
-> With neither an SNS topic nor an `Errors` alarm in place, no detection path exists at all, even while every resource keeps failing. Configure at least one of them.
+> With none of SNS, status/log monitoring, or an enabled `ReconcileErrors` alarm, per-resource failures are not detected proactively. Configure at least one.
 
 ## 4. Lambda execution role
 
@@ -131,8 +134,11 @@ The trust policy is `lambda.amazonaws.com`. The policy to attach is as follows, 
     {
       "Sid": "StateRead",
       "Effect": "Allow",
-      "Action": ["dynamodb:Scan", "dynamodb:GetItem"],
-      "Resource": "arn:aws:dynamodb:ap-northeast-1:123456789012:table/cheapskate-state"
+      "Action": ["dynamodb:Query", "dynamodb:BatchGetItem"],
+      "Resource": "arn:aws:dynamodb:ap-northeast-1:123456789012:table/cheapskate-state",
+      "Condition": {
+        "ForAllValues:StringLike": {"dynamodb:LeadingKeys": ["CONFIG", "STATUS#*"]}
+      }
     },
     {
       "Sid": "StateWriteStatusOnly",
@@ -140,7 +146,16 @@ The trust policy is `lambda.amazonaws.com`. The policy to attach is as follows, 
       "Action": ["dynamodb:UpdateItem"],
       "Resource": "arn:aws:dynamodb:ap-northeast-1:123456789012:table/cheapskate-state",
       "Condition": {
-        "ForAllValues:StringLike": {"dynamodb:LeadingKeys": ["status#*"]}
+        "ForAllValues:StringLike": {"dynamodb:LeadingKeys": ["STATUS#*", "LOCK"]}
+      }
+    },
+    {
+      "Sid": "StateReleaseLeaseOnly",
+      "Effect": "Allow",
+      "Action": ["dynamodb:DeleteItem"],
+      "Resource": "arn:aws:dynamodb:ap-northeast-1:123456789012:table/cheapskate-state",
+      "Condition": {
+        "ForAllValues:StringEquals": {"dynamodb:LeadingKeys": ["LOCK"]}
       }
     },
     {
@@ -213,9 +228,9 @@ What may be removed is the Actions for the resource types not managed, and `Noti
 
 ### Why the DynamoDB permissions are split
 
-The reconciler writes `status#` items and nothing else. It is therefore granted no `dynamodb:PutItem` at all, and its `UpdateItem` is confined to `status#*` by a `dynamodb:LeadingKeys` condition. `Scan` cannot be combined with a `LeadingKeys` condition, so it sits in a separate read-only statement.
+The reconciler updates only `STATUS#*` and the `LOCK` used to prevent concurrent runs. `dynamodb:LeadingKeys` confines `UpdateItem` to those two kinds and `DeleteItem` to `LOCK`; no `PutItem` is granted. Normal reads are limited to `CONFIG` and `STATUS#*`. Only `doctor` uses a full-table `Scan`.
 
-Merging them into an unconditional `["dynamodb:Scan", "dynamodb:GetItem", "dynamodb:UpdateItem"]` works, but the guarantee that the function cannot rewrite a schedule is lost.
+Removing the conditions and merging permissions works, but loses the guarantee that the function cannot rewrite group configuration.
 
 ### Why Resource is a wildcard
 
@@ -240,7 +255,7 @@ What the function is required to be configured with is given below.
 | Package type | `Image` (the URI from §1) |
 | Architecture | `arm64` (or `x86_64` — match the image's platform) |
 | Memory / timeout | 256 MB / 120 seconds |
-| Reserved concurrency | 1 (prevents concurrent reconciles) |
+| Reserved concurrency | 1 (reduces the cost of duplicate invocations; a DynamoDB lease also enforces exclusion) |
 
 The environment variables to set on the function, with their defaults, are listed in [config.md](config.md).
 
@@ -331,7 +346,7 @@ A separate function using the `cheapskate-webconsole` image pushed in §1. Being
 
 ### Execution role
 
-Grant only `dynamodb:Scan/GetItem/PutItem/DeleteItem` on the state table, `tag:GetResources`, the read-only `Describe*` calls below for displaying the current state, and the same `Logs` as in §4. Grant no RDS/ECS/EC2 control permissions, and no `dynamodb:UpdateItem` either — that is the only path by which a `status#` record can be written.
+Grant only `dynamodb:Scan/Query/BatchGetItem/GetItem/PutItem/UpdateItem/DeleteItem` on the state table, `tag:GetResources`, the read-only `Describe*` calls below for displaying the current state, and the same `Logs` as in §4. Grant no RDS/ECS/EC2 control permissions. Constrain writes with `dynamodb:LeadingKeys`: `CONFIG` for configuration writes and `STATUS#*` only for deletion by `doctor --prune`.
 
 ```json
 {

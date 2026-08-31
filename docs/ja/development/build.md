@@ -32,13 +32,15 @@ make image-webconsole                        # cheapskate-webconsole:dev のみ
 make image PLATFORM=linux/amd64 TAG=v0.1.0   # x86 版
 ```
 
-ベースイメージは `public.ecr.aws/lambda/provided:al2023` である。バイナリはどちらも `/var/runtime/bootstrap` として配置されるため、`ImageConfig.EntryPoint` による上書きを要しない。Web コンソールをデプロイしない場合、ビルドと push は reconciler のみでよい。
+ベースイメージは `public.ecr.aws/lambda/provided:al2023` である。Go ビルダー、Lambda ベースイメージ、Dockerfile frontend はタグと digest の両方で固定する。タグは更新対象を人が読めるようにし、digest は同じビルド入力が移動しないようにする。バイナリはどちらも `/var/runtime/bootstrap` として配置されるため、`ImageConfig.EntryPoint` による上書きを要しない。Web コンソールをデプロイしない場合、ビルドと push は reconciler のみでよい。
 
 Dockerfile はホストプラットフォームから `GOARCH` でクロスコンパイルするため、異アーキテクチャのビルドにエミュレーションを要しない。Go のビルドステージは 2 つのイメージで共有するため、両方をビルドしても依存のダウンロードは 1 回で済む。
 
+ビルドコンテキストは `.dockerignore` の allowlist により `Dockerfile`、モジュールファイル、`cmd/`、`internal/` に限定する。Dockerfile も `COPY . .` を使わず、必要なディレクトリだけを明示してコピーする。開発用ファイルや資格情報を誤ってコンテキストやイメージへ含めず、無関係な変更によるキャッシュ無効化も避けるためである。
+
 ### Lambda Web Adapter
 
-Web コンソールのイメージには、Lambda Web Adapter の実行ファイルが `/opt/extensions/lambda-adapter` として入る。バージョンは `Dockerfile` で固定してある。これは go.mod の外にある唯一の実行時依存であり、更新は Go モジュールとは別に Dependabot の docker 更新で行う。
+Web コンソールのイメージには、Lambda Web Adapter の実行ファイルが `/opt/extensions/lambda-adapter` として入る。バージョンタグと digest は `Dockerfile` で固定してある。これは go.mod の外にある唯一の実行時依存であり、更新は Go モジュールとは別に Dependabot の docker 更新で行う。
 
 アダプタが呼び出しイベントを HTTP へ変換する仕組みと、本体側がアダプタに依存する箇所は、[../architecture/on_lambda.md](../architecture/on_lambda.md) を参照。Dependabot による更新がリリースに至る経路は、[release.md](release.md) の依存の更新を参照。
 

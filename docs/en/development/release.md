@@ -23,6 +23,8 @@ A release produces the following.
 | The `cheapskate-webconsole` image | `ghcr.io/moepig/cheapskate-webconsole` | The version, `latest` |
 | The `cheapskate-cli` archives | The GitHub release | — |
 
+`latest` remains as a moving tag for trials and discovering the newest release; do not deploy it. Refer to a version tag for Lambda deployment, or to a digest where the exact same contents must be reproducible.
+
 Both images are multi-architecture (`linux/amd64`, `linux/arm64`). buildx assembles the binaries goreleaser cross-compiled, through `build/Dockerfile.reconciler` and `build/Dockerfile.webconsole`. What builds from source is the `Dockerfile` at the repository root, and that is the authoritative one for local builds and the image tests. For building locally, see the container images section in [build.md](build.md).
 
 > [!IMPORTANT]
@@ -39,7 +41,7 @@ Later releases push to the existing package, so the visibility is preserved.
 
 Dependabot opens pull requests weekly (`.github/dependabot.yml`), covering Go modules, Actions, and the base images in the root and release Dockerfiles. Things that always move together (the AWS SDK modules, the Actions, the images) are grouped into one pull request each. All of them are checked by `ci.yml`, image tests included.
 
-The Lambda Web Adapter is pinned by tag in the web console's Dockerfile and is covered by the docker updates. Unlike the Go dependencies it does not appear in `go.mod`, so without this nothing would notice its version moving.
+The Dockerfile frontend, Go builder, Lambda base image, and Lambda Web Adapter are all pinned by tag and digest and covered by Docker updates. Unlike Go dependencies, they do not appear in `go.mod`, so Dependabot updates their tags and digests together.
 
 ### Days since release
 

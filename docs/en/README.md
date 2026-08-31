@@ -15,7 +15,7 @@ The control plane is one Lambda on a 5-minute interval plus one DynamoDB table.
 
 Groups are configured and inspected through `cheapskate-cli`, a command-line tool that runs on a local machine — nothing has to be deployed to AWS for it. A web console offering the same operations from a browser can be deployed as well, at your option.
 
-What is distributed is container images and binaries. Every release publishes two images, one for the reconciler and one for the optional web console, to `ghcr.io/moepig/cheapskate-reconciler` and `ghcr.io/moepig/cheapskate-webconsole`, along with the `cheapskate-cli` archives on the GitHub release. Lambda can pull images from ECR only, so an image reaches ECR either as a copy of the published one or as a build from source. No IaC template is distributed, and how the AWS resources are created is left open.
+What is distributed is container images and binaries. Every release publishes two images, one for the reconciler and one for the optional web console, to `ghcr.io/moepig/cheapskate-reconciler` and `ghcr.io/moepig/cheapskate-webconsole`, along with the `cheapskate-cli` archives on the GitHub release. `latest` remains for discovering the newest release, but deployments should use a version tag or digest. Lambda can pull images from ECR only, so an image reaches ECR either as a copy of the published one or as a build from source. No IaC template is distributed, and how the AWS resources are created is left open.
 
 ## Documentation
 

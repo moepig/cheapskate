@@ -16,6 +16,11 @@ LocalStack Community 互換のエミュレータである。LocalStack Community
 | ヘルスチェック | `/_localstack/health` |
 | docker ソケット | マウントする。RDS/ECS のエミュレーションが実コンテナを起動するため |
 
+Floci の参照は `latest` タグだけでなく manifest digest も固定する。ポートは `127.0.0.1` のみに公開し、Linux capability をすべて削除し、`no-new-privileges` を設定する。compose と testcontainers-go の両経路で同じ制約を適用する。
+
+> [!WARNING]
+> docker ソケットのマウントは、コンテナからホストの docker デーモンを操作できる強い権限を与える。RDS/ECS エミュレーションに必要なため残しているが、信頼できないネットワークへ公開せず、開発・テスト専用ホストでのみ実行すること。
+
 起動経路は 2 つあり、どちらも同じエンドポイントを提供する。それぞれの起動元と用途を、以下に示す。
 
 | 経路 | 起動元 | 用途 |
@@ -42,7 +47,7 @@ Ryuk リーパーは無効化してある。`go test ./...` はパッケージ�
 
 ## state テーブル
 
-スキーマ(`pk` ハッシュキー + `expires_at` TTL)の Go 定義は `internal/state` のみが持つ。ローカルでの作成は `cmd/dev-bootstrap` が行う。これは冪等であり、Lambda イメージには含まれない。本番テーブルは、同じスキーマをホスティング側の手段で作成する。
+スキーマ(`pk` ハッシュキー + `sk` ソートキー + `expires_at` TTL)の Go 定義は `internal/state` のみが持つ。ローカルでの作成は `cmd/dev-bootstrap` が行う。これは冪等であり、Lambda イメージには含まれない。本番テーブルは、同じスキーマをホスティング側の手段で作成する。
 
 ## ダミーリソース
 

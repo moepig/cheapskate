@@ -32,13 +32,15 @@ make image-webconsole                        # cheapskate-webconsole:dev only
 make image PLATFORM=linux/amd64 TAG=v0.1.0   # the x86 build
 ```
 
-The base image is `public.ecr.aws/lambda/provided:al2023`. Both binaries are placed as `/var/runtime/bootstrap`, so no `ImageConfig.EntryPoint` override is needed. Without the web console, only the reconciler has to be built and pushed.
+The base image is `public.ecr.aws/lambda/provided:al2023`. The Go builder, Lambda base image, and Dockerfile frontend are pinned by both tag and digest: the tag keeps the intended update line readable, while the digest keeps the same build input from moving. Both binaries are placed as `/var/runtime/bootstrap`, so no `ImageConfig.EntryPoint` override is needed. Without the web console, only the reconciler has to be built and pushed.
 
 The Dockerfile cross-compiles from the host platform through `GOARCH`, so building for another architecture needs no emulation. The Go build stage is shared between the two images, so building both downloads the dependencies once.
 
+An allowlist in `.dockerignore` limits the build context to the Dockerfile, module files, `cmd/`, and `internal/`. The Dockerfile also copies only the required directories instead of using `COPY . .`. This keeps development files and credentials out of the context and image, and avoids cache invalidation from unrelated changes.
+
 ### Lambda Web Adapter
 
-The web console image carries the Lambda Web Adapter executable as `/opt/extensions/lambda-adapter`, pinned to a version in the `Dockerfile`. It is the only runtime dependency outside go.mod, and it is updated through Dependabot's docker updates rather than with the Go modules.
+The web console image carries the Lambda Web Adapter executable as `/opt/extensions/lambda-adapter`, pinned by version tag and digest in the `Dockerfile`. It is the only runtime dependency outside go.mod, and it is updated through Dependabot's docker updates rather than with the Go modules.
 
 For how the adapter converts invocation events into HTTP, and where the application depends on it, see [../architecture/on_lambda.md](../architecture/on_lambda.md). For how a Dependabot update reaches a release, see the dependency updates section in [release.md](release.md).
 

@@ -15,7 +15,7 @@ RDS インスタンス、Aurora クラスター、ECS サービス、EC2 イン�
 
 グループの設定と状態の確認は、CLI ツール `cheapskate-cli` が行う。手元の端末で動かすものであり、この操作のために AWS へ何かをデプロイする必要はない。同じ操作をブラウザから行う Web コンソールは、任意でデプロイできる。
 
-配布物はコンテナイメージとバイナリである。リリースごとに、reconciler 用とオプションの Web コンソール用の 2 イメージを `ghcr.io/moepig/cheapskate-reconciler` と `ghcr.io/moepig/cheapskate-webconsole` へ公開し、`cheapskate-cli` のアーカイブを GitHub リリースへ公開する。Lambda が pull できるのは ECR のみであるから、公開イメージの複製またはソースからのビルドにより、イメージを ECR へ配置する。IaC テンプレートは配布しない。AWS リソースの作成手段は問わない。
+配布物はコンテナイメージとバイナリである。リリースごとに、reconciler 用とオプションの Web コンソール用の 2 イメージを `ghcr.io/moepig/cheapskate-reconciler` と `ghcr.io/moepig/cheapskate-webconsole` へ公開し、`cheapskate-cli` のアーカイブを GitHub リリースへ公開する。`latest` は最新版の発見用に残すが、デプロイにはバージョンタグまたは digest を用いる。Lambda が pull できるのは ECR のみであるから、公開イメージの複製またはソースからのビルドにより、イメージを ECR へ配置する。IaC テンプレートは配布しない。AWS リソースの作成手段は問わない。
 
 ## ドキュメント
 

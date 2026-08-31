@@ -70,7 +70,7 @@ The payloads sent to webconsole and what is expected of them are as follows.
 | An API Gateway REST API (v1) `GET /` proxy event | An HTTP 200 proxy response, showing that the adapter started as an extension, turned the event into HTTP over the loopback, and turned the response back into the event's response format |
 | The same event with a spoofed `x-amzn-request-context` added by the client | The `client` in the log comes from the event's `requestContext`, and the spoofed IP appears nowhere in the log |
 
-The tag is separate from `integration` because the images have to be built first. Through `COPY . .` in the `Dockerfile`, a change to any single file in the repository invalidates the layer cache.
+The tag is separate from `integration` because the images have to be built first. The `.dockerignore` allowlist limits the context, and only `cmd/` and `internal/` are copied, so an unrelated change such as documentation does not invalidate the Go build layer.
 
 The image build is delegated to `docker build` rather than testcontainers-go on account of BuildKit. For the reasoning, see how the image build is handled in [../architecture/emulation_local.md](../architecture/emulation_local.md).
 

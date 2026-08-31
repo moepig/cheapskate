@@ -16,6 +16,11 @@ Floci is a LocalStack Community-compatible emulator, adopted after LocalStack Co
 | Health check | `/_localstack/health` |
 | docker socket | Mounted, because the RDS/ECS emulation starts real containers |
 
+The Floci reference pins a manifest digest as well as the `latest` tag. Its port is published on `127.0.0.1` only, all Linux capabilities are dropped, and `no-new-privileges` is set. Both the Compose and testcontainers-go paths apply the same constraints.
+
+> [!WARNING]
+> Mounting the Docker socket gives the container powerful control over the host Docker daemon. It remains because RDS/ECS emulation requires it; never expose the emulator to an untrusted network, and run it only on development or test hosts.
+
 There are two ways to start it, both offering the same endpoint. What starts each, and what each is for, are given below.
 
 | Route | Started by | Used for |
@@ -42,7 +47,7 @@ The APIs the emulator does not reproduce, and what stands in for them, are colle
 
 ## The state table
 
-The Go definition of the schema (`pk` hash key + `expires_at` TTL) lives in `internal/state` and nowhere else. Locally, `cmd/dev-bootstrap` creates the table; it is idempotent and is not in the Lambda images. The production table is created with the same schema by whatever means the hosting side uses.
+The Go definition of the schema (`pk` hash key + `sk` sort key + `expires_at` TTL) lives in `internal/state` and nowhere else. Locally, `cmd/dev-bootstrap` creates the table; it is idempotent and is not in the Lambda images. The production table is created with the same schema by whatever means the hosting side uses.
 
 ## Dummy resources
 
