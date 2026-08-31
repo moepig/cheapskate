@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1
+# syntax=docker/dockerfile:1@sha256:ecfaec9ed6d810b56388c508f4121597bfbba70d41a6dfeee4d8cad5f295fc32
 # Two separate Lambda container images out of one Dockerfile, selected with --target:
 # `reconciler` (required) and `webconsole` (optional). Each ships a single binary as
 # /var/runtime/bootstrap, so neither needs an ImageConfig entrypoint override. Build and
@@ -12,7 +12,8 @@ FROM --platform=$BUILDPLATFORM golang:1.26.7@sha256:dc2521c2a906db43073b8b4d99f4
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
-COPY . .
+COPY cmd/ ./cmd/
+COPY internal/ ./internal/
 
 # The web console is a plain HTTP server: it links no Lambda runtime library at all, hence no
 # lambda.norpc tag here (the reconciler, which does use aws-lambda-go, still needs it).
@@ -32,9 +33,9 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
 # console's behalf and forwards each invocation to it as an ordinary HTTP request. Multi-arch, so
 # the tag alone resolves to the right build for --platform. Pinned to an exact version: unlike the
 # Go dependencies it is not in go.mod, so nothing else would notice it moving.
-FROM public.ecr.aws/awsguru/aws-lambda-adapter:1.1.0 AS lambda-adapter
+FROM public.ecr.aws/awsguru/aws-lambda-adapter:1.1.0@sha256:3a108c4ceee9e0346a61fc0fc7085017945c664be4eaa2925855b8dd2467227b AS lambda-adapter
 
-FROM public.ecr.aws/lambda/provided:al2023 AS webconsole
+FROM public.ecr.aws/lambda/provided:al2023@sha256:8584408dac0c2536dfb4557ca91b08bc4fc727f785f3df6458b2145a10bc9978 AS webconsole
 # Lambda's init starts every executable under /opt/extensions before invoking the function.
 COPY --from=lambda-adapter /lambda-adapter /opt/extensions/lambda-adapter
 COPY --from=build-webconsole /bootstrap /var/runtime/bootstrap
@@ -48,6 +49,6 @@ ENV AWS_LWA_READINESS_CHECK_PROTOCOL=tcp
 # provided.al2023 runs /var/runtime/bootstrap; the CMD is unused but required to be non-empty by some tooling.
 CMD ["handler"]
 
-FROM public.ecr.aws/lambda/provided:al2023 AS reconciler
+FROM public.ecr.aws/lambda/provided:al2023@sha256:8584408dac0c2536dfb4557ca91b08bc4fc727f785f3df6458b2145a10bc9978 AS reconciler
 COPY --from=build-reconciler /bootstrap /var/runtime/bootstrap
 CMD ["handler"]
