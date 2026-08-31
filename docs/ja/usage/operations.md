@@ -190,7 +190,7 @@ $ cheapskate-cli show --group dev | jq -c '.resources[] | {ref, live: .live.stat
 | 更新系 | `command`、`group` と、そのコマンドが書き込んだ内容のみを返す。グループ全体の読み直しは行わない |
 | `doctor` | `{"command": "doctor", "findings": [...], "pruned": 0, "counts": {...}}`。各 finding の意味は [troubleshooting.md](troubleshooting.md) の doctor による診断を参照 |
 
-`status#` は履歴ではなく、直近のアクション、エラー、未完了操作、通知再送待ちをまとめた最新値 1 件であり、ライブ状態ではない。現在の状態は `show` の `live`、または Web コンソールのグループページで確認する。`transitioning_since` は継続中の遷移の開始時刻を表し、遷移が解消すると消える。
+`status#` は履歴ではなく、直近のアクション、エラー、未完了操作をまとめた最新値 1 件であり、ライブ状態ではない。現在の状態は `show` の `live`、または Web コンソールのグループページで確認する。`transitioning_since` は継続中の遷移の開始時刻を表し、遷移が解消すると消える。
 
 リソースごとの直近エラーは `status#` の `last_error` に、グループレベルの問題(不正な cron、検出の失敗、セレクタの重複)は `status#group#<名前>` に記録される。原因を解消すると、次のサイクルでクリアされる。
 

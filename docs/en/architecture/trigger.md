@@ -64,4 +64,4 @@ To fit the SNS Subject constraints (ASCII, 100 characters), non-ASCII characters
 
 ### Notification failures
 
-A Publish that fails after a successful action does not turn the action into an error; it remains in status as `notification_pending` and in the log. The next cycle retries it with the same `operation_id`. A failure to acknowledge a successful Publish can also resend the same notification, so receivers can use `operation_id` for deduplication.
+A Publish that fails after a successful action does not turn the action into an error. It is retried once within the same processing run with the same `operation_id`, then abandoned if both attempts fail. No notification-pending state remains in status, and notification failure does not stop the next AWS action. The notification's `at` field retains the action time so receivers can order actions independently of delivery order.

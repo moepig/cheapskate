@@ -93,6 +93,8 @@ There are three kinds of notification. The subject is `[cheapskate] <kind>: <gro
 | `error` | A failure was recorded. It is not resent while the same error persists |
 | `recovered` | A recorded error cleared |
 
+The body carries the time of the reported action, error, or recovery in the RFC3339 `at` field. Each notification gets at most two Publish attempts and is abandoned if both fail. Notification failure does not stop later AWS actions.
+
 ### Metrics
 
 When `METRICS_ENABLED=true` is explicitly set, the reconciler emits four metrics every cycle. They are disabled by default. The namespace is `METRICS_NAMESPACE` (default `cheapskate`), there are no dimensions, and the unit is Count. They are produced through CloudWatch Logs rather than `PutMetricData`, so they need no extra IAM permission. The metrics emitted are given below.

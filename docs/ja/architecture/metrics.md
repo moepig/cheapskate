@@ -57,11 +57,11 @@ Lambda がタイムアウトまたは panic した場合は、プロセスが落
 | セレクタの重複 | — | ✓ | 0 | ✓ | ✓ | ✓ |
 | payload 不正、初期 Query / BatchGetItem の失敗 | ✓ | — | 1 | — | — | ✓ |
 | Lambda のタイムアウト / panic | ✓ | — | — | — | — | 部分 |
-| SNS Publish の失敗 | — | — | 0 | 再試行待ち | ✓ | ✓ |
+| SNS Publish の失敗 | — | — | 0 | 2 回失敗後に送信を打ち切る | — | ✓ |
 | pending / 完了 Status の書き込み失敗 | — | ✓ | 0 | 条件による | 条件による | ✓ |
 | 遷移中のまま止まったリソース | — | — | 0 | — | ✓(`transitioning_since`) | ✓ |
 
-アクション通知の失敗は `notification_pending` を残し、次のサイクルで同じ `operation_id` を再送する。Status への pending 記録が失敗した場合は AWS 操作を実行しない。AWS 操作後の完了記録が失敗した場合は pending を残し、次のサイクルが AWS の観測状態から完了を確定するため、同じ操作を再送しない。終わらない遷移は診断([overview.md](overview.md))が捉える。
+アクション通知は同じ処理内で最大 2 回 Publish し、ともに失敗した場合は通知のために Status を更新せず、送信を打ち切る。Status への pending 記録が失敗した場合は AWS 操作を実行しない。AWS 操作後の完了記録が失敗した場合は pending を残し、次のサイクルが AWS の観測状態から完了を確定するため、同じ操作を再送しない。終わらない遷移は診断([overview.md](overview.md))が捉える。
 
 ## 無効化
 

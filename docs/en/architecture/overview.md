@@ -84,7 +84,7 @@ The rules the loop follows, and the reasoning behind each, are collected below.
 | Group-level failures (an invalid cron or timezone, a discovery failure, a selector collision) are recorded on `status#group#<name>` and notified, and are cleared exactly once, after all of that group's work is finished | It avoids the notification flapping that comes from recording and clearing within the same cycle |
 | Even with per-resource failures, the loop runs to completion and Lambda returns success | This avoids an EventBridge retry of the entire cycle; status, logs, SNS, and optional custom metrics report the failed resources |
 
-Immediately before an action, the reconciler conditionally records a pending operation with a unique `operation_id` in status, and marks it complete after success. If execution stops before the completion write, the next cycle resolves the outcome from the observed state instead of sending the same action again. Notification retry state and the `operation_id` are durable in the same status record.
+Immediately before an action, the reconciler conditionally records a pending operation with a unique `operation_id` in status, and marks it complete after the state-changing API call succeeds. If execution stops before the completion write, the next cycle resolves the outcome from the observed state instead of sending the same action again. A notification is attempted at most twice within the same processing run and is abandoned after both attempts fail. Notification failure does not stop later AWS actions.
 
 ### Operations per resource type
 

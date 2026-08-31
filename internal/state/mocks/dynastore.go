@@ -344,17 +344,10 @@ func updateConditionMatches(item map[string]types.AttributeValue, in *dynamodb.U
 		actual, aok := numberValue(item[in.ExpressionAttributeNames["#expires_at"]])
 		expected, eok := numberValue(in.ExpressionAttributeValues[":now"])
 		return aok && eok && actual < expected
-	case "(attribute_not_exists(#pending_operation_id) OR #pending_operation_id = :empty) AND (attribute_not_exists(#notification_pending) OR #notification_pending = :empty)":
-		return attributeMissingOrEqual(item, in.ExpressionAttributeNames["#pending_operation_id"], in.ExpressionAttributeValues[":empty"]) &&
-			attributeMissingOrEqual(item, in.ExpressionAttributeNames["#notification_pending"], in.ExpressionAttributeValues[":empty"])
-	case "#pending_operation_id = :operation_id AND (attribute_not_exists(#notification_pending) OR #notification_pending = :empty)":
-		return item != nil &&
-			equalAttributeValue(item[in.ExpressionAttributeNames["#pending_operation_id"]], in.ExpressionAttributeValues[":operation_id"]) &&
-			attributeMissingOrEqual(item, in.ExpressionAttributeNames["#notification_pending"], in.ExpressionAttributeValues[":empty"])
+	case "attribute_not_exists(#pending_operation_id) OR #pending_operation_id = :empty":
+		return attributeMissingOrEqual(item, in.ExpressionAttributeNames["#pending_operation_id"], in.ExpressionAttributeValues[":empty"])
 	case "#pending_operation_id = :operation_id":
 		return item != nil && equalAttributeValue(item[in.ExpressionAttributeNames["#pending_operation_id"]], in.ExpressionAttributeValues[":operation_id"])
-	case "#notification_pending = :operation_id":
-		return item != nil && equalAttributeValue(item[in.ExpressionAttributeNames["#notification_pending"]], in.ExpressionAttributeValues[":operation_id"])
 	default:
 		panic(fmt.Sprintf("dynastore: unsupported update condition %q", *in.ConditionExpression))
 	}

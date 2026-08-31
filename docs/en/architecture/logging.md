@@ -92,11 +92,11 @@ The events the reconciler writes are given below.
 | `summary` | INFO | `reconciled`, `actions`, `errors` | Summary of one cycle |
 | `metrics` | INFO | `_aws` + metric names | EMF metrics ([metrics.md](metrics.md)) |
 | `metrics-disabled` | INFO | `reason` | Custom metrics are disabled |
-| `action-notify-failed` | ERROR | `group`, `resource_id`, `operation_id`, `error` | Action notification failed and remains pending in status |
-| `action-notify-ack-failed` | ERROR | `group`, `resource_id`, `operation_id`, `error` | Recording successful notification failed; the same notification may be resent |
+| `action-notify-failed` | ERROR | `group`, `resource_id`, `operation_id`, `attempt`, `max_attempts`, `error` | Publishing an action notification failed |
+| `action-notify-abandoned` | ERROR | `group`, `resource_id`, `operation_id`, `attempts` | An action notification was abandoned after the maximum attempts |
 | `pending-operation-abandon-failed` | ERROR | `resource_id`, `operation_id`, `error` | Clearing pending after a failed AWS action also failed |
-| `recovery-notify-failed` | ERROR | `group`, `resource_id`, `error` | Notifying a recovery (`recovered`) failed |
-| `error-notify-failed` | ERROR | `group`, `resource_id`, `error` | Notifying a failure failed |
+| `recovery-notify-failed` / `error-notify-failed` | ERROR | `group`, `resource_id`, `attempt`, `max_attempts`, `error` | Publishing a recovery or error notification failed |
+| `recovery-notify-abandoned` / `error-notify-abandoned` | ERROR | `group`, `resource_id`, `attempts` | A recovery or error notification was abandoned after the maximum attempts |
 | `error-clear-failed` | ERROR | `group`, `resource_id`, `error` | Clearing `last_error` after a recovery failed |
 | `error-record-failed` | ERROR | `group`, `resource_id`, `error` | Writing the failure to `last_error` failed |
 | `transitioning-mark-failed` | ERROR | `resource_id`, `error` | Writing `transitioning_since` failed |
@@ -117,8 +117,7 @@ Ordinary resource errors go to the log, `last_error` in status, and SNS. The fol
 
 | Event | Why the log only |
 |---|---|
-| `action-notify-failed`, `action-notify-ack-failed` | `notification_pending` carries them into the next cycle |
-| `recovery-notify-failed`, `error-notify-failed` | Notification is what failed |
+| `*-notify-failed`, `*-notify-abandoned` | Notification delivery is independent of AWS action and reconcile success |
 | `error-record-failed`, `pending-operation-abandon-failed` | Inability to record in DynamoDB cannot be recorded through the same path |
 | `lease-release-failed` | The TTL expires the lease, independently of resource action success |
 | `transitioning-*-failed` | The information is for auditing and is not treated as a reconciler failure |

@@ -24,7 +24,7 @@ cheapskate は収束ループであり、失敗しても次のサイクルが同
 
 ### メトリクスにも通知にも現れない失敗
 
-SNS Publish の失敗はログと Status の `notification_pending` に残り、次のサイクルで同じ `operation_id` により再送される。終わらない遷移はメトリクスにも通知にも現れないため、`doctor` で捕捉する。
+SNS Publish の失敗はログに残り、同じ処理内で 1 回だけ再送される。2 回とも失敗した通知は欠落する。終わらない遷移はメトリクスにも通知にも現れないため、`doctor` で捕捉する。
 
 ### アラームの設定
 
@@ -64,7 +64,7 @@ aws cloudwatch put-metric-alarm --alarm-name cheapskate-reconcile-errors \
 | Stop/Start が失敗した | 解消する。次サイクルが再試行する | 権限不足など恒久的な原因の場合は `last_error` を確認して解消する |
 | pending の保存に失敗した | AWS 操作を実行しないため、次サイクルで再試行する | DynamoDB 障害が続く場合だけ原因を解消する |
 | アクションは成功したが完了 Status の書き込みに失敗した | pending を残す。次サイクルが AWS の状態から完了を確定し、同じアクションを再送しない | なし |
-| アクション通知の送信または確認記録に失敗した | `notification_pending` を残し、同じ `operation_id` で再送する | 重複通知は `operation_id` で判別する |
+| 通知の Publish が 2 回失敗した | 解消しない。通知の送信を打ち切り、AWS 操作は続行する | 必要に応じて `*-notify-abandoned` ログを監視する |
 | ECS の停止が desiredCount 更新の手前で失敗した | 解消する。スケーラブルターゲットは元の min/max へ自動で巻き戻る | なし。巻き戻しにも失敗した場合のみ [ECS サービスに固有の事項](#ecs-サービスに固有の事項) |
 | リソースが遷移中のまま停止した | 解消しない。毎サイクル skip され続ける | [遷移中のまま停止したリソース](#遷移中のまま停止したリソース) |
 | グループを削除したが `override#` / `status#` が残った | 解消しない | `doctor --prune` |

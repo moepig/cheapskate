@@ -93,6 +93,8 @@ aws sns subscribe --topic-arn arn:aws:sns:ap-northeast-1:123456789012:cheapskate
 | `error` | 失敗を記録したとき。同一エラーの継続中は再送されない |
 | `recovered` | 記録済みのエラーが解消したとき |
 
+通知本文は対象の操作、エラー、または復旧の時刻を RFC3339 形式の `at` に含む。各通知は Publish を最大 2 回実行し、2 回とも失敗した場合は送信を打ち切る。通知の失敗は後続する AWS 操作を停止しない。
+
 ### メトリクス
 
 `METRICS_ENABLED=true` を明示した場合、reconciler は毎サイクル、4 つのメトリクスを出力する。既定では無効である。名前空間は `METRICS_NAMESPACE`(既定 `cheapskate`)、次元なし、単位は Count である。`PutMetricData` を呼ばず CloudWatch Logs 経由で生成されるため、追加の IAM 権限を要しない。出力するメトリクスを、以下に示す。

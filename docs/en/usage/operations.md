@@ -190,7 +190,7 @@ The output of each command is given below.
 | Mutating commands | Return `command`, `group`, and only what the command wrote. The group is not read back in full |
 | `doctor` | `{"command": "doctor", "findings": [...], "pruned": 0, "counts": {...}}`. For the meaning of each finding, see the `doctor` diagnosis in [troubleshooting.md](troubleshooting.md) |
 
-`status#` is not a history but one latest-only value collecting the last action, last error, pending operation, and notification retry state. It is not live state; use `live` from `show` or the group page of the web console for that. `transitioning_since` holds when an ongoing transition started and disappears once the transition resolves.
+`status#` is not a history but one latest-only value collecting the last action, last error, and pending operation. It is not live state; use `live` from `show` or the group page of the web console for that. `transitioning_since` holds when an ongoing transition started and disappears once the transition resolves.
 
 A resource's last error is recorded in `last_error` on `status#`, and group-level problems (an invalid cron, a discovery failure, a selector collision) on `status#group#<name>`. Removing the cause clears them on the next cycle.
 

@@ -57,11 +57,11 @@ Which observation paths each kind of failure reaches are collected below.
 | A selector collision | — | ✓ | 0 | ✓ | ✓ | ✓ |
 | A malformed payload, a failed initial Query or BatchGetItem | ✓ | — | 1 | — | — | ✓ |
 | A Lambda timeout or panic | ✓ | — | — | — | — | partial |
-| A failed SNS Publish | — | — | 0 | awaiting retry | ✓ | ✓ |
+| A failed SNS Publish | — | — | 0 | abandoned after two failures | — | ✓ |
 | A failed pending/completion status write | — | ✓ | 0 | depends | depends | ✓ |
 | A resource stuck mid-transition | — | — | 0 | — | ✓ (`transitioning_since`) | ✓ |
 
-When an action notification fails, `notification_pending` remains and the next cycle sends it again with the same `operation_id`. If recording pending fails, no AWS action runs. If completion recording fails after the AWS action, pending remains and the next cycle confirms completion from the AWS observation instead of sending the same action again. Diagnosis catches transitions that never end ([overview.md](overview.md)).
+An action notification gets at most two Publish attempts within the same processing run and is abandoned without a status update if both fail. If recording pending fails, no AWS action runs. If completion recording fails after the AWS action, pending remains and the next cycle confirms completion from the AWS observation instead of sending the same action again. Diagnosis catches transitions that never end ([overview.md](overview.md)).
 
 ## Disabling
 

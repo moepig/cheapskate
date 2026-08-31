@@ -121,13 +121,19 @@ type Notification struct {
 }
 
 // publish をすべて記録する port.Notifier のテストダブル
-// Err を設定すると各呼び出しが失敗する
+// Errors は呼び出しごとに先頭から返す。空になった後は Err を返す
 type Notifier struct {
 	Published []Notification
 	Err       error
+	Errors    []error
 }
 
 func (n *Notifier) Publish(_ context.Context, subject string, payload map[string]any) error {
 	n.Published = append(n.Published, Notification{Subject: subject, Payload: payload})
+	if len(n.Errors) > 0 {
+		err := n.Errors[0]
+		n.Errors = n.Errors[1:]
+		return err
+	}
 	return n.Err
 }

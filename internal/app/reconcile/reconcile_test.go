@@ -368,10 +368,12 @@ func TestClearRecoveredErrorPutStatusFailureIsLoggedNotSurfaced(t *testing.T) {
 	assert.NotEqual(t, "", status["last_error"].(*types.AttributeValueMemberS).Value, "last_error must remain since the clear failed")
 }
 
-// アクションの成功後における Publish の失敗を、reconcile のエラーとして記録してはならない
-// アクションは成功し、永続化も完了しているためである
-func TestNotifyFailureAfterSuccessfulActionIsNotAnError(t *testing.T) {
+// アクション通知は 2 回の Publish がともに失敗した時点で打ち切る
+// 通知の失敗は AWS 操作と完了記録の成功を変更しないため、reconcile のエラーと通知待ちは残さない
+func TestActionNotificationStopsAfterTwoFailuresWithoutError(t *testing.T) {
 	f := newFixture(t)
+	var logBuf bytes.Buffer
+	f.deps.Log = slog.New(slog.NewTextHandler(&logBuf, nil))
 	f.pinnedStoppedGroup("dev-db", rdsInstance("dev-db"))
 	f.rds.Observations["dev-db"] = model.Observation{State: model.StateRunning}
 	f.notifier.Err = fmt.Errorf("sns down")
@@ -383,67 +385,58 @@ func TestNotifyFailureAfterSuccessfulActionIsNotAnError(t *testing.T) {
 	status := f.db.Item("status#rds-instance#dev-db")
 	require.NotNil(t, status)
 	assert.Equal(t, "", status["last_error"].(*types.AttributeValueMemberS).Value, "notify failure must not be written as last_error")
-	assert.NotEmpty(t, status["notification_pending"], "失敗した通知は次回の再試行まで残す")
+	assert.NotContains(t, status, "notification_pending", "通知失敗は AWS 操作を防ぐ状態を残さない")
+	require.Len(t, f.notifier.Published, 2)
+	assert.Equal(t, f.notifier.Published[0].Payload["operation_id"], f.notifier.Published[1].Payload["operation_id"])
+	assert.Equal(t, now.Format(time.RFC3339), f.notifier.Published[0].Payload["at"])
+	assert.Equal(t, now.Format(time.RFC3339), f.notifier.Published[1].Payload["at"])
+	assert.Equal(t, 2, strings.Count(logBuf.String(), "action-notify-failed"))
+	assert.Contains(t, logBuf.String(), "action-notify-abandoned")
 }
 
-func TestFailedActionNotificationIsRetriedWithSameOperationID(t *testing.T) {
+// 初回の Publish 失敗後の再送は、同じ操作の通知として operation_id と時刻を維持する
+func TestActionNotificationRetryUsesSameOperationIDAndTime(t *testing.T) {
 	f := newFixture(t)
 	f.pinnedStoppedGroup("dev-db", rdsInstance("dev-db"))
 	f.rds.Observations["dev-db"] = model.Observation{State: model.StateRunning}
-	f.notifier.Err = fmt.Errorf("sns down")
+	f.notifier.Errors = []error{fmt.Errorf("sns down"), nil}
 
 	runEmpty(t, f)
-	require.Len(t, f.notifier.Published, 1)
+	require.Len(t, f.notifier.Published, 2)
 	firstOperationID := f.notifier.Published[0].Payload["operation_id"]
 	require.NotEmpty(t, firstOperationID)
-
-	f.notifier.Err = nil
-	f.rds.Observations["dev-db"] = model.Observation{State: model.StateTransitioning, Detail: "stopping"}
-	runEmpty(t, f)
-
-	require.Len(t, f.notifier.Published, 2)
 	assert.Equal(t, firstOperationID, f.notifier.Published[1].Payload["operation_id"])
-	status := f.db.Item("status#rds-instance#dev-db")
-	require.NotNil(t, status)
-	assert.Equal(t, "", status["notification_pending"].(*types.AttributeValueMemberS).Value)
-	assert.Len(t, f.rds.Stopped, 1, "通知の再試行では停止操作を再実行しない")
+	assert.Equal(t, f.notifier.Published[0].Payload["at"], f.notifier.Published[1].Payload["at"])
+	assert.Equal(t, []string{"dev-db"}, f.rds.Stopped, "通知の再試行では停止操作を再実行しない")
 }
 
-// 未確認の通知がある間は次の AWS 操作を開始せず、同じ operation_id の通知を先に確認する。
-// 単一の notification_pending が後続操作の通知で上書きされないことを検証する。
-func TestPendingNotificationBlocksNextActionUntilAcknowledged(t *testing.T) {
+// 前回の通知が 2 回失敗しても、次の reconcile は新しい AWS 操作を実行する
+// 各通知の at は操作時刻であり、後続操作の通知が先に届いた場合も前後関係を判定できる
+func TestNotificationFailureDoesNotBlockNextAWSAction(t *testing.T) {
 	f := newFixture(t)
 	f.pinnedStoppedGroup("dev-db", rdsInstance("dev-db"))
 	f.rds.Observations["dev-db"] = model.Observation{State: model.StateRunning}
 	f.notifier.Err = fmt.Errorf("sns down")
 
 	runEmpty(t, f)
-	status := f.db.Item("status#rds-instance#dev-db")
-	require.NotNil(t, status)
-	firstOperationID := status["notification_pending"].(*types.AttributeValueMemberS).Value
+	require.Len(t, f.notifier.Published, 2)
+	firstOperationID := f.notifier.Published[0].Payload["operation_id"]
 	require.NotEmpty(t, firstOperationID)
 
 	f.seedGroup("dev-db", model.ModePinned, model.DesiredRunning)
 	f.rds.Observations["dev-db"] = model.Observation{State: model.StateStopped}
-	second := runEmpty(t, f)
+	secondAt := now.Add(time.Minute)
+	second, err := Run(context.Background(), json.RawMessage(`{}`), f.deps, secondAt)
+	require.NoError(t, err)
 
 	assert.Empty(t, second.Errors)
-	assert.Empty(t, f.rds.Started, "未確認の通知がある間は次の操作を開始しない")
-	status = f.db.Item("status#rds-instance#dev-db")
-	assert.Equal(t, firstOperationID, status["notification_pending"].(*types.AttributeValueMemberS).Value)
-	require.Len(t, f.notifier.Published, 2)
-	assert.Equal(t, firstOperationID, f.notifier.Published[1].Payload["operation_id"])
-
-	f.notifier.Err = nil
-	third := runEmpty(t, f)
-
-	assert.Empty(t, third.Errors)
 	assert.Equal(t, []string{"dev-db"}, f.rds.Started)
 	require.Len(t, f.notifier.Published, 4)
-	assert.Equal(t, firstOperationID, f.notifier.Published[2].Payload["operation_id"])
-	assert.NotEqual(t, firstOperationID, f.notifier.Published[3].Payload["operation_id"])
-	status = f.db.Item("status#rds-instance#dev-db")
-	assert.Equal(t, "", status["notification_pending"].(*types.AttributeValueMemberS).Value)
+	secondOperationID := f.notifier.Published[2].Payload["operation_id"]
+	assert.NotEqual(t, firstOperationID, secondOperationID)
+	assert.Equal(t, secondOperationID, f.notifier.Published[3].Payload["operation_id"])
+	assert.Equal(t, now.Format(time.RFC3339), f.notifier.Published[0].Payload["at"])
+	assert.Equal(t, secondAt.Format(time.RFC3339), f.notifier.Published[2].Payload["at"])
 }
 
 // アクションの成功後における PutStatus の失敗は、そのサイクルのエラーとして記録し、他のリソースの reconcile を継続する

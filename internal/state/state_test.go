@@ -545,18 +545,23 @@ func TestPendingOperationRequiresMatchingOperationID(t *testing.T) {
 	assert.Empty(t, got.PendingOperationID)
 	assert.Equal(t, model.ActionStop, got.LastAction)
 	assert.Equal(t, model.DesiredStopped, got.LastDesired)
-	assert.Equal(t, "op-a", got.NotificationPending)
 	assert.Empty(t, got.LastError, "操作の完了と以前のエラー解除は同じ更新で確定する")
 
-	assert.Error(t, st.BeginOperation(ctx, resourceID, PendingOperation{ID: "op-b"}),
-		"未確認の通知がある間は次の操作を開始してはならない")
-
-	assert.Error(t, st.AcknowledgeNotification(ctx, resourceID, "op-b"),
-		"異なる操作IDでは通知待ちを解除してはならない")
-	require.NoError(t, st.AcknowledgeNotification(ctx, resourceID, "op-a"))
-	got, err = st.GetStatus(ctx, resourceID)
-	require.NoError(t, err)
-	assert.Empty(t, got.NotificationPending)
 	require.NoError(t, st.BeginOperation(ctx, resourceID, PendingOperation{ID: "op-b"}),
-		"通知の確認後は次の操作を開始できなければならない")
+		"完了記録後は通知の状態と無関係に次の操作を開始できなければならない")
+}
+
+// 旧バージョンが残した notification_pending は、新しい AWS 操作の開始条件に含めない
+// デプロイ前に通知障害が発生していた場合も、通知の残存属性が AWS 操作を停止してはならない
+func TestLegacyNotificationPendingDoesNotBlockOperation(t *testing.T) {
+	db, st := newFixture(t)
+	resourceID := "rds-instance#dev"
+	seedStatus(db, resourceID, map[string]types.AttributeValue{"notification_pending": s("old-operation")})
+
+	err := st.BeginOperation(context.Background(), resourceID, PendingOperation{
+		ID: "new-operation", Action: model.ActionStop, Desired: model.DesiredStopped,
+		Observed: model.StateRunning, StartedAt: "2026-08-30T12:00:00Z",
+	})
+
+	require.NoError(t, err)
 }

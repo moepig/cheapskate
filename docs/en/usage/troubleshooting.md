@@ -24,7 +24,7 @@ The paths through which a failure is detected, and what each yields, are collect
 
 ### Failures that appear in neither the metrics nor the notifications
 
-A failed SNS Publish remains in the log and as `notification_pending` in status; the next cycle retries it with the same `operation_id`. A transition that never ends appears in neither metrics nor notifications, so `doctor` catches it.
+A failed SNS Publish remains in the log and is retried once within the same processing run. A notification whose two attempts both fail is lost. A transition that never ends appears in neither metrics nor notifications, so `doctor` catches it.
 
 ### Configuring alarms
 
@@ -64,7 +64,7 @@ The events left behind when processing ends partway, and what each calls for, ar
 | A Stop/Start failed | Yes. The next cycle retries | For a permanent cause such as a missing permission, read `last_error` and fix it |
 | Recording pending failed | No AWS action ran, so the next cycle retries | Fix the DynamoDB failure only if it persists |
 | The action succeeded but writing completion status failed | Pending remains. The next cycle confirms completion from AWS state and does not send the action again | Nothing |
-| Sending or acknowledging an action notification failed | `notification_pending` remains and is resent with the same `operation_id` | Use `operation_id` to identify a duplicate notification |
+| Both Publish attempts for a notification failed | No. The notification is abandoned and AWS actions continue | Monitor `*-notify-abandoned` logs if needed |
 | Stopping ECS failed before the desiredCount update | Yes. The scalable target rolls back to its original min/max automatically | Nothing. Only if the rollback failed too, see [ECS-specific notes](#ecs-specific-notes) |
 | A resource is stuck mid-transition | No. It is skipped on every cycle | See [Resources stuck mid-transition](#resources-stuck-mid-transition) |
 | A group was deleted but `override#` / `status#` remain | No | `doctor --prune` |

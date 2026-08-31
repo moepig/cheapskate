@@ -35,7 +35,6 @@ type Store interface {
 	BeginOperation(ctx context.Context, resourceID string, op state.PendingOperation) error
 	CompleteOperation(ctx context.Context, resourceID string, op state.PendingOperation) error
 	AbandonOperation(ctx context.Context, resourceID, operationID string) error
-	AcknowledgeNotification(ctx context.Context, resourceID, operationID string) error
 }
 
 // reconcile 1 回分の依存をまとめたコンテナ
@@ -142,9 +141,10 @@ func Run(ctx context.Context, raw json.RawMessage, deps *Deps, now time.Time) (S
 }
 
 const (
-	defaultLeaseDuration = 3 * time.Minute
-	leaseSafetyMargin    = 15 * time.Second
-	pendingRecoveryAfter = 30 * time.Minute
+	defaultLeaseDuration    = 3 * time.Minute
+	leaseSafetyMargin       = 15 * time.Second
+	pendingRecoveryAfter    = 30 * time.Minute
+	maxNotificationAttempts = 2
 )
 
 func leaseExpiration(ctx context.Context, now time.Time) time.Time {
@@ -308,15 +308,6 @@ func reconcileResource(ctx context.Context, deps *Deps, groupName string, res mo
 	}
 	result.Desired, result.Observed = desired, obs.State
 
-	notificationPending, err := retryActionNotification(ctx, deps, groupName, resourceID, status)
-	if err != nil {
-		return err
-	}
-	if notificationPending {
-		result.Skipped = "notification-pending"
-		return nil
-	}
-
 	if status.PendingOperationID != "" {
 		op, startedAt, err := pendingOperation(status)
 		if err != nil {
@@ -329,10 +320,7 @@ func reconcileResource(ctx context.Context, deps *Deps, groupName string, res mo
 			result.Action = op.Action
 			deps.Log.Info("action-recovered", "group", groupName, "resource_id", resourceID,
 				"operation_id", op.ID, "action", op.Action, "desired", op.Desired)
-			if !deliverActionNotification(ctx, deps, groupName, resourceID, op.ID, op.Action, op.Desired, op.StartedAt) {
-				result.Skipped = "notification-pending"
-				return nil
-			}
+			deliverActionNotification(ctx, deps, groupName, resourceID, op.ID, op.Action, op.Desired, op.StartedAt)
 			status.PendingOperationID = ""
 			status.PendingAction = model.ActionNone
 			status.PendingDesired = model.DesiredNone
@@ -496,28 +484,7 @@ func performAction(ctx context.Context, res model.Resource, action model.Action,
 	return fmt.Errorf("unknown action %q", action)
 }
 
-// 前回完了した操作の未確認通知を再試行する。
-// 通知または確認記録が失敗した場合は pending=true とし、notification_pending を保持する。
-func retryActionNotification(ctx context.Context, deps *Deps, group, resourceID string, status model.Status) (pending bool, err error) {
-	if status.NotificationPending == "" {
-		return false, nil
-	}
-	if status.LastAction != model.ActionStart && status.LastAction != model.ActionStop {
-		return true, fmt.Errorf("notification %s has invalid action %q", status.NotificationPending, status.LastAction)
-	}
-	if err := status.LastDesired.Validate(); err != nil {
-		return true, fmt.Errorf("notification %s has invalid desired state: %w", status.NotificationPending, err)
-	}
-	if status.LastActionAt == "" {
-		return true, fmt.Errorf("notification %s has no action timestamp", status.NotificationPending)
-	}
-	delivered := deliverActionNotification(ctx, deps, group, resourceID, status.NotificationPending,
-		status.LastAction, status.LastDesired, status.LastActionAt)
-	return !delivered, nil
-}
-
-// 完了済みの操作を通知し、送信と確認記録の両方が成功したかを返す。
-// Publish と解除の間で停止した場合は同じ operation_id の通知が再送される。
+// 完了済みの操作を通知する。
 func deliverActionNotification(
 	ctx context.Context,
 	deps *Deps,
@@ -525,24 +492,31 @@ func deliverActionNotification(
 	action model.Action,
 	desired model.DesiredState,
 	at string,
-) bool {
-	if err := deps.Notifier.Publish(ctx,
+) {
+	publishNotification(ctx, deps, "action-notify",
 		fmt.Sprintf("[cheapskate] %s: %s/%s", action, group, resourceID),
 		map[string]any{
 			"group": group, "resource_id": resourceID, "operation_id": operationID,
 			"action": action, "desired": desired, "at": at,
 		},
-	); err != nil {
-		deps.Log.Error("action-notify-failed", "group", group, "resource_id", resourceID,
-			"operation_id", operationID, "error", err.Error())
-		return false
+		"group", group, "resource_id", resourceID, "operation_id", operationID)
+}
+
+// 同じ本文を最大 maxNotificationAttempts 回送信する。
+// すべて失敗しても呼び出し元の処理は失敗させない。
+func publishNotification(ctx context.Context, deps *Deps, logEvent, subject string, payload map[string]any, logAttrs ...any) {
+	for attempt := 1; attempt <= maxNotificationAttempts; attempt++ {
+		err := deps.Notifier.Publish(ctx, subject, payload)
+		if err == nil {
+			return
+		}
+		attrs := append([]any{}, logAttrs...)
+		attrs = append(attrs, "attempt", attempt, "max_attempts", maxNotificationAttempts, "error", err.Error())
+		deps.Log.Error(logEvent+"-failed", attrs...)
 	}
-	if err := deps.Store.AcknowledgeNotification(ctx, resourceID, operationID); err != nil {
-		deps.Log.Error("action-notify-ack-failed", "group", group, "resource_id", resourceID,
-			"operation_id", operationID, "error", err.Error())
-		return false
-	}
-	return true
+	attrs := append([]any{}, logAttrs...)
+	attrs = append(attrs, "attempts", maxNotificationAttempts)
+	deps.Log.Error(logEvent+"-abandoned", attrs...)
 }
 
 // アクションを伴わずに正常化した場合、以前のエラーを解除して復旧を通知する。
@@ -557,12 +531,10 @@ func clearRecoveredError(ctx context.Context, deps *Deps, group, resourceID stri
 		deps.Log.Error("error-clear-failed", "group", group, "resource_id", resourceID, "error", err.Error())
 		return
 	}
-	if err := deps.Notifier.Publish(ctx,
+	publishNotification(ctx, deps, "recovery-notify",
 		fmt.Sprintf("[cheapskate] recovered: %s/%s", group, resourceID),
 		map[string]any{"group": group, "resource_id": resourceID, "at": now.UTC().Format(time.RFC3339)},
-	); err != nil {
-		deps.Log.Error("recovery-notify-failed", "group", group, "resource_id", resourceID, "error", err.Error())
-	}
+		"group", group, "resource_id", resourceID)
 }
 
 // エラーは無条件に永続化するが、通知するのは以前に記録したものと内容が違うときだけである
@@ -581,10 +553,8 @@ func recordFailure(ctx context.Context, deps *Deps, group, resourceID string, pr
 	if prevStatus.LastError == err.Error() {
 		return
 	}
-	if nerr := deps.Notifier.Publish(ctx,
+	publishNotification(ctx, deps, "error-notify",
 		fmt.Sprintf("[cheapskate] error: %s/%s", group, resourceID),
 		map[string]any{"group": group, "resource_id": resourceID, "error": err.Error(), "at": at},
-	); nerr != nil {
-		deps.Log.Error("error-notify-failed", "group", group, "resource_id", resourceID, "error", nerr.Error())
-	}
+		"group", group, "resource_id", resourceID)
 }

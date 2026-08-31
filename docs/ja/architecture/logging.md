@@ -92,11 +92,11 @@ reconciler が出力するイベントを、以下に示す。
 | `summary`                    | INFO  | `reconciled`, `actions`, `errors`           | 1 サイクルの実行結果サマリ                          |
 | `metrics`                    | INFO  | `_aws` + メトリクス名                       | EMF メトリクス([metrics.md](metrics.md))            |
 | `metrics-disabled`           | INFO  | `reason`                                    | カスタムメトリクスが無効であることを示す             |
-| `action-notify-failed`       | ERROR | `group`, `resource_id`, `operation_id`, `error` | アクション通知の失敗。Status に再送待ちが残る   |
-| `action-notify-ack-failed`   | ERROR | `group`, `resource_id`, `operation_id`, `error` | 通知済み記録の失敗。同じ通知を再送しうる        |
+| `action-notify-failed`       | ERROR | `group`, `resource_id`, `operation_id`, `attempt`, `max_attempts`, `error` | アクション通知の Publish 失敗 |
+| `action-notify-abandoned`    | ERROR | `group`, `resource_id`, `operation_id`, `attempts` | 最大回数の失敗によるアクション通知の送信打ち切り |
 | `pending-operation-abandon-failed` | ERROR | `resource_id`, `operation_id`, `error` | 失敗した AWS 操作の pending 解除にも失敗した |
-| `recovery-notify-failed`     | ERROR | `group`, `resource_id`, `error`             | 復旧(`recovered`)通知の失敗                         |
-| `error-notify-failed`        | ERROR | `group`, `resource_id`, `error`             | 失敗の通知の失敗                                    |
+| `recovery-notify-failed` / `error-notify-failed` | ERROR | `group`, `resource_id`, `attempt`, `max_attempts`, `error` | 復旧通知またはエラー通知の Publish 失敗 |
+| `recovery-notify-abandoned` / `error-notify-abandoned` | ERROR | `group`, `resource_id`, `attempts` | 最大回数の失敗による復旧通知またはエラー通知の送信打ち切り |
 | `error-clear-failed`         | ERROR | `group`, `resource_id`, `error`             | エラーから回復した場合の `last_error` クリアの失敗  |
 | `error-record-failed`        | ERROR | `group`, `resource_id`, `error`             | `last_error` への失敗の書き込みの失敗               |
 | `transitioning-mark-failed`  | ERROR | `resource_id`, `error`                      | `transitioning_since` の書き込み失敗                |
@@ -117,8 +117,7 @@ reconciler が出力するイベントを、以下に示す。
 
 | イベント                                    | ログのみとする理由                                        |
 | ------------------------------------------- | --------------------------------------------------------- |
-| `action-notify-failed`, `action-notify-ack-failed` | `notification_pending` で次サイクルへ引き継ぐため     |
-| `recovery-notify-failed`, `error-notify-failed` | 通知に失敗しているため                                  |
+| `*-notify-failed`, `*-notify-abandoned` | 通知の成否は AWS 操作と reconcile の成否と独立しているため |
 | `error-record-failed`, `pending-operation-abandon-failed` | DynamoDB に記録できないことを同じ経路へ記録できない |
 | `lease-release-failed`                     | TTL で失効し、リソース操作の成否とは独立しているため       |
 | `transitioning-*-failed`                    | 監査のための情報であり、reconciler の失敗扱いとしない     |
