@@ -79,7 +79,7 @@ The domain representation is `model.Status`. The values are a snapshot taken whe
 | `pending_started_at` | S | When the pending operation started (RFC3339) |
 | `notification_pending` | S | The operation ID whose notification must be retried |
 
-Status is latest-only, not a history. Before an AWS action, the pending attributes are written conditionally. Afterwards, the same operation ID is required to advance the item to the last-action and notification-pending state. If Lambda stops between these steps, the next invocation confirms completion from the AWS observation instead of repeating the action. Notifications include `operation_id`; a successful Publish clears the marker, so stopping before that clear causes a retry with the same ID.
+Status is latest-only, not a history. Before an AWS action, the pending attributes are written conditionally. Afterwards, the same operation ID is required to advance the item to the last-action and notification-pending state. If Lambda stops between these steps, the next invocation confirms completion from the AWS observation instead of repeating the action. Notifications include `operation_id`; a successful Publish clears the marker, so stopping before that clear causes a retry with the same ID. [Reconcile persistence boundaries](../development/reconcile.md) explains why only one pending notification is stored.
 
 `<type>#<ref>` is the identifier produced by `model.Resource.ID()`, which `internal/aws/tagging` derives from the ARN. The form of `ref` per type is given below.
 

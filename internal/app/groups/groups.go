@@ -28,6 +28,7 @@ type Store interface {
 	GetGroupRow(ctx context.Context, name string, now time.Time) (state.GroupRow, error)
 	GetStatuses(ctx context.Context, resourceIDs []string) (map[string]state.StatusRecord, error)
 	GetGroup(ctx context.Context, name string) (*model.GroupSpec, error)
+	CreateGroup(ctx context.Context, spec model.GroupSpec) error
 	UpdateGroup(ctx context.Context, name string, patch state.GroupPatch) error
 	PutOverride(ctx context.Context, group string, o model.Override) error
 	DeleteGroup(ctx context.Context, name string) error
@@ -161,14 +162,17 @@ func SetSelector(ctx context.Context, s Store, group string, sel model.Selector)
 	if err != nil {
 		return false, err
 	}
-	patch := state.GroupPatch{TagKey: state.Set(next.TagKey), TagValue: state.Set(next.TagValue), Types: state.Set(next.Types)}
 	if existing == nil {
-		patch.Mode = state.Set(next.Mode)
+		if err := s.CreateGroup(ctx, next); err != nil {
+			return false, err
+		}
+		return true, nil
 	}
+	patch := state.GroupPatch{TagKey: state.Set(next.TagKey), TagValue: state.Set(next.TagValue), Types: state.Set(next.Types)}
 	if err := s.UpdateGroup(ctx, group, patch); err != nil {
 		return false, err
 	}
-	return existing == nil, nil
+	return false, nil
 }
 
 // グループを削除する

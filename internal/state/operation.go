@@ -18,7 +18,7 @@ type PendingOperation struct {
 	StartedAt string
 }
 
-// BeginOperation は未完了の変更操作がない場合だけ、操作意図を記録する。
+// 未完了の変更操作と未確認の通知がない場合だけ、操作意図を記録する。
 func (s *Store) BeginOperation(ctx context.Context, resourceID string, op PendingOperation) error {
 	empty := ""
 	return s.updateStatus(ctx, resourceID, StatusPatch{
@@ -27,12 +27,16 @@ func (s *Store) BeginOperation(ctx context.Context, resourceID string, op Pendin
 		PendingDesired:     Set(op.Desired),
 		PendingObserved:    Set(op.Observed),
 		PendingStartedAt:   Set(op.StartedAt),
-	}, "attribute_not_exists(#pending_operation_id) OR #pending_operation_id = :empty",
-		map[string]string{"#pending_operation_id": "pending_operation_id"},
+	}, "(attribute_not_exists(#pending_operation_id) OR #pending_operation_id = :empty) AND (attribute_not_exists(#notification_pending) OR #notification_pending = :empty)",
+		map[string]string{
+			"#pending_operation_id": "pending_operation_id",
+			"#notification_pending": "notification_pending",
+		},
 		map[string]types.AttributeValue{":empty": &types.AttributeValueMemberS{Value: empty}})
 }
 
-// CompleteOperation は同じ操作 ID の意図を、監査証跡と通知待ちへ進める。
+// 同じ操作 ID の意図を監査証跡と通知待ちへ進め、以前のエラーを同じ更新で解除する。
+// 未確認の通知が存在する場合は、単一の通知待ちを上書きせず条件エラーを返す。
 func (s *Store) CompleteOperation(ctx context.Context, resourceID string, op PendingOperation) error {
 	empty := ""
 	return s.updateStatus(ctx, resourceID, StatusPatch{
@@ -40,15 +44,23 @@ func (s *Store) CompleteOperation(ctx context.Context, resourceID string, op Pen
 		LastAction:          Set(op.Action),
 		LastDesired:         Set(op.Desired),
 		LastActionAt:        Set(op.StartedAt),
+		LastError:           Set(empty),
+		LastErrorAt:         Set(empty),
 		PendingOperationID:  Set(empty),
 		PendingAction:       Set(model.ActionNone),
 		PendingDesired:      Set(model.DesiredNone),
 		PendingObserved:     Set(model.ObservedState("")),
 		PendingStartedAt:    Set(empty),
 		NotificationPending: Set(op.ID),
-	}, "#pending_operation_id = :operation_id",
-		map[string]string{"#pending_operation_id": "pending_operation_id"},
-		map[string]types.AttributeValue{":operation_id": &types.AttributeValueMemberS{Value: op.ID}})
+	}, "#pending_operation_id = :operation_id AND (attribute_not_exists(#notification_pending) OR #notification_pending = :empty)",
+		map[string]string{
+			"#pending_operation_id": "pending_operation_id",
+			"#notification_pending": "notification_pending",
+		},
+		map[string]types.AttributeValue{
+			":operation_id": &types.AttributeValueMemberS{Value: op.ID},
+			":empty":        &types.AttributeValueMemberS{Value: empty},
+		})
 }
 
 // AbandonOperation は実行に至らなかった、または収束を確認できなかった操作意図を消す。

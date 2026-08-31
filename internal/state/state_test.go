@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
 
+	"cheapskate/internal/backoff"
 	"cheapskate/internal/core/model"
 	"cheapskate/internal/state/mocks"
 )
@@ -94,6 +95,21 @@ func TestGetStatusesBatchesAtOneHundredKeys(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, statuses, 101)
 	assert.Equal(t, 2, db.Calls("batch-get"))
+}
+
+// UnprocessedKeys は同じキーを再要求し、処理済みの応答と結合しなければならない。
+// テストでは待機時間を最小化し、再試行回数と最終結果を検証する。
+func TestGetStatusesRetriesUnprocessedKeys(t *testing.T) {
+	db, st := newFixture(t)
+	st.batchGetBackoff = backoff.NewExponential(time.Nanosecond, time.Nanosecond)
+	db.SetBatchGetUnprocessedResponses(2)
+	seedStatus(db, "rds-instance#dev", map[string]types.AttributeValue{"last_action": s("stop")})
+
+	got, err := st.GetStatuses(context.Background(), []string{"rds-instance#dev"})
+
+	require.NoError(t, err)
+	assert.Equal(t, model.ActionStop, got["rds-instance#dev"].Status.LastAction)
+	assert.Equal(t, 3, db.Calls("batch-get"))
 }
 
 func TestScanAllJoinsGroupOverrideGroupStatus(t *testing.T) {
@@ -296,6 +312,28 @@ func TestGetPutGroup(t *testing.T) {
 	assert.Equal(t, model.ModeDisabled, got.Mode)
 }
 
+// 新規作成は既存の設定を上書きせず、既存更新は削除済みの設定を再作成してはならない。
+func TestConditionalGroupWritesPreserveExistence(t *testing.T) {
+	_, st := newFixture(t)
+	ctx := context.Background()
+	original := model.GroupSpec{Name: "dev", Mode: model.ModeDisabled, TagKey: "env", TagValue: "dev", Types: []model.ResourceType{model.TypeRdsInstance}}
+	require.NoError(t, st.CreateGroup(ctx, original))
+
+	err := st.CreateGroup(ctx, model.GroupSpec{Name: "dev", Mode: model.ModePinned, Desired: model.DesiredRunning})
+	assert.ErrorIs(t, err, ErrGroupAlreadyExists)
+	got, err := st.GetGroup(ctx, "dev")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, original, *got)
+
+	require.NoError(t, st.DeleteGroup(ctx, "dev"))
+	err = st.UpdateGroup(ctx, "dev", GroupPatch{Mode: Set(model.ModePinned), Desired: Set(model.DesiredRunning)})
+	assert.ErrorIs(t, err, ErrGroupNotFound)
+	got, err = st.GetGroup(ctx, "dev")
+	require.NoError(t, err)
+	assert.Nil(t, got)
+}
+
 // 属性単位の更新は、パッチに含まれないcronとセレクターを保持する。
 // 異なる設定操作が同時に行われても、無関係な属性を古い読み取り結果で上書きしないためである。
 func TestUpdateGroupLeavesUnspecifiedAttributesUntouched(t *testing.T) {
@@ -359,7 +397,7 @@ func TestGetOverrideEnforcesExpiryAndValidatesDesired(t *testing.T) {
 
 func TestPutGroupPropagatesStoreError(t *testing.T) {
 	db, st := newFixture(t)
-	db.FailOn("update", "group#dev", assert.AnError)
+	db.FailOn("put", "group#dev", assert.AnError)
 	err := st.PutGroup(context.Background(), model.GroupSpec{Name: "dev", Mode: model.ModeDisabled})
 	assert.ErrorIs(t, err, assert.AnError)
 }
@@ -493,6 +531,7 @@ func TestPendingOperationRequiresMatchingOperationID(t *testing.T) {
 		ID: "op-a", Action: model.ActionStop, Desired: model.DesiredStopped,
 		Observed: model.StateRunning, StartedAt: "2026-08-30T12:00:00Z",
 	}
+	require.NoError(t, st.UpdateStatus(ctx, resourceID, StatusPatch{LastError: Set("previous failure"), LastErrorAt: Set("2026-08-30T11:59:00Z")}))
 
 	require.NoError(t, st.BeginOperation(ctx, resourceID, op))
 	assert.Error(t, st.BeginOperation(ctx, resourceID, PendingOperation{ID: "op-b"}),
@@ -507,6 +546,10 @@ func TestPendingOperationRequiresMatchingOperationID(t *testing.T) {
 	assert.Equal(t, model.ActionStop, got.LastAction)
 	assert.Equal(t, model.DesiredStopped, got.LastDesired)
 	assert.Equal(t, "op-a", got.NotificationPending)
+	assert.Empty(t, got.LastError, "操作の完了と以前のエラー解除は同じ更新で確定する")
+
+	assert.Error(t, st.BeginOperation(ctx, resourceID, PendingOperation{ID: "op-b"}),
+		"未確認の通知がある間は次の操作を開始してはならない")
 
 	assert.Error(t, st.AcknowledgeNotification(ctx, resourceID, "op-b"),
 		"異なる操作IDでは通知待ちを解除してはならない")
@@ -514,4 +557,6 @@ func TestPendingOperationRequiresMatchingOperationID(t *testing.T) {
 	got, err = st.GetStatus(ctx, resourceID)
 	require.NoError(t, err)
 	assert.Empty(t, got.NotificationPending)
+	require.NoError(t, st.BeginOperation(ctx, resourceID, PendingOperation{ID: "op-b"}),
+		"通知の確認後は次の操作を開始できなければならない")
 }

@@ -213,7 +213,7 @@ func ReconcileGroup(ctx context.Context, row state.GroupRow, claimed *claims, de
 		return []Result{{Group: row.Name, Error: err.Error()}}
 	}
 	if desired == model.DesiredNone {
-		clearRecoveredError(ctx, deps, row.Name, groupStatusID, row.Status, true, now)
+		clearRecoveredError(ctx, deps, row.Name, groupStatusID, row.Status, now)
 		return []Result{{Group: row.Name, Skipped: "disabled"}}
 	}
 
@@ -269,7 +269,7 @@ func ReconcileGroup(ctx context.Context, row state.GroupRow, claimed *claims, de
 		recordFailure(ctx, deps, row.Name, groupStatusID, row.Status,
 			fmt.Errorf("selector overlaps other groups: %s", strings.Join(taken, ", ")), now)
 	} else {
-		clearRecoveredError(ctx, deps, row.Name, groupStatusID, row.Status, true, now)
+		clearRecoveredError(ctx, deps, row.Name, groupStatusID, row.Status, now)
 	}
 	return results
 }
@@ -308,8 +308,13 @@ func reconcileResource(ctx context.Context, deps *Deps, groupName string, res mo
 	}
 	result.Desired, result.Observed = desired, obs.State
 
-	if err := retryActionNotification(ctx, deps, groupName, resourceID, status); err != nil {
+	notificationPending, err := retryActionNotification(ctx, deps, groupName, resourceID, status)
+	if err != nil {
 		return err
+	}
+	if notificationPending {
+		result.Skipped = "notification-pending"
+		return nil
 	}
 
 	if status.PendingOperationID != "" {
@@ -324,8 +329,10 @@ func reconcileResource(ctx context.Context, deps *Deps, groupName string, res mo
 			result.Action = op.Action
 			deps.Log.Info("action-recovered", "group", groupName, "resource_id", resourceID,
 				"operation_id", op.ID, "action", op.Action, "desired", op.Desired)
-			deliverActionNotification(ctx, deps, groupName, resourceID, op.ID, op.Action, op.Desired, op.StartedAt)
-			clearRecoveredError(ctx, deps, groupName, resourceID, status, false, now)
+			if !deliverActionNotification(ctx, deps, groupName, resourceID, op.ID, op.Action, op.Desired, op.StartedAt) {
+				result.Skipped = "notification-pending"
+				return nil
+			}
 			status.PendingOperationID = ""
 			status.PendingAction = model.ActionNone
 			status.PendingDesired = model.DesiredNone
@@ -334,6 +341,8 @@ func reconcileResource(ctx context.Context, deps *Deps, groupName string, res mo
 			status.LastAction = op.Action
 			status.LastDesired = op.Desired
 			status.LastActionAt = op.StartedAt
+			status.LastError = ""
+			status.LastErrorAt = ""
 		} else if obs.State == model.StateTransitioning {
 			markTransitioning(ctx, deps, resourceID, status, now)
 			deps.Log.Info("skip-pending-transition", "resource_id", resourceID, "operation_id", op.ID,
@@ -377,7 +386,7 @@ func reconcileResource(ctx context.Context, deps *Deps, groupName string, res mo
 		// 過去のエラーは削除し、復旧を 1 度だけ通知する
 		// 復旧通知を行うのはこの経路のみである
 		// アクションが成功した場合は、その通知が正常化を伝えるためである
-		clearRecoveredError(ctx, deps, groupName, resourceID, status, true, now)
+		clearRecoveredError(ctx, deps, groupName, resourceID, status, now)
 		return nil // 書き込みもアクション通知もなし
 	}
 
@@ -407,7 +416,6 @@ func reconcileResource(ctx context.Context, deps *Deps, groupName string, res mo
 	}
 
 	deliverActionNotification(ctx, deps, groupName, resourceID, operationID, action, desired, op.StartedAt)
-	clearRecoveredError(ctx, deps, groupName, resourceID, status, false, now)
 	return nil
 }
 
@@ -488,27 +496,27 @@ func performAction(ctx context.Context, res model.Resource, action model.Action,
 	return fmt.Errorf("unknown action %q", action)
 }
 
-// 前回完了した操作の未送信通知を再試行する。
-// 通知先の一時的な障害はエラーとして返さず、notification_pending を次回まで残す。
-func retryActionNotification(ctx context.Context, deps *Deps, group, resourceID string, status model.Status) error {
+// 前回完了した操作の未確認通知を再試行する。
+// 通知または確認記録が失敗した場合は pending=true とし、notification_pending を保持する。
+func retryActionNotification(ctx context.Context, deps *Deps, group, resourceID string, status model.Status) (pending bool, err error) {
 	if status.NotificationPending == "" {
-		return nil
+		return false, nil
 	}
 	if status.LastAction != model.ActionStart && status.LastAction != model.ActionStop {
-		return fmt.Errorf("notification %s has invalid action %q", status.NotificationPending, status.LastAction)
+		return true, fmt.Errorf("notification %s has invalid action %q", status.NotificationPending, status.LastAction)
 	}
 	if err := status.LastDesired.Validate(); err != nil {
-		return fmt.Errorf("notification %s has invalid desired state: %w", status.NotificationPending, err)
+		return true, fmt.Errorf("notification %s has invalid desired state: %w", status.NotificationPending, err)
 	}
 	if status.LastActionAt == "" {
-		return fmt.Errorf("notification %s has no action timestamp", status.NotificationPending)
+		return true, fmt.Errorf("notification %s has no action timestamp", status.NotificationPending)
 	}
-	deliverActionNotification(ctx, deps, group, resourceID, status.NotificationPending,
+	delivered := deliverActionNotification(ctx, deps, group, resourceID, status.NotificationPending,
 		status.LastAction, status.LastDesired, status.LastActionAt)
-	return nil
+	return !delivered, nil
 }
 
-// 完了済みの操作を通知し、成功した場合だけ通知待ちを解除する。
+// 完了済みの操作を通知し、送信と確認記録の両方が成功したかを返す。
 // Publish と解除の間で停止した場合は同じ operation_id の通知が再送される。
 func deliverActionNotification(
 	ctx context.Context,
@@ -517,7 +525,7 @@ func deliverActionNotification(
 	action model.Action,
 	desired model.DesiredState,
 	at string,
-) {
+) bool {
 	if err := deps.Notifier.Publish(ctx,
 		fmt.Sprintf("[cheapskate] %s: %s/%s", action, group, resourceID),
 		map[string]any{
@@ -527,19 +535,18 @@ func deliverActionNotification(
 	); err != nil {
 		deps.Log.Error("action-notify-failed", "group", group, "resource_id", resourceID,
 			"operation_id", operationID, "error", err.Error())
-		return
+		return false
 	}
 	if err := deps.Store.AcknowledgeNotification(ctx, resourceID, operationID); err != nil {
 		deps.Log.Error("action-notify-ack-failed", "group", group, "resource_id", resourceID,
 			"operation_id", operationID, "error", err.Error())
+		return false
 	}
+	return true
 }
 
-// エラーなしでサイクルが完了したら、以前に記録されたエラーを消す
-// notify は「復旧」通知を別途送るかどうかを制御する
-// アクションが成功した直後は呼び出し側が通知を省く
-// アクション通知がすでに復旧を伝えているためである
-func clearRecoveredError(ctx context.Context, deps *Deps, group, resourceID string, prevStatus model.Status, notify bool, now time.Time) {
+// アクションを伴わずに正常化した場合、以前のエラーを解除して復旧を通知する。
+func clearRecoveredError(ctx context.Context, deps *Deps, group, resourceID string, prevStatus model.Status, now time.Time) {
 	if prevStatus.LastError == "" {
 		return
 	}
@@ -548,9 +555,6 @@ func clearRecoveredError(ctx context.Context, deps *Deps, group, resourceID stri
 		LastErrorAt: state.Set(""),
 	}); err != nil {
 		deps.Log.Error("error-clear-failed", "group", group, "resource_id", resourceID, "error", err.Error())
-		return
-	}
-	if !notify {
 		return
 	}
 	if err := deps.Notifier.Publish(ctx,

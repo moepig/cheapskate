@@ -382,7 +382,7 @@ func TestNotifyFailureAfterSuccessfulActionIsNotAnError(t *testing.T) {
 	require.Len(t, summary.Actions, 1, "action must still be recorded")
 	status := f.db.Item("status#rds-instance#dev-db")
 	require.NotNil(t, status)
-	assert.Nil(t, status["last_error"], "notify failure must not be written as last_error")
+	assert.Equal(t, "", status["last_error"].(*types.AttributeValueMemberS).Value, "notify failure must not be written as last_error")
 	assert.NotEmpty(t, status["notification_pending"], "失敗した通知は次回の再試行まで残す")
 }
 
@@ -407,6 +407,43 @@ func TestFailedActionNotificationIsRetriedWithSameOperationID(t *testing.T) {
 	require.NotNil(t, status)
 	assert.Equal(t, "", status["notification_pending"].(*types.AttributeValueMemberS).Value)
 	assert.Len(t, f.rds.Stopped, 1, "通知の再試行では停止操作を再実行しない")
+}
+
+// 未確認の通知がある間は次の AWS 操作を開始せず、同じ operation_id の通知を先に確認する。
+// 単一の notification_pending が後続操作の通知で上書きされないことを検証する。
+func TestPendingNotificationBlocksNextActionUntilAcknowledged(t *testing.T) {
+	f := newFixture(t)
+	f.pinnedStoppedGroup("dev-db", rdsInstance("dev-db"))
+	f.rds.Observations["dev-db"] = model.Observation{State: model.StateRunning}
+	f.notifier.Err = fmt.Errorf("sns down")
+
+	runEmpty(t, f)
+	status := f.db.Item("status#rds-instance#dev-db")
+	require.NotNil(t, status)
+	firstOperationID := status["notification_pending"].(*types.AttributeValueMemberS).Value
+	require.NotEmpty(t, firstOperationID)
+
+	f.seedGroup("dev-db", model.ModePinned, model.DesiredRunning)
+	f.rds.Observations["dev-db"] = model.Observation{State: model.StateStopped}
+	second := runEmpty(t, f)
+
+	assert.Empty(t, second.Errors)
+	assert.Empty(t, f.rds.Started, "未確認の通知がある間は次の操作を開始しない")
+	status = f.db.Item("status#rds-instance#dev-db")
+	assert.Equal(t, firstOperationID, status["notification_pending"].(*types.AttributeValueMemberS).Value)
+	require.Len(t, f.notifier.Published, 2)
+	assert.Equal(t, firstOperationID, f.notifier.Published[1].Payload["operation_id"])
+
+	f.notifier.Err = nil
+	third := runEmpty(t, f)
+
+	assert.Empty(t, third.Errors)
+	assert.Equal(t, []string{"dev-db"}, f.rds.Started)
+	require.Len(t, f.notifier.Published, 4)
+	assert.Equal(t, firstOperationID, f.notifier.Published[2].Payload["operation_id"])
+	assert.NotEqual(t, firstOperationID, f.notifier.Published[3].Payload["operation_id"])
+	status = f.db.Item("status#rds-instance#dev-db")
+	assert.Equal(t, "", status["notification_pending"].(*types.AttributeValueMemberS).Value)
 }
 
 // アクションの成功後における PutStatus の失敗は、そのサイクルのエラーとして記録し、他のリソースの reconcile を継続する
@@ -464,6 +501,7 @@ func TestPendingOperationRecoversWithoutRepeatingAWSAction(t *testing.T) {
 		}
 	}
 	assert.Equal(t, 1, actionNotifications)
+	assert.Len(t, f.notifier.Published, 2, "復旧した操作の通知とは別に recovered を送信しない")
 }
 
 // エラー記録用の PutStatus が失敗した場合も、Run は panic せず他のリソースの処理を継続しなければならない

@@ -16,12 +16,13 @@ import (
 )
 
 type DynaStore struct {
-	mu           sync.Mutex
-	items        map[string]map[string]types.AttributeValue
-	fail         map[string]error
-	failNth      map[string]delayedFailure
-	calls        map[string]int
-	scanPageSize int
+	mu                           sync.Mutex
+	items                        map[string]map[string]types.AttributeValue
+	fail                         map[string]error
+	failNth                      map[string]delayedFailure
+	calls                        map[string]int
+	scanPageSize                 int
+	unprocessedBatchGetResponses int
 }
 
 type delayedFailure struct {
@@ -82,6 +83,13 @@ func (f *DynaStore) SetScanPageSize(n int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.scanPageSize = n
+}
+
+// 続く n 回の BatchGetItem で、要求されたすべてのキーを UnprocessedKeys として返す。
+func (f *DynaStore) SetBatchGetUnprocessedResponses(n int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.unprocessedBatchGetResponses = n
 }
 
 // (op, pk) に注入された失敗を取り出して返す
@@ -205,8 +213,19 @@ func (f *DynaStore) batchGetItem(_ context.Context, in *dynamodb.BatchGetItemInp
 	if err := f.takeFailure("batch-get", ""); err != nil {
 		return nil, err
 	}
-	out := &dynamodb.BatchGetItemOutput{Responses: map[string][]map[string]types.AttributeValue{}}
+	out := &dynamodb.BatchGetItemOutput{
+		Responses:       map[string][]map[string]types.AttributeValue{},
+		UnprocessedKeys: map[string]types.KeysAndAttributes{},
+	}
+	unprocessed := f.unprocessedBatchGetResponses > 0
+	if unprocessed {
+		f.unprocessedBatchGetResponses--
+	}
 	for table, request := range in.RequestItems {
+		if unprocessed {
+			out.UnprocessedKeys[table] = request
+			continue
+		}
 		for _, key := range request.Keys {
 			if item := f.items[keyID(key)]; item != nil {
 				out.Responses[table] = append(out.Responses[table], item)
@@ -233,6 +252,9 @@ func (f *DynaStore) putItem(_ context.Context, in *dynamodb.PutItemInput, _ ...f
 	normalizeLegacyKey(in.Item)
 	if err := f.takeFailure("put", failureKey(in.Item)); err != nil {
 		return nil, err
+	}
+	if !putConditionMatches(f.items[keyID(in.Item)], in) {
+		return nil, &types.ConditionalCheckFailedException{}
 	}
 	f.items[keyID(in.Item)] = in.Item
 	return &dynamodb.PutItemOutput{}, nil
@@ -313,6 +335,8 @@ func updateConditionMatches(item map[string]types.AttributeValue, in *dynamodb.U
 		return true
 	}
 	switch *in.ConditionExpression {
+	case "attribute_exists(#pk)":
+		return item != nil && item[in.ExpressionAttributeNames["#pk"]] != nil
 	case "attribute_not_exists(#pk) OR #expires_at < :now":
 		if item == nil || item[in.ExpressionAttributeNames["#pk"]] == nil {
 			return true
@@ -320,9 +344,13 @@ func updateConditionMatches(item map[string]types.AttributeValue, in *dynamodb.U
 		actual, aok := numberValue(item[in.ExpressionAttributeNames["#expires_at"]])
 		expected, eok := numberValue(in.ExpressionAttributeValues[":now"])
 		return aok && eok && actual < expected
-	case "attribute_not_exists(#pending_operation_id) OR #pending_operation_id = :empty":
-		attr := in.ExpressionAttributeNames["#pending_operation_id"]
-		return item == nil || item[attr] == nil || equalAttributeValue(item[attr], in.ExpressionAttributeValues[":empty"])
+	case "(attribute_not_exists(#pending_operation_id) OR #pending_operation_id = :empty) AND (attribute_not_exists(#notification_pending) OR #notification_pending = :empty)":
+		return attributeMissingOrEqual(item, in.ExpressionAttributeNames["#pending_operation_id"], in.ExpressionAttributeValues[":empty"]) &&
+			attributeMissingOrEqual(item, in.ExpressionAttributeNames["#notification_pending"], in.ExpressionAttributeValues[":empty"])
+	case "#pending_operation_id = :operation_id AND (attribute_not_exists(#notification_pending) OR #notification_pending = :empty)":
+		return item != nil &&
+			equalAttributeValue(item[in.ExpressionAttributeNames["#pending_operation_id"]], in.ExpressionAttributeValues[":operation_id"]) &&
+			attributeMissingOrEqual(item, in.ExpressionAttributeNames["#notification_pending"], in.ExpressionAttributeValues[":empty"])
 	case "#pending_operation_id = :operation_id":
 		return item != nil && equalAttributeValue(item[in.ExpressionAttributeNames["#pending_operation_id"]], in.ExpressionAttributeValues[":operation_id"])
 	case "#notification_pending = :operation_id":
@@ -330,6 +358,20 @@ func updateConditionMatches(item map[string]types.AttributeValue, in *dynamodb.U
 	default:
 		panic(fmt.Sprintf("dynastore: unsupported update condition %q", *in.ConditionExpression))
 	}
+}
+
+func putConditionMatches(item map[string]types.AttributeValue, in *dynamodb.PutItemInput) bool {
+	if in.ConditionExpression == nil {
+		return true
+	}
+	if *in.ConditionExpression != "attribute_not_exists(#pk)" {
+		panic(fmt.Sprintf("dynastore: unsupported put condition %q", *in.ConditionExpression))
+	}
+	return item == nil || item[in.ExpressionAttributeNames["#pk"]] == nil
+}
+
+func attributeMissingOrEqual(item map[string]types.AttributeValue, name string, expected types.AttributeValue) bool {
+	return item == nil || item[name] == nil || equalAttributeValue(item[name], expected)
 }
 
 func deleteConditionMatches(item map[string]types.AttributeValue, in *dynamodb.DeleteItemInput) bool {

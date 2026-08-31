@@ -45,6 +45,7 @@ Usage — AWS アカウントへのホスティング:
 
 Development — cheapskate 自体の開発:
 
+- [development/reconcile.md](development/reconcile.md) — AWS 操作、Status、アクション通知の永続化境界
 - [development/build.md](development/build.md) — バイナリとコンテナイメージ(reconciler / webconsole)のビルド
 - [development/test.md](development/test.md) — ユニット/統合テストと lint
 - [development/mock.md](development/mock.md) — モックの生成方法と使い分け

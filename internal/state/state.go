@@ -13,6 +13,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 
+	"cheapskate/internal/backoff"
 	"cheapskate/internal/core/model"
 )
 
@@ -29,11 +30,18 @@ type API interface {
 }
 
 type Store struct {
-	db    API
-	table string
+	db              API
+	table           string
+	batchGetBackoff backoff.Exponential
 }
 
-func New(db API, table string) *Store { return &Store{db: db, table: table} }
+func New(db API, table string) *Store {
+	return &Store{
+		db:              db,
+		table:           table,
+		batchGetBackoff: backoff.NewExponential(25*time.Millisecond, time.Second),
+	}
+}
 
 type GroupRow struct {
 	Name     string
@@ -245,16 +253,41 @@ func (s *Store) GetGroup(ctx context.Context, name string) (*model.GroupSpec, er
 	return &spec, nil
 }
 
-// PutGroupはグループ設定の全属性をUpdateItemで置き換える。
-// 本番の設定操作はUpdateGroupで必要な属性だけを変更する。
+var (
+	ErrGroupAlreadyExists = errors.New("group already exists")
+	ErrGroupNotFound      = errors.New("group not found")
+)
+
+// グループ設定の全属性を無条件で置き換える。
+// 既存データの投入とテスト用であり、設定操作は CreateGroup または UpdateGroup を用いる。
 func (s *Store) PutGroup(ctx context.Context, spec model.GroupSpec) error {
-	return s.UpdateGroup(ctx, spec.Name, GroupPatch{
-		Mode: Set(spec.Mode), Desired: Set(spec.Desired), StartCron: Set(spec.StartCron), StopCron: Set(spec.StopCron),
-		Timezone: Set(spec.Timezone), TagKey: Set(spec.TagKey), TagValue: Set(spec.TagValue), Types: Set(spec.Types),
-	})
+	return s.putGroup(ctx, spec, false)
 }
 
-// UpdateGroupは指定されたグループ設定属性だけを原子的に変更する。
+// グループが存在しない場合だけ、設定の全属性を作成する。
+func (s *Store) CreateGroup(ctx context.Context, spec model.GroupSpec) error {
+	return s.putGroup(ctx, spec, true)
+}
+
+func (s *Store) putGroup(ctx context.Context, spec model.GroupSpec, createOnly bool) error {
+	item, err := attributevalue.MarshalMap(newGroupItem(spec))
+	if err != nil {
+		return fmt.Errorf("marshal group %s: %w", spec.Name, err)
+	}
+	in := &dynamodb.PutItemInput{TableName: &s.table, Item: item}
+	if createOnly {
+		in.ConditionExpression = aws.String("attribute_not_exists(#pk)")
+		in.ExpressionAttributeNames = map[string]string{"#pk": "pk"}
+	}
+	_, err = s.db.PutItem(ctx, in)
+	if createOnly && isConditionalCheckFailed(err) {
+		return fmt.Errorf("%w: %s", ErrGroupAlreadyExists, spec.Name)
+	}
+	return err
+}
+
+// 既存グループの指定された設定属性だけを原子的に変更する。
+// 対象が存在しない場合は ErrGroupNotFound を返す。
 func (s *Store) UpdateGroup(ctx context.Context, name string, patch GroupPatch) error {
 	type attr struct {
 		name  string
@@ -287,7 +320,7 @@ func (s *Store) UpdateGroup(ctx context.Context, name string, patch GroupPatch) 
 	if len(attrs) == 0 {
 		return nil
 	}
-	names := map[string]string{}
+	names := map[string]string{"#pk": "pk"}
 	values := map[string]types.AttributeValue{}
 	var sets, removes []string
 	for i, attr := range attrs {
@@ -310,8 +343,11 @@ func (s *Store) UpdateGroup(ctx context.Context, name string, patch GroupPatch) 
 	}
 	_, err := s.db.UpdateItem(ctx, &dynamodb.UpdateItemInput{
 		TableName: &s.table, Key: marshalKey(groupKey(name)), UpdateExpression: aws.String(strings.Join(expressions, " ")),
-		ExpressionAttributeNames: names, ExpressionAttributeValues: values,
+		ConditionExpression: aws.String("attribute_exists(#pk)"), ExpressionAttributeNames: names, ExpressionAttributeValues: values,
 	})
+	if isConditionalCheckFailed(err) {
+		return fmt.Errorf("%w: %s", ErrGroupNotFound, name)
+	}
 	return err
 }
 
@@ -515,6 +551,8 @@ func (s *Store) get(ctx context.Context, key itemKey) (map[string]types.Attribut
 	return out.Item, nil
 }
 
+const batchGetMaxAttempts = 8
+
 func (s *Store) batchGet(ctx context.Context, keys []itemKey) ([]map[string]types.AttributeValue, error) {
 	if len(keys) == 0 {
 		return nil, nil
@@ -524,7 +562,7 @@ func (s *Store) batchGet(ctx context.Context, keys []itemKey) ([]map[string]type
 		request.Keys = append(request.Keys, marshalKey(key))
 	}
 	var raws []map[string]types.AttributeValue
-	for attempt := 0; attempt < 8; attempt++ {
+	for attempt := 0; attempt < batchGetMaxAttempts; attempt++ {
 		out, err := s.db.BatchGetItem(ctx, &dynamodb.BatchGetItemInput{RequestItems: map[string]types.KeysAndAttributes{s.table: request}})
 		if err != nil {
 			return nil, err
@@ -534,9 +572,15 @@ func (s *Store) batchGet(ctx context.Context, keys []itemKey) ([]map[string]type
 		if !ok || len(unprocessed.Keys) == 0 {
 			return raws, nil
 		}
+		if attempt == batchGetMaxAttempts-1 {
+			break
+		}
 		request = unprocessed
+		if err := s.batchGetBackoff.Wait(ctx, attempt); err != nil {
+			return nil, fmt.Errorf("wait to retry batch get: %w", err)
+		}
 	}
-	return nil, fmt.Errorf("batch get left unprocessed keys after 8 attempts")
+	return nil, fmt.Errorf("batch get left unprocessed keys after %d attempts", batchGetMaxAttempts)
 }
 
 func marshalKey(key itemKey) map[string]types.AttributeValue {

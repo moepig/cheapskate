@@ -79,7 +79,7 @@ state を保持する DynamoDB テーブル 1 つのキー配置とアイテム�
 | `pending_started_at` | S | 未完了操作の開始時刻(RFC3339) |
 | `notification_pending` | S | 通知の再送待ちにある操作 ID |
 
-Status は履歴ではなく最新値 1 件だけを保持する。AWS 操作の前に pending 属性を条件付きで保存し、操作後は同じ操作 ID を条件に last 属性と通知待ちへ進める。途中で Lambda が終了した場合、次回は AWS の観測結果から完了を確定し、同じ操作を再実行しない。通知は `operation_id` を含み、Publish 成功後に通知待ちを解除するため、解除前に終了した場合は同じ ID で再送される。
+Status は履歴ではなく最新値 1 件だけを保持する。AWS 操作の前に pending 属性を条件付きで保存し、操作後は同じ操作 ID を条件に last 属性と通知待ちへ進める。途中で Lambda が終了した場合、次回は AWS の観測結果から完了を確定し、同じ操作を再実行しない。通知は `operation_id` を含み、Publish 成功後に通知待ちを解除するため、解除前に終了した場合は同じ ID で再送される。通知待ちを 1 件だけ保持する理由は、[Reconcile の永続化境界](../development/reconcile.md)に示す。
 
 `<種別>#<ref>` は `model.Resource.ID()` が生成する識別子であり、`internal/aws/tagging` が ARN から導出する。種別ごとの `ref` の形式を、以下に示す。
 

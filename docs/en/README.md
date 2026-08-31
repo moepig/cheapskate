@@ -45,6 +45,7 @@ Usage — hosting in an AWS account:
 
 Development — working on cheapskate itself:
 
+- [development/reconcile.md](development/reconcile.md) — persistence boundaries between AWS actions, status, and action notifications
 - [development/build.md](development/build.md) — building the binaries and the container images (reconciler / webconsole)
 - [development/test.md](development/test.md) — unit and integration tests, and lint
 - [development/mock.md](development/mock.md) — how mocks are generated and when each form is used
