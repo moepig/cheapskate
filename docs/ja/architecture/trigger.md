@@ -12,7 +12,9 @@ reconciler を起動する経路は 3 つである。それぞれのトリガ方
 
 ## 多重実行の排除
 
-reconciler を実行する Lambda 関数の reserved concurrency は 1 とする必要がある。これは、各呼び出し経路における同時実行を防ぐためである。
+reconciler は DynamoDB の `LOCK` / `RECONCILE` にグローバルリースを取得し、各呼び出し経路をまたぐ多重実行を防ぐ。リースを取得できない呼び出しは、設定や AWS リソースを読み書きせず成功として終了する。
+
+Lambda の reserved concurrency も 1 を推奨する。排他性はリースが担保するが、予約同時実行数によってリース取得前後の不要な呼び出しと課金を抑えられる。
 
 ## RDS 自動起動イベント
 
@@ -42,7 +44,7 @@ RDS インスタンス・Aurora クラスターの最長停止期間は 7 日間
 
 | 種別 | 件名の種別部分 | 本文の属性 | 発行の契機 |
 |---|---|---|---|
-| アクション | `start`, `stop` | `group`, `resource_id`, `action`, `desired`, `at` | リソースの start/stop を実行したとき |
+| アクション | `start`, `stop` | `group`, `resource_id`, `operation_id`, `action`, `desired`, `at` | リソースの start/stop を実行したとき |
 | 失敗 | `error` | `group`, `resource_id`, `error`, `at` | リソース単位・グループ単位の失敗を記録したとき |
 | 復旧 | `recovered` | `group`, `resource_id`, `at` | 記録済みの `last_error` が解消したとき |
 
@@ -62,4 +64,4 @@ SNS の Subject 制約(ASCII、100 文字)に合わせ、件名の非 ASCII 文�
 
 ### 通知の失敗
 
-アクション成功後の Publish 失敗はログ記録のみとし、アクションをエラー扱いにしない。
+アクション成功後の Publish 失敗はアクションをエラー扱いにせず、Status の `notification_pending` とログに残す。次のサイクルで同じ `operation_id` を使って再送する。Publish 成功後の確認記録に失敗した場合も同じ通知を再送しうるため、受信側は `operation_id` を重複判定に利用できる。

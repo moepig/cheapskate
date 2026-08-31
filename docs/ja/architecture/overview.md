@@ -98,6 +98,8 @@ for resource in resources:
 
 ECS では、起動時の desiredCount と Auto Scaling の min/max をリソース自身のタグから読む。停止時に元の値を保存して復元する形式ではない。Auto Scaling のターゲットの有無は `DescribeScalableTargets` で判定する。
 
+ECS サービスの実状態は `DescribeServices` の台数から決める。`desiredCount`、`runningCount`、`pendingCount` がすべて 0 なら stopped、`desiredCount > 0` かつ `runningCount == desiredCount` かつ `pendingCount == 0` なら running、それ以外は transitioning とする。desiredCount だけでは、タスクの起動・停止が完了する前に収束済みと誤判定するためである。
+
 ECS の停止は 2 段階であり、原子的ではない。min/max を 0/0 にしたあとで `UpdateService` が失敗した場合は、元の min/max へ巻き戻す。巻き戻さない場合、サービスが起動したままスケールアウト不能な状態で残るためである。
 
 ## state テーブルの診断

@@ -10,7 +10,7 @@ The implementation lives in `internal/aws/cloudwatch`; `internal/app` knows noth
 
 ## The metrics emitted
 
-The namespace is `METRICS_NAMESPACE` (default `cheapskate`), there are no dimensions, and every unit is Count. The metrics emitted are given below.
+Custom metrics are disabled by default and are emitted only when `METRICS_ENABLED=true` is explicit. The namespace is `METRICS_NAMESPACE` (default `cheapskate`), there are no dimensions, and every unit is Count. The metrics emitted are given below.
 
 | Metric | Meaning | When emitted |
 | --- | --- | --- |
@@ -37,14 +37,14 @@ What the built-in metrics and the EMF metrics each capture is collected below.
 
 | Metric | What it captures |
 | --- | --- |
-| `Errors` (built-in) | Trouble with the cycle as a whole, and any cycle with one or more per-resource failures |
+| `Errors` (built-in) | Cycle-wide failures such as malformed input, an initial read failure, timeout, or panic |
 | `Duration` (built-in) | How long one cycle takes |
 | `Throttles` (built-in) | Invocations backing up against the reserved concurrency of 1 |
-| `ReconcileErrors` | The number of failures; `Errors` only distinguishes 0 from 1 |
+| `ReconcileErrors` | The number of per-resource and per-group failures. Emitted only when enabled |
 | `ReconcileActions` | Starts and stops happening. Permanently 0 means the configuration is not taking effect |
 | `ReconciledResources` | How the number of managed resources moves over time |
 
-`Errors` captures per-resource failures because a non-zero failure count makes the handler return an error (see the reconcile loop rules in [overview.md](overview.md)).
+The handler returns success even when individual resources or groups fail, preventing EventBridge from retrying the entire cycle. Status, SNS, logs, and the enabled `ReconcileErrors` metric expose those failures.
 
 ## Kinds of failure and where they show up
 
@@ -52,21 +52,22 @@ Which observation paths each kind of failure reaches are collected below.
 
 | Failure | `Errors` | `ReconcileErrors` | `ReconcileAborted` | SNS | `status#` | Log |
 | --- | :---: | :---: | :---: | :-: | :---: | :--: |
-| A failed Stop/Start or Describe | ✓ | ✓ | 0 | ✓ | ✓ | ✓ |
-| An invalid cron or timezone, a discovery failure | ✓ | ✓ | 0 | ✓ | ✓ | ✓ |
-| A selector collision | ✓ | ✓ | 0 | ✓ | ✓ | ✓ |
-| A malformed payload, a failed `Scan` | ✓ | — | 1 | — | — | ✓ |
+| A failed Stop/Start or Describe | — | ✓ | 0 | ✓ | ✓ | ✓ |
+| An invalid cron or timezone, a discovery failure | — | ✓ | 0 | ✓ | ✓ | ✓ |
+| A selector collision | — | ✓ | 0 | ✓ | ✓ | ✓ |
+| A malformed payload, a failed initial Query or BatchGetItem | ✓ | — | 1 | — | — | ✓ |
 | A Lambda timeout or panic | ✓ | — | — | — | — | partial |
-| A failed SNS Publish, a failed `status#` write | — | — | 0 | — | — | ✓ |
+| A failed SNS Publish | — | — | 0 | awaiting retry | ✓ | ✓ |
+| A failed pending/completion status write | — | ✓ | 0 | depends | depends | ✓ |
 | A resource stuck mid-transition | — | — | 0 | — | ✓ (`transitioning_since`) | ✓ |
 
-Failures of the recording path and transitions that never end are deliberately absent everywhere, because in neither case did the operation itself fail. The log catches the former ([logging.md](logging.md)) and the diagnosis catches the latter ([overview.md](overview.md)).
+When an action notification fails, `notification_pending` remains and the next cycle sends it again with the same `operation_id`. If recording pending fails, no AWS action runs. If completion recording fails after the AWS action, pending remains and the next cycle confirms completion from the AWS observation instead of sending the same action again. Diagnosis catches transitions that never end ([overview.md](overview.md)).
 
 ## Disabling
 
-`METRICS_ENABLED=false` stops the EMF lines from being written at all.
+`METRICS_ENABLED` defaults to `false`, which writes no EMF lines. Set it to `true` only in environments that need the metrics.
 
-Enablement (`METRICS_ENABLED`) and the namespace (`METRICS_NAMESPACE`) are separate variables. Merging them would require a convention along the lines of "unset means enabled in the default namespace, empty string means disabled", making this the one variable where unset and empty differ in meaning.
+Enablement (`METRICS_ENABLED`) and the namespace (`METRICS_NAMESPACE`) are separate variables. This avoids overloading an empty namespace with enablement semantics and leaves the billed emission as an explicit opt-in.
 
 A value of `METRICS_ENABLED` that cannot be interpreted fails startup rather than falling back to the default. Reading a typo as enabled would keep charges running after they were supposedly turned off, leaving the bill as the only way to notice. While disabled, one `metrics-disabled` log line is written per cold start.
 
@@ -76,12 +77,12 @@ Disabling loses the counts and the trends, nothing else. What remains and what i
 
 | Kept while disabled | Lost while disabled |
 | --- | --- |
-| The built-in `Errors` / `Duration` / `Throttles` | `ReconcileErrors` (the number of failures) |
+| The built-in `Errors` / `Duration` / `Throttles` | `ReconcileErrors` (per-resource and per-group failure count) |
 | SNS notifications (actions, failures, recoveries) | `ReconcileActions` (actions happening) |
 | `last_error` on `status#` | `ReconciledResources` (the trend in managed resources) |
 | The log | `ReconcileAborted` (detecting that invocation stopped) |
 
-Because per-resource failures ride on the built-in `Errors`, failures can still be noticed with metrics disabled.
+With custom metrics disabled, per-resource and per-group failures do not appear in the built-in `Errors` metric. Proactive detection requires SNS, status/log monitoring, or enabling the custom metrics.
 
 ## Cost
 

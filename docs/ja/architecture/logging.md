@@ -79,20 +79,26 @@ reconciler が出力するイベントを、以下に示す。
 | `msg`                        | level | 属性                                        | 意味                                                |
 | ---------------------------- | ----- | ------------------------------------------- | --------------------------------------------------- |
 | `event-received`             | INFO  | `source`, `reason`                          | EventBridge のイベント経由の起動ログ                |
+| `skip-lease-held`            | INFO  | —                                           | 別の呼び出しが reconcile リースを保持しているため正常終了した |
+| `lease-release-failed`       | ERROR | `owner`, `error`                            | 所有していた reconcile リースの解除に失敗した       |
 | `orphaned-group-data`        | WARN  | `group`                                     | グループにおける DynamoDB 上のデータ不整合          |
-| `action`                     | INFO  | `group`, `resource_id`, `action`, `desired` | リソースの start/stop を実行した                    |
+| `action`                     | INFO  | `group`, `resource_id`, `operation_id`, `action`, `desired` | リソースの start/stop を実行した     |
+| `action-recovered`           | INFO  | `group`, `resource_id`, `operation_id`, `action`, `desired` | 未完了記録を AWS の状態から完了させた |
+| `skip-pending-transition`    | INFO  | `resource_id`, `operation_id`, `detail`, `since` | 未完了操作の対象が遷移中のため見送った       |
+| `skip-pending-action`        | INFO  | `resource_id`, `operation_id`, `observed`, `age` | 未完了操作の反映待ちのため見送った            |
 | `skip-transitioning`         | INFO  | `resource_id`, `detail`, `since`            | 処理のスキップ (遷移中とみなし処理を見送った場合)   |
 | `skip-not-found`             | INFO  | `resource_id`                               | 処理のスキップ (リソースが存在しない)               |
 | `error`                      | ERROR | `group`, `resource_id`, `error`             | リソース単位・グループ単位の失敗                    |
 | `summary`                    | INFO  | `reconciled`, `actions`, `errors`           | 1 サイクルの実行結果サマリ                          |
 | `metrics`                    | INFO  | `_aws` + メトリクス名                       | EMF メトリクス([metrics.md](metrics.md))            |
-| `metrics-disabled`           | INFO  | `reason`                                    | メトリクスの有効/無効を示す                         |
-| `action-notify-failed`       | ERROR | `group`, `resource_id`, `error`             | アクション実行の通知の失敗                          |
+| `metrics-disabled`           | INFO  | `reason`                                    | カスタムメトリクスが無効であることを示す             |
+| `action-notify-failed`       | ERROR | `group`, `resource_id`, `operation_id`, `error` | アクション通知の失敗。Status に再送待ちが残る   |
+| `action-notify-ack-failed`   | ERROR | `group`, `resource_id`, `operation_id`, `error` | 通知済み記録の失敗。同じ通知を再送しうる        |
+| `pending-operation-abandon-failed` | ERROR | `resource_id`, `operation_id`, `error` | 失敗した AWS 操作の pending 解除にも失敗した |
 | `recovery-notify-failed`     | ERROR | `group`, `resource_id`, `error`             | 復旧(`recovered`)通知の失敗                         |
 | `error-notify-failed`        | ERROR | `group`, `resource_id`, `error`             | 失敗の通知の失敗                                    |
 | `error-clear-failed`         | ERROR | `group`, `resource_id`, `error`             | エラーから回復した場合の `last_error` クリアの失敗  |
 | `error-record-failed`        | ERROR | `group`, `resource_id`, `error`             | `last_error` への失敗の書き込みの失敗               |
-| `status-read-failed`         | ERROR | `group`, `resource_id`, `error`             | 通知の重複排除に使う前回 `status#` の読み取りの失敗 |
 | `transitioning-mark-failed`  | ERROR | `resource_id`, `error`                      | `transitioning_since` の書き込み失敗                |
 | `transitioning-clear-failed` | ERROR | `resource_id`, `error`                      | `transitioning_since` のクリア失敗                  |
 
@@ -105,14 +111,16 @@ reconciler が出力するイベントを、以下に示す。
 | `start`  | 停止しているリソースを起動した |
 | `stop`   | 稼働しているリソースを停止した |
 
-### ログのみに記録するエラー
+### `last_error` に記録しないエラー
 
-エラーの記録先は、ログ、`status#` の `last_error`、および SNS 通知の 3 つである。ただし次のエラーは、記録経路そのものの失敗を表すため、ログにのみ記録する。
+通常のリソースエラーは、ログ、Status の `last_error`、SNS 通知へ記録する。ただし次のエラーは、記録経路や補助状態の失敗を表すため `last_error` には記録しない。
 
 | イベント                                    | ログのみとする理由                                        |
 | ------------------------------------------- | --------------------------------------------------------- |
-| `*-notify-failed`                           | 通知に失敗しているため                                    |
-| `status-read-failed`, `error-record-failed` | DynamoDB にアクセスできず、記録できないことを記録できない |
+| `action-notify-failed`, `action-notify-ack-failed` | `notification_pending` で次サイクルへ引き継ぐため     |
+| `recovery-notify-failed`, `error-notify-failed` | 通知に失敗しているため                                  |
+| `error-record-failed`, `pending-operation-abandon-failed` | DynamoDB に記録できないことを同じ経路へ記録できない |
+| `lease-release-failed`                     | TTL で失効し、リソース操作の成否とは独立しているため       |
 | `transitioning-*-failed`                    | 監査のための情報であり、reconciler の失敗扱いとしない     |
 
 ## Web コンソール

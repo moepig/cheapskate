@@ -11,27 +11,24 @@ cheapskate は収束ループであり、失敗しても次のサイクルが同
 | 経路 | 得られる情報 |
 | --- | --- |
 | SNS 通知 | アクションの実行・失敗・復旧。同一エラーの継続中は再通知されない |
-| Lambda `Errors` メトリクス | サイクル全体の異常(payload 不正、`Scan` 失敗、タイムアウト、panic)と、リソース単位の失敗が 1 件以上あったサイクル |
-| `ReconcileErrors` / `ReconcileActions` / `ReconciledResources` / `ReconcileAborted` メトリクス | 件数の推移 |
+| Lambda `Errors` メトリクス | サイクル全体の異常(payload 不正、初期 Query / BatchGetItem 失敗、タイムアウト、panic) |
+| `ReconcileErrors` / `ReconcileActions` / `ReconciledResources` / `ReconcileAborted` メトリクス | 明示的に有効化した場合の件数の推移 |
 | `status#` の `last_error` | リソースごとの直近エラー。`cheapskate-cli list` / `show`、Web コンソールで参照する |
 | `cheapskate-cli doctor` | state テーブルの不整合と残存レコード |
 | CloudWatch Logs | 上記のいずれにも現れない失敗 |
 
-`Errors` へのアラーム 1 本で、サイクル全体の異常とリソース単位の失敗の双方を捕捉できる。ただし `Errors` は失敗件数を区別しないため、件数の推移の観測には `ReconcileErrors` を用いる。
-
-> [!NOTE]
-> `Errors` が立つと、EventBridge の非同期リトライにより同一のフル reconcile が最大 2 回追加で実行される。収束済みのリソースにはアクションが発生せず、継続中のエラーは通知の重複排除に該当するため、リトライによって通知が増えることはない。
+`Errors` はサイクル全体の中断だけを捕捉する。リソース単位・グループ単位の失敗があっても Lambda は成功を返すため、EventBridge によるフル reconcile の再実行は発生しない。これらの失敗は SNS、Status／ログの監視、または明示的に有効化した `ReconcileErrors` で検知する。
 
 > [!WARNING]
-> SNS トピックを設定していない場合、通知は no-op となる。この状態で `Errors` アラームも設定していない場合、全リソースが失敗し続けても検知経路が存在しない。トピックとアラームのいずれか一方は必ず設定すること。
+> SNS トピック、Status／ログの監視、有効化した `ReconcileErrors` アラームのいずれも無い場合、全リソースが失敗し続けても能動的な検知経路が存在しない。少なくとも 1 つを用意すること。
 
 ### メトリクスにも通知にも現れない失敗
 
-記録系の失敗(SNS Publish や `status#` 書き込みの失敗)と、終わらない遷移は、いずれも操作自体が成功しているため、メトリクスにも通知にも現れない。前者はログ、後者は `doctor` によって捕捉する。
+SNS Publish の失敗はログと Status の `notification_pending` に残り、次のサイクルで同じ `operation_id` により再送される。終わらない遷移はメトリクスにも通知にも現れないため、`doctor` で捕捉する。
 
 ### アラームの設定
 
-最小構成は次の 1 本である。サイクル全体の異常とリソース単位の失敗の双方を捕捉する。
+次のアラームは、サイクル全体の異常を捕捉する。
 
 ```console
 aws cloudwatch put-metric-alarm --alarm-name cheapskate-reconciler-errors \
@@ -41,9 +38,9 @@ aws cloudwatch put-metric-alarm --alarm-name cheapskate-reconciler-errors \
   --treat-missing-data notBreaching --alarm-actions <SNS トピック ARN>
 ```
 
-`evaluation-periods` を 2 としているのは、一過性の失敗が次サイクルで自動的に収束するためである。1 サイクルで発報させると、介入を要さない事象まで通知対象となる。
+`evaluation-periods` を 2 としているのは、一過性の基盤障害を即時に発報しないためである。1 サイクルで発報させると、介入を要しない事象まで通知対象となる。
 
-件数の増加を別途観測する場合の設定は次のとおりである。
+リソース単位・グループ単位の失敗件数を観測する場合は `METRICS_ENABLED=true` を設定し、次のアラームを追加する。
 
 ```console
 aws cloudwatch put-metric-alarm --alarm-name cheapskate-reconcile-errors \
@@ -63,9 +60,11 @@ aws cloudwatch put-metric-alarm --alarm-name cheapskate-reconcile-errors \
 | 事象 | 自動解消の可否 | 必要な対応 |
 | --- | --- | --- |
 | Lambda がタイムアウトしてグループの途中で終了した | 解消する。次サイクルが最初からやり直す | 毎回発生する場合はメモリ/タイムアウトを引き上げる |
-| `Scan` に失敗してサイクルが立ち上がらなかった | 解消する。リトライと次サイクルがある | なし |
+| 初期 Query / BatchGetItem に失敗してサイクルが立ち上がらなかった | 解消する。EventBridge の再試行と次サイクルがある | なし |
 | Stop/Start が失敗した | 解消する。次サイクルが再試行する | 権限不足など恒久的な原因の場合は `last_error` を確認して解消する |
-| アクションは成功したが `status#` の書き込みに失敗した | 解消する。ただし 1〜2 サイクルの間、成功したアクションに対して誤ったエラーが記録され、そのあと復旧が通知される | なし(通知のノイズとして許容する) |
+| pending の保存に失敗した | AWS 操作を実行しないため、次サイクルで再試行する | DynamoDB 障害が続く場合だけ原因を解消する |
+| アクションは成功したが完了 Status の書き込みに失敗した | pending を残す。次サイクルが AWS の状態から完了を確定し、同じアクションを再送しない | なし |
+| アクション通知の送信または確認記録に失敗した | `notification_pending` を残し、同じ `operation_id` で再送する | 重複通知は `operation_id` で判別する |
 | ECS の停止が desiredCount 更新の手前で失敗した | 解消する。スケーラブルターゲットは元の min/max へ自動で巻き戻る | なし。巻き戻しにも失敗した場合のみ [ECS サービスに固有の事項](#ecs-サービスに固有の事項) |
 | リソースが遷移中のまま停止した | 解消しない。毎サイクル skip され続ける | [遷移中のまま停止したリソース](#遷移中のまま停止したリソース) |
 | グループを削除したが `override#` / `status#` が残った | 解消しない | `doctor --prune` |
@@ -113,11 +112,11 @@ $ cheapskate-cli doctor | jq '{blocked, counts}'
 > [!IMPORTANT]
 > `blocked` が空でないときの `orphan-status` 0 件は、孤立レコードが存在しないことではなく、判定を行っていないことを意味する。原因を解消したうえで再実行すること。
 
-各項目の `pk` に生の DynamoDB キーが入っているため、`--prune` を使わず手動で削除することもできる。
+各項目の `pk` と `sk` に生の DynamoDB キーが入っているため、`--prune` を使わず手動で削除することもできる。
 
 ```console
 aws dynamodb delete-item --table-name <state-テーブル名> \
-  --key "$(cheapskate-cli doctor | jq -c '{pk: {S: .findings[0].pk}}')"
+  --key "$(cheapskate-cli doctor | jq -c '{pk: {S: .findings[0].pk}, sk: {S: .findings[0].sk}}')"
 ```
 
 ## 緊急時の手順

@@ -12,7 +12,9 @@ Three paths start the reconciler. The trigger and payload of each are given belo
 
 ## Ruling out concurrent runs
 
-The Lambda function running the reconciler must have its reserved concurrency set to 1, so that the invocation paths cannot run concurrently.
+The reconciler acquires a global lease at DynamoDB key `LOCK` / `RECONCILE`, excluding concurrent runs across all invocation paths. An invocation that cannot acquire the lease returns success without reading configuration or AWS resources.
+
+Reserved concurrency of 1 is still recommended. The lease supplies correctness, while reserved concurrency avoids the invocation work and cost surrounding unnecessary lease attempts.
 
 ## RDS auto-start events
 
@@ -42,7 +44,7 @@ The kinds of notification, their bodies, and what prompts them are collected bel
 
 | Kind | Subject's kind part | Body attributes | Prompted by |
 |---|---|---|---|
-| Action | `start`, `stop` | `group`, `resource_id`, `action`, `desired`, `at` | Performing a start/stop on a resource |
+| Action | `start`, `stop` | `group`, `resource_id`, `operation_id`, `action`, `desired`, `at` | Performing a start/stop on a resource |
 | Failure | `error` | `group`, `resource_id`, `error`, `at` | Recording a per-resource or per-group failure |
 | Recovery | `recovered` | `group`, `resource_id`, `at` | A recorded `last_error` clearing |
 
@@ -62,4 +64,4 @@ To fit the SNS Subject constraints (ASCII, 100 characters), non-ASCII characters
 
 ### Notification failures
 
-A Publish that fails after a successful action is logged only; the action is not turned into an error.
+A Publish that fails after a successful action does not turn the action into an error; it remains in status as `notification_pending` and in the log. The next cycle retries it with the same `operation_id`. A failure to acknowledge a successful Publish can also resend the same notification, so receivers can use `operation_id` for deduplication.

@@ -11,27 +11,24 @@ The paths through which a failure is detected, and what each yields, are collect
 | Path | Information |
 | --- | --- |
 | SNS notifications | Actions performed, failures, and recoveries. The same error is not notified again while it persists |
-| The Lambda `Errors` metric | Trouble with the cycle as a whole (a malformed payload, a failed `Scan`, a timeout, a panic), and any cycle with one or more per-resource failures |
-| The `ReconcileErrors` / `ReconcileActions` / `ReconciledResources` / `ReconcileAborted` metrics | How the counts move over time |
+| The Lambda `Errors` metric | Trouble with the cycle as a whole (a malformed payload, a failed initial Query or BatchGetItem, a timeout, a panic) |
+| The `ReconcileErrors` / `ReconcileActions` / `ReconciledResources` / `ReconcileAborted` metrics | How the counts move when explicitly enabled |
 | `last_error` on `status#` | The last error per resource. Read through `cheapskate-cli list` / `show` or the web console |
 | `cheapskate-cli doctor` | Inconsistencies and leftover records in the state table |
 | CloudWatch Logs | The failures that appear in none of the above |
 
-A single alarm on `Errors` catches both trouble with the cycle as a whole and per-resource failures. `Errors` does not distinguish the number of failures, though, so use `ReconcileErrors` to watch the counts.
-
-> [!NOTE]
-> When `Errors` fires, EventBridge's asynchronous retries run the same full reconcile up to two more times. Converged resources produce no action, and a persisting error falls under notification deduplication, so the retries add no notifications.
+`Errors` catches only a cycle-wide abort. Lambda returns success despite per-resource or per-group failures, so EventBridge does not retry the full reconcile for them. Detect those failures through SNS, status/log monitoring, or the explicitly enabled `ReconcileErrors` metric.
 
 > [!WARNING]
-> With no SNS topic configured, notification is a no-op. If no `Errors` alarm is configured either, no detection path exists at all, even while every resource keeps failing. Configure at least one of the topic and the alarm.
+> With none of SNS, status/log monitoring, or an enabled `ReconcileErrors` alarm, no proactive detection path exists even while every resource keeps failing. Provide at least one.
 
 ### Failures that appear in neither the metrics nor the notifications
 
-Failures of the recording path (a failed SNS Publish or `status#` write) and transitions that never end appear in neither the metrics nor the notifications, since in both cases the operation itself succeeded. The log catches the former and `doctor` the latter.
+A failed SNS Publish remains in the log and as `notification_pending` in status; the next cycle retries it with the same `operation_id`. A transition that never ends appears in neither metrics nor notifications, so `doctor` catches it.
 
 ### Configuring alarms
 
-The minimum is the single alarm below. It catches both trouble with the cycle as a whole and per-resource failures.
+The following alarm catches cycle-wide failures.
 
 ```console
 aws cloudwatch put-metric-alarm --alarm-name cheapskate-reconciler-errors \
@@ -41,9 +38,9 @@ aws cloudwatch put-metric-alarm --alarm-name cheapskate-reconciler-errors \
   --treat-missing-data notBreaching --alarm-actions <SNS topic ARN>
 ```
 
-`evaluation-periods` is 2 because a transient failure converges by itself on the next cycle. Firing after a single cycle would put events needing no intervention into the notifications.
+`evaluation-periods` is 2 to avoid alerting immediately on a transient infrastructure failure. Firing after one cycle would include events needing no intervention.
 
-Watching the counts separately looks as follows.
+To watch per-resource and per-group failure counts, set `METRICS_ENABLED=true` and add the following alarm.
 
 ```console
 aws cloudwatch put-metric-alarm --alarm-name cheapskate-reconcile-errors \
@@ -63,9 +60,11 @@ The events left behind when processing ends partway, and what each calls for, ar
 | Event | Resolves on its own? | What is needed |
 | --- | --- | --- |
 | The Lambda timed out partway through a group | Yes. The next cycle starts over | If it happens every time, raise the memory and the timeout |
-| The `Scan` failed and the cycle never got going | Yes. There are retries and the next cycle | Nothing |
+| The initial Query or BatchGetItem failed and the cycle never got going | Yes. EventBridge retries it, and there is the next cycle | Nothing |
 | A Stop/Start failed | Yes. The next cycle retries | For a permanent cause such as a missing permission, read `last_error` and fix it |
-| The action succeeded but writing `status#` failed | Yes, though for a cycle or two a successful action carries a spurious error, and a recovery is notified afterwards | Nothing (accept it as notification noise) |
+| Recording pending failed | No AWS action ran, so the next cycle retries | Fix the DynamoDB failure only if it persists |
+| The action succeeded but writing completion status failed | Pending remains. The next cycle confirms completion from AWS state and does not send the action again | Nothing |
+| Sending or acknowledging an action notification failed | `notification_pending` remains and is resent with the same `operation_id` | Use `operation_id` to identify a duplicate notification |
 | Stopping ECS failed before the desiredCount update | Yes. The scalable target rolls back to its original min/max automatically | Nothing. Only if the rollback failed too, see [ECS-specific notes](#ecs-specific-notes) |
 | A resource is stuck mid-transition | No. It is skipped on every cycle | See [Resources stuck mid-transition](#resources-stuck-mid-transition) |
 | A group was deleted but `override#` / `status#` remain | No | `doctor --prune` |
@@ -113,11 +112,11 @@ $ cheapskate-cli doctor | jq '{blocked, counts}'
 > [!IMPORTANT]
 > Zero `orphan-status` findings while `blocked` is non-empty does not mean there are no orphaned records; it means no verdict was reached. Fix the cause and run it again.
 
-Since each finding carries the raw DynamoDB key in `pk`, deleting by hand without `--prune` is possible too.
+Since each finding carries the raw DynamoDB key in `pk` and `sk`, deleting by hand without `--prune` is possible too.
 
 ```console
 aws dynamodb delete-item --table-name <state-table-name> \
-  --key "$(cheapskate-cli doctor | jq -c '{pk: {S: .findings[0].pk}}')"
+  --key "$(cheapskate-cli doctor | jq -c '{pk: {S: .findings[0].pk}, sk: {S: .findings[0].sk}}')"
 ```
 
 ## Emergency procedures

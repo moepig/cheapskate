@@ -10,7 +10,7 @@ reconciler は `PutMetricData` を呼ばない。EMF(CloudWatch Embedded Metric 
 
 ## 発行するメトリクス
 
-名前空間は `METRICS_NAMESPACE`(既定 `cheapskate`)、次元は持たず、単位はすべて Count である。発行するメトリクスを、以下に示す。
+カスタムメトリクスは既定で無効であり、`METRICS_ENABLED=true` を明示した場合だけ発行する。名前空間は `METRICS_NAMESPACE`(既定 `cheapskate`)、次元は持たず、単位はすべて Count である。発行するメトリクスを、以下に示す。
 
 | メトリクス | 意味 | 発行タイミング |
 | --- | --- | --- |
@@ -37,14 +37,14 @@ Lambda がタイムアウトまたは panic した場合は、プロセスが落
 
 | メトリクス | 何を捉えるか |
 | --- | --- |
-| `Errors`(組み込み) | サイクル全体の異常と、リソース単位の失敗が 1 件以上あったサイクル |
+| `Errors`(組み込み) | payload 不正、初期読取失敗、タイムアウト、panic などサイクル全体の異常 |
 | `Duration`(組み込み) | 1 サイクルの所要時間 |
 | `Throttles`(組み込み) | 予約同時実行数 1 に対する呼び出しの詰まり |
-| `ReconcileErrors` | 失敗の件数。`Errors` は 0/1 しか区別しない |
+| `ReconcileErrors` | リソース単位・グループ単位の失敗件数。有効化した場合だけ発行する |
 | `ReconcileActions` | start/stop の発生。恒常的に 0 なら設定が効いていない |
 | `ReconciledResources` | 管理下のリソース数の推移 |
 
-`Errors` がリソース単位の失敗も捉えるのは、失敗件数が非零ならハンドラがエラーを返すためである([overview.md](overview.md) の reconcile ループの規則)。
+リソース単位・グループ単位の失敗があってもハンドラは成功を返し、EventBridge にサイクル全体を再実行させない。これらの失敗は Status、SNS、ログ、および有効化した `ReconcileErrors` で観測する。
 
 ## 失敗の種類と観測箇所
 
@@ -52,21 +52,22 @@ Lambda がタイムアウトまたは panic した場合は、プロセスが落
 
 | 失敗 | `Errors` | `ReconcileErrors` | `ReconcileAborted` | SNS | `status#` | ログ |
 | --- | :---: | :---: | :---: | :-: | :---: | :--: |
-| Stop/Start の失敗、Describe の失敗 | ✓ | ✓ | 0 | ✓ | ✓ | ✓ |
-| 不正な cron / timezone、検出の失敗 | ✓ | ✓ | 0 | ✓ | ✓ | ✓ |
-| セレクタの重複 | ✓ | ✓ | 0 | ✓ | ✓ | ✓ |
-| payload 不正、`Scan` の失敗 | ✓ | — | 1 | — | — | ✓ |
+| Stop/Start の失敗、Describe の失敗 | — | ✓ | 0 | ✓ | ✓ | ✓ |
+| 不正な cron / timezone、検出の失敗 | — | ✓ | 0 | ✓ | ✓ | ✓ |
+| セレクタの重複 | — | ✓ | 0 | ✓ | ✓ | ✓ |
+| payload 不正、初期 Query / BatchGetItem の失敗 | ✓ | — | 1 | — | — | ✓ |
 | Lambda のタイムアウト / panic | ✓ | — | — | — | — | 部分 |
-| SNS Publish の失敗、`status#` 書き込みの失敗 | — | — | 0 | — | — | ✓ |
+| SNS Publish の失敗 | — | — | 0 | 再試行待ち | ✓ | ✓ |
+| pending / 完了 Status の書き込み失敗 | — | ✓ | 0 | 条件による | 条件による | ✓ |
 | 遷移中のまま止まったリソース | — | — | 0 | — | ✓(`transitioning_since`) | ✓ |
 
-記録系の失敗と、終わらない遷移をどこにも現れない扱いにしているのは、どちらも操作自体は失敗していないためである。前者はログ([logging.md](logging.md))、後者は診断([overview.md](overview.md))が捉える。
+アクション通知の失敗は `notification_pending` を残し、次のサイクルで同じ `operation_id` を再送する。Status への pending 記録が失敗した場合は AWS 操作を実行しない。AWS 操作後の完了記録が失敗した場合は pending を残し、次のサイクルが AWS の観測状態から完了を確定するため、同じ操作を再送しない。終わらない遷移は診断([overview.md](overview.md))が捉える。
 
 ## 無効化
 
-`METRICS_ENABLED=false` で EMF 行そのものを出力しなくなる。
+`METRICS_ENABLED` の既定値は `false` であり、EMF 行そのものを出力しない。必要な環境だけ `true` を設定する。
 
-有効・無効(`METRICS_ENABLED`)と名前空間(`METRICS_NAMESPACE`)は別の変数とする。1 つにまとめると「未設定なら既定の名前空間で有効、空文字列なら無効」という約束が必要になり、この変数だけ未設定と空文字列の意味が変わるためである。
+有効・無効(`METRICS_ENABLED`)と名前空間(`METRICS_NAMESPACE`)は別の変数とする。名前空間の空文字列へ有効・無効の意味を重ねず、課金を伴う発行を明示的な opt-in として読めるようにするためである。
 
 `METRICS_ENABLED` が解釈できない値である場合は、既定へ倒さず起動を失敗させる。打ち間違いを有効と解釈すると、無効化したはずの課金が継続し、検知手段が請求のみとなるためである。無効時はコールドスタートごとに `metrics-disabled` のログを 1 行出力する。
 
@@ -76,12 +77,12 @@ Lambda がタイムアウトまたは panic した場合は、プロセスが落
 
 | 無効時も残るもの | 無効時に失われるもの |
 | --- | --- |
-| Lambda 組み込みの `Errors` / `Duration` / `Throttles` | `ReconcileErrors`(失敗の件数) |
+| Lambda 組み込みの `Errors` / `Duration` / `Throttles` | `ReconcileErrors`(リソース単位・グループ単位の失敗件数) |
 | SNS 通知(アクション・失敗・復旧) | `ReconcileActions`(アクションの発生) |
 | `status#` の `last_error` | `ReconciledResources`(管理下リソース数の推移) |
 | ログ | `ReconcileAborted`(呼び出しが途切れたことの検知) |
 
-リソース単位の失敗が組み込みの `Errors` に乗るため、メトリクスを無効にしても失敗の発生そのものには気づける。
+メトリクス無効時、リソース単位・グループ単位の失敗は組み込みの `Errors` に現れない。能動的に検知するには SNS、Status／ログの監視、またはカスタムメトリクスの有効化が必要である。
 
 ## コスト
 

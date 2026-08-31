@@ -98,6 +98,8 @@ The APIs called for each type are given below.
 
 For ECS, the desiredCount and the Auto Scaling min/max used at start are read from the resource's own tags. They are not saved on stop and restored later. Whether an Auto Scaling target exists is determined with `DescribeScalableTargets`.
 
+The observed state of an ECS service comes from the counts returned by `DescribeServices`. It is stopped when `desiredCount`, `runningCount`, and `pendingCount` are all zero; running when `desiredCount > 0`, `runningCount == desiredCount`, and `pendingCount == 0`; and transitioning otherwise. Looking at desiredCount alone would report convergence before task startup or shutdown had completed.
+
 Stopping ECS takes two steps and is not atomic. If `UpdateService` fails after min/max have been set to 0/0, the original min/max are rolled back. Without the rollback the service would be left running and unable to scale out.
 
 ## Diagnosing the state table

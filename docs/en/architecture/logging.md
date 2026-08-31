@@ -79,20 +79,26 @@ The events the reconciler writes are given below.
 | `msg` | level | Attributes | Meaning |
 |---|---|---|---|
 | `event-received` | INFO | `source`, `reason` | Started from an EventBridge event |
+| `skip-lease-held` | INFO | — | Returned successfully because another invocation owns the reconcile lease |
+| `lease-release-failed` | ERROR | `owner`, `error` | Failed to release the reconcile lease owned by this invocation |
 | `orphaned-group-data` | WARN | `group` | Inconsistent DynamoDB data for a group |
-| `action` | INFO | `group`, `resource_id`, `action`, `desired` | A resource was started or stopped |
+| `action` | INFO | `group`, `resource_id`, `operation_id`, `action`, `desired` | A resource was started or stopped |
+| `action-recovered` | INFO | `group`, `resource_id`, `operation_id`, `action`, `desired` | Completed a pending record from the observed AWS state |
+| `skip-pending-transition` | INFO | `resource_id`, `operation_id`, `detail`, `since` | Deferred a pending operation while its target is transitioning |
+| `skip-pending-action` | INFO | `resource_id`, `operation_id`, `observed`, `age` | Deferred while waiting for a pending action to take effect |
 | `skip-transitioning` | INFO | `resource_id`, `detail`, `since` | Skipped, the resource being taken as mid-transition |
 | `skip-not-found` | INFO | `resource_id` | Skipped, the resource not existing |
 | `error` | ERROR | `group`, `resource_id`, `error` | A per-resource or per-group failure |
 | `summary` | INFO | `reconciled`, `actions`, `errors` | Summary of one cycle |
 | `metrics` | INFO | `_aws` + metric names | EMF metrics ([metrics.md](metrics.md)) |
-| `metrics-disabled` | INFO | `reason` | Whether metrics are enabled |
-| `action-notify-failed` | ERROR | `group`, `resource_id`, `error` | Notifying an action failed |
+| `metrics-disabled` | INFO | `reason` | Custom metrics are disabled |
+| `action-notify-failed` | ERROR | `group`, `resource_id`, `operation_id`, `error` | Action notification failed and remains pending in status |
+| `action-notify-ack-failed` | ERROR | `group`, `resource_id`, `operation_id`, `error` | Recording successful notification failed; the same notification may be resent |
+| `pending-operation-abandon-failed` | ERROR | `resource_id`, `operation_id`, `error` | Clearing pending after a failed AWS action also failed |
 | `recovery-notify-failed` | ERROR | `group`, `resource_id`, `error` | Notifying a recovery (`recovered`) failed |
 | `error-notify-failed` | ERROR | `group`, `resource_id`, `error` | Notifying a failure failed |
 | `error-clear-failed` | ERROR | `group`, `resource_id`, `error` | Clearing `last_error` after a recovery failed |
 | `error-record-failed` | ERROR | `group`, `resource_id`, `error` | Writing the failure to `last_error` failed |
-| `status-read-failed` | ERROR | `group`, `resource_id`, `error` | Reading the previous `status#`, used to deduplicate notifications, failed |
 | `transitioning-mark-failed` | ERROR | `resource_id`, `error` | Writing `transitioning_since` failed |
 | `transitioning-clear-failed` | ERROR | `resource_id`, `error` | Clearing `transitioning_since` failed |
 
@@ -105,14 +111,16 @@ The values the `action` attribute takes are given below.
 | `start` | A stopped resource was started |
 | `stop` | A running resource was stopped |
 
-### Errors recorded in the log only
+### Errors not recorded in `last_error`
 
-An error is recorded in three places: the log, `last_error` on `status#`, and the SNS notification. The following, however, go to the log only, since they represent a failure of the recording path itself.
+Ordinary resource errors go to the log, `last_error` in status, and SNS. The following are failures of the recording path or auxiliary state and are not written to `last_error`.
 
 | Event | Why the log only |
 |---|---|
-| `*-notify-failed` | Notification is what failed |
-| `status-read-failed`, `error-record-failed` | DynamoDB is unreachable, so the inability to record cannot itself be recorded |
+| `action-notify-failed`, `action-notify-ack-failed` | `notification_pending` carries them into the next cycle |
+| `recovery-notify-failed`, `error-notify-failed` | Notification is what failed |
+| `error-record-failed`, `pending-operation-abandon-failed` | Inability to record in DynamoDB cannot be recorded through the same path |
+| `lease-release-failed` | The TTL expires the lease, independently of resource action success |
 | `transitioning-*-failed` | The information is for auditing and is not treated as a reconciler failure |
 
 ## Web console
