@@ -11,24 +11,23 @@ state を保持する DynamoDB テーブル 1 つのキー配置とアイテム�
 | パーティションキー | `pk`(String) |
 | ソートキー | `sk`(String) |
 | GSI / LSI | なし |
-| 課金モード | 任意(オンデマンド推奨) |
 | TTL | 属性 `expires_at`(Number、epoch 秒)。override と reconcile リースが持つ |
-
-設定は `pk=CONFIG` にまとめ、`sk` の `GROUP#` / `OVERRIDE#` で種別を分ける。Status はリソースごとに `pk=STATUS#<リソース ID>` を持ち、現在値を `sk=CURRENT` に置く。全体 reconcile のリースは `pk=LOCK, sk=RECONCILE` である。
 
 ## アイテム種別一覧
 
-保持するアイテムは 5 種類である。キーと書き手・読み手を、以下にまとめる。
+保持するアイテムは 5 種類である。キーの値が表す内容と、書き手・読み手を、以下にまとめる。
 
-| アイテム | `pk` | `sk` | 書き手 | 読み手 |
+| アイテム | `pk` の値と意味 | `sk` の値と意味 | 書き手 | 読み手 |
 |---|---|---|---|---|
-| グループ設定 | `CONFIG` | `GROUP#<名前>` | `cheapskate-cli` / Web コンソール | reconciler、CLI、Web コンソール |
-| Override | `CONFIG` | `OVERRIDE#<名前>` | 同上 | 同上 |
-| Status(リソース単位) | `STATUS#<種別>#<ref>` | `CURRENT` | reconciler | CLI、Web コンソール |
-| Status(グループ単位) | `STATUS#group#<名前>` | `CURRENT` | reconciler | CLI、Web コンソール |
-| Reconcile リース | `LOCK` | `RECONCILE` | reconciler | reconciler |
+| グループ設定 | `CONFIG` — グループに対する設定入力を集約するパーティション | `GROUP#<名前>` — 指定したグループの恒久設定 | `cheapskate-cli` / Web コンソール | reconciler、CLI、Web コンソール |
+| Override | `CONFIG` — グループに対する設定入力を集約するパーティション | `OVERRIDE#<名前>` — 指定したグループの期限付き上書き | 同上 | 同上 |
+| Status(リソース単位) | `STATUS#<種別>#<ref>` — 指定した AWS リソースの実行結果 | `CURRENT` — そのリソースの最新 Status | reconciler | CLI、Web コンソール |
+| Status(グループ単位) | `STATUS#group#<名前>` — 指定したグループの処理結果 | `CURRENT` — そのグループの最新 Status | reconciler | CLI、Web コンソール |
+| Reconcile リース | `LOCK` — reconcile の排他制御用パーティション | `RECONCILE` — 全体 reconcile のグローバルリース | reconciler | reconciler |
 
-## group# — グループ設定
+キーの組み合わせは [`itemKey`](../../../internal/state/items.go#L14) が表す。`STATUS#<種別>#<ref>` の `<種別>` は [`model.ResourceType`](../../../internal/core/model/resource.go#L10) が定義し、`<ref>` の形式はリソース単位の実行結果の節に示す。キーの固定値とプレフィックスは大文字・小文字を区別する。
+
+## `CONFIG` / `GROUP#<名前>` — グループ設定
 
 ドメイン表現は `model.GroupSpec` である。保存時はグループ名を `sk` に含め、読み取り時に `Name` フィールドへ戻す。属性を、以下に示す。
 
@@ -47,7 +46,7 @@ state を保持する DynamoDB テーブル 1 つのキー配置とアイテム�
 
 セレクタ未設定(`tag_key`/`tag_value`/`types` がすべて空)のグループを作成できる。ただし `mode` を `pinned`/`schedule` にするにはセレクタを要する。空の StringSet は DynamoDB 上表現できないため、セレクタ未設定時は `types` 属性自体を省略する。
 
-## override# — 期限付きの上書き
+## `CONFIG` / `OVERRIDE#<名前>` — 期限付きの上書き
 
 ドメイン表現は `model.Override` である。属性を、以下に示す。
 
@@ -60,7 +59,7 @@ state を保持する DynamoDB テーブル 1 つのキー配置とアイテム�
 
 読み取り側が `expires_at <= now` のアイテムを期限切れとして無視する。TTL 削除は非同期であり、最大 48 時間の遅延がありうるためである。TTL 自体は残存アイテムの整理のためだけにある。
 
-## `status#<種別>#<ref>` — リソース単位の実行結果
+## `STATUS#<種別>#<ref>` / `CURRENT` — リソース単位の実行結果
 
 ドメイン表現は `model.Status` である。値は最後にアクションまたはエラーが発生した時点のスナップショットであり、ライブ状態ではない。属性を、以下に示す。
 
@@ -101,11 +100,11 @@ Status は履歴ではなく最新値 1 件だけを保持する。AWS 操作の
 
 セレクタに一致しなくなったリソースのアイテムは自動削除されない。残存しても動作に影響しない。削除を行うのは診断経由の孤立レコード削除のみであり、その判定条件と削除範囲は [overview.md](overview.md) にある。
 
-## `status#group#<名前>` — グループ単位の実行結果
+## `STATUS#group#<名前>` / `CURRENT` — グループ単位の実行結果
 
-属性形は `status#<種別>#<ref>` と同一である。対象は個々のリソースではなくグループの処理そのものであり、cron・timezone の不正、検出の失敗、セレクタの重複といった、そのグループの設定に由来する失敗を記録する。
+属性形は `STATUS#<種別>#<ref>` / `CURRENT` と同一である。対象は個々のリソースではなくグループの処理そのものであり、cron・timezone の不正、検出の失敗、セレクタの重複といった、そのグループの設定に由来する失敗を記録する。
 
-`"group"` はリソースタイプの定数として使われないため、実リソースの `pk` 空間と衝突しない。グループの削除時に `group#`・`override#` とあわせて削除され、リソース単位の `status#` は対象外である。
+`"group"` はリソースタイプの定数として使われないため、実リソースの `pk` 空間と衝突しない。グループの削除時に `CONFIG` / `GROUP#<名前>`、`CONFIG` / `OVERRIDE#<名前>` とあわせて削除される。リソース単位の `STATUS#<種別>#<ref>` / `CURRENT` は対象外である。
 
 セレクタの重複は、リソース側ではなくこちらに記録する。共有アイテムへ書いた場合、そのリソースを所有するグループによるエラークリアと、無視される側のグループによるエラー記録とが、同一アイテムに対して毎サイクル交互に発生し、通知が発振するためである。
 

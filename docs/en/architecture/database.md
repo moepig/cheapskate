@@ -11,24 +11,23 @@ What the table is required to provide is given below.
 | Partition key | `pk` (String) |
 | Sort key | `sk` (String) |
 | GSI / LSI | none |
-| Billing mode | any (on-demand recommended) |
 | TTL | attribute `expires_at` (Number, epoch seconds). Overrides and the reconcile lease carry it |
-
-Configuration shares `pk=CONFIG`, with `GROUP#` / `OVERRIDE#` in `sk`. Each status has `pk=STATUS#<resource ID>` and places its current value at `sk=CURRENT`. The full-reconcile lease is `pk=LOCK, sk=RECONCILE`.
 
 ## The item kinds
 
-Five kinds of item are stored. Their keys, writers, and readers are collected below.
+Five kinds of item are stored. What each key value represents, along with its writers and readers, is collected below.
 
-| Item | `pk` | `sk` | Writer | Reader |
+| Item | `pk` value and meaning | `sk` value and meaning | Writer | Reader |
 |---|---|---|---|---|
-| Group configuration | `CONFIG` | `GROUP#<name>` | `cheapskate-cli` / web console | reconciler, CLI, web console |
-| Override | `CONFIG` | `OVERRIDE#<name>` | Same as above | Same as above |
-| Status (per resource) | `STATUS#<type>#<ref>` | `CURRENT` | reconciler | CLI, web console |
-| Status (per group) | `STATUS#group#<name>` | `CURRENT` | reconciler | CLI, web console |
-| Reconcile lease | `LOCK` | `RECONCILE` | reconciler | reconciler |
+| Group configuration | `CONFIG` — the partition containing group configuration inputs | `GROUP#<name>` — durable configuration for the named group | `cheapskate-cli` / web console | reconciler, CLI, web console |
+| Override | `CONFIG` — the partition containing group configuration inputs | `OVERRIDE#<name>` — a time-limited override for the named group | Same as above | Same as above |
+| Status (per resource) | `STATUS#<type>#<ref>` — reconcile results for the identified AWS resource | `CURRENT` — the latest status for that resource | reconciler | CLI, web console |
+| Status (per group) | `STATUS#group#<name>` — processing results for the named group | `CURRENT` — the latest status for that group | reconciler | CLI, web console |
+| Reconcile lease | `LOCK` — the partition for reconcile exclusion state | `RECONCILE` — the global full-reconcile lease | reconciler | reconciler |
 
-## group# — group configuration
+[`itemKey`](../../../internal/state/items.go#L14) represents these key combinations. [`model.ResourceType`](../../../internal/core/model/resource.go#L10) defines the `<type>` variants in `STATUS#<type>#<ref>`; the per-resource results section below gives the corresponding `<ref>` forms. Fixed key values and prefixes are case-sensitive.
+
+## `CONFIG` / `GROUP#<name>` — group configuration
 
 The domain representation is `model.GroupSpec`. Storage puts the group name in `sk`, and reading restores it to the `Name` field. The attributes are given below.
 
@@ -47,7 +46,7 @@ A group name matches `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`. Neither `#` nor `/` may 
 
 A group may be created with no selector (`tag_key`, `tag_value`, and `types` all empty), but setting `mode` to `pinned` or `schedule` requires one. An empty StringSet cannot be represented in DynamoDB, so with no selector the `types` attribute is omitted entirely.
 
-## override# — a time-limited override
+## `CONFIG` / `OVERRIDE#<name>` — a time-limited override
 
 The domain representation is `model.Override`. The attributes are given below.
 
@@ -60,7 +59,7 @@ The domain representation is `model.Override`. The attributes are given below.
 
 The reading side ignores an item with `expires_at <= now` as expired, because TTL deletion is asynchronous and can lag by up to 48 hours. The TTL itself exists only to tidy away the leftover items.
 
-## `status#<type>#<ref>` — per-resource results
+## `STATUS#<type>#<ref>` / `CURRENT` — per-resource results
 
 The domain representation is `model.Status`. The values are a snapshot taken when the last action or error occurred, not a live state. The attributes are given below.
 
@@ -101,11 +100,11 @@ The attributes to update are given by `state.StatusPatch`. Every field is a poin
 
 The item for a resource that no longer matches a selector is not deleted automatically, and leaving it has no effect on behaviour. The only deletion is the orphan pruning that goes through the diagnosis; its criteria and scope are described in [overview.md](overview.md).
 
-## `status#group#<name>` — per-group results
+## `STATUS#group#<name>` / `CURRENT` — per-group results
 
-The attribute shape is identical to `status#<type>#<ref>`. Its subject is the processing of a group rather than an individual resource, and it records the failures that stem from that group's own configuration: an invalid cron or timezone, a discovery failure, a selector collision.
+The attribute shape is identical to `STATUS#<type>#<ref>` / `CURRENT`. Its subject is the processing of a group rather than an individual resource, and it records the failures that stem from that group's own configuration: an invalid cron or timezone, a discovery failure, a selector collision.
 
-`"group"` is never used as a resource-type constant, so this does not collide with the `pk` space of real resources. It is deleted together with `group#` and `override#` when a group is deleted; the per-resource `status#` items are not.
+`"group"` is never used as a resource-type constant, so this does not collide with the `pk` space of real resources. It is deleted together with `CONFIG` / `GROUP#<name>` and `CONFIG` / `OVERRIDE#<name>` when a group is deleted. Per-resource `STATUS#<type>#<ref>` / `CURRENT` items are not.
 
 Selector collisions are recorded here rather than on the resource side. Written to a shared item, the error clearing by the group that owns the resource and the error recording by the groups that lose the tie would alternate on the same item every cycle, and the notifications would flap.
 
