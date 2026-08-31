@@ -280,8 +280,8 @@ func (f *DynaStore) updateItem(_ context.Context, in *dynamodb.UpdateItemInput, 
 	setExpr, removeExpr := expr, ""
 	if before, after, ok := strings.Cut(expr, " REMOVE "); ok {
 		setExpr, removeExpr = before, after
-	} else if strings.HasPrefix(expr, "REMOVE ") {
-		setExpr, removeExpr = "", strings.TrimPrefix(expr, "REMOVE ")
+	} else if after, ok := strings.CutPrefix(expr, "REMOVE "); ok {
+		setExpr, removeExpr = "", after
 	}
 	setExpr = strings.TrimPrefix(setExpr, "SET ")
 	for term := range strings.SplitSeq(setExpr, ", ") {

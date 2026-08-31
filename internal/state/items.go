@@ -142,9 +142,6 @@ type StatusPatch struct {
 	PendingStartedAt   *string
 }
 
-// Setは変更対象の値を指すポインタを返す。
-func Set[T any](v T) *T { return &v }
-
 type statusAttr struct {
 	name  string
 	value string

@@ -2,6 +2,7 @@ package sns
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -37,6 +38,30 @@ func TestSnsNotifierPublishesJsonPayload(t *testing.T) {
 	require.NotNil(t, published)
 	assert.Contains(t, *published.Message, `"resource_id":"ecs#a/b"`)
 	assert.Equal(t, n.TopicArn, *published.TopicArn)
+}
+
+// JSON に変換できない payload は SNS API を呼ばず、json.UnsupportedTypeError として返す。
+func TestSnsNotifierRejectsUnsupportedPayload(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	client := mocks.NewMockAPI(ctrl)
+	n := &Notifier{Client: client, TopicArn: "arn:aws:sns:us-east-1:123:topic"}
+
+	err := n.Publish(context.Background(), "subject", map[string]any{"unsupported": make(chan int)})
+
+	var unsupported *json.UnsupportedTypeError
+	require.ErrorAs(t, err, &unsupported)
+}
+
+// SNS API の失敗をそのまま返し、通知済みの成功として扱わないことを確かめる。
+func TestSnsNotifierPropagatesPublishError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	client := mocks.NewMockAPI(ctrl)
+	n := &Notifier{Client: client, TopicArn: "arn:aws:sns:us-east-1:123:topic"}
+	client.EXPECT().Publish(gomock.Any(), gomock.Any()).Return(nil, assert.AnError)
+
+	err := n.Publish(context.Background(), "subject", map[string]any{"resource_id": "rds-instance#dev"})
+
+	require.ErrorIs(t, err, assert.AnError)
 }
 
 // SNS の Subject が印字可能な ASCII かつ 100 文字以内でない場合、Publish は InvalidParameter で失敗する

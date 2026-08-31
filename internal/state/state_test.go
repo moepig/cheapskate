@@ -112,6 +112,37 @@ func TestGetStatusesRetriesUnprocessedKeys(t *testing.T) {
 	assert.Equal(t, 3, db.Calls("batch-get"))
 }
 
+// BatchGetItem が上限回数まで全キーを未処理として返した場合は、空の成功結果ではなくエラーを返す。
+// 呼び出し回数も上限と一致させ、上限を超える再試行を防ぐ。
+func TestGetStatusesStopsAfterUnprocessedKeyRetryLimit(t *testing.T) {
+	db, st := newFixture(t)
+	st.batchGetBackoff = backoff.NewExponential(time.Nanosecond, time.Nanosecond)
+	db.SetBatchGetUnprocessedResponses(batchGetMaxAttempts)
+	seedStatus(db, "rds-instance#dev", map[string]types.AttributeValue{"last_action": s("stop")})
+
+	got, err := st.GetStatuses(context.Background(), []string{"rds-instance#dev"})
+
+	require.ErrorContains(t, err, "batch get left unprocessed keys after 8 attempts")
+	assert.Nil(t, got)
+	assert.Equal(t, batchGetMaxAttempts, db.Calls("batch-get"))
+}
+
+// 再試行の待機中に context が終了した場合は、次の BatchGetItem を呼ばずに終了理由を返す。
+func TestGetStatusesHonorsCanceledContextWhileWaitingToRetry(t *testing.T) {
+	db, st := newFixture(t)
+	st.batchGetBackoff = backoff.NewExponential(time.Hour, time.Hour)
+	db.SetBatchGetUnprocessedResponses(2)
+	seedStatus(db, "rds-instance#dev", map[string]types.AttributeValue{"last_action": s("stop")})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	got, err := st.GetStatuses(ctx, []string{"rds-instance#dev"})
+
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Nil(t, got)
+	assert.Equal(t, 1, db.Calls("batch-get"))
+}
+
 func TestScanAllJoinsGroupOverrideGroupStatus(t *testing.T) {
 	db, st := newFixture(t)
 	now := time.Date(2026, 7, 19, 12, 0, 0, 0, time.UTC)
@@ -327,7 +358,7 @@ func TestConditionalGroupWritesPreserveExistence(t *testing.T) {
 	assert.Equal(t, original, *got)
 
 	require.NoError(t, st.DeleteGroup(ctx, "dev"))
-	err = st.UpdateGroup(ctx, "dev", GroupPatch{Mode: Set(model.ModePinned), Desired: Set(model.DesiredRunning)})
+	err = st.UpdateGroup(ctx, "dev", GroupPatch{Mode: new(model.ModePinned), Desired: new(model.DesiredRunning)})
 	assert.ErrorIs(t, err, ErrGroupNotFound)
 	got, err = st.GetGroup(ctx, "dev")
 	require.NoError(t, err)
@@ -344,7 +375,7 @@ func TestUpdateGroupLeavesUnspecifiedAttributesUntouched(t *testing.T) {
 		TagKey: "env", TagValue: "dev", Types: []model.ResourceType{model.TypeRdsInstance},
 	}))
 
-	require.NoError(t, st.UpdateGroup(ctx, "dev", GroupPatch{Mode: Set(model.ModeDisabled)}))
+	require.NoError(t, st.UpdateGroup(ctx, "dev", GroupPatch{Mode: new(model.ModeDisabled)}))
 
 	got, err := st.GetGroup(ctx, "dev")
 	require.NoError(t, err)
@@ -421,10 +452,10 @@ func TestUpdateStatusDistinguishesClearFromUntouched(t *testing.T) {
 	_, st := newFixture(t)
 	ctx := context.Background()
 	require.NoError(t, st.UpdateStatus(ctx, "rds-instance#a", StatusPatch{
-		LastError: Set("boom"), LastAction: Set(model.ActionStop),
+		LastError: new("boom"), LastAction: new(model.ActionStop),
 	}))
 
-	require.NoError(t, st.UpdateStatus(ctx, "rds-instance#a", StatusPatch{LastError: Set("")}))
+	require.NoError(t, st.UpdateStatus(ctx, "rds-instance#a", StatusPatch{LastError: new("")}))
 
 	got, err := st.GetStatus(ctx, "rds-instance#a")
 	require.NoError(t, err)
@@ -439,12 +470,12 @@ func TestStatusUpdateSetsAndRefreshesExpiration(t *testing.T) {
 	current := time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)
 	st.now = func() time.Time { return current }
 
-	require.NoError(t, st.UpdateStatus(context.Background(), "rds-instance#a", StatusPatch{LastError: Set("first")}))
+	require.NoError(t, st.UpdateStatus(context.Background(), "rds-instance#a", StatusPatch{LastError: new("first")}))
 	item := stored(db, statusKey("rds-instance#a"))
 	assert.Equal(t, fmt.Sprint(current.Add(7*24*time.Hour).Unix()), item["expires_at"].(*types.AttributeValueMemberN).Value)
 
 	current = current.Add(2 * 24 * time.Hour)
-	require.NoError(t, st.UpdateStatus(context.Background(), "rds-instance#a", StatusPatch{LastError: Set("second")}))
+	require.NoError(t, st.UpdateStatus(context.Background(), "rds-instance#a", StatusPatch{LastError: new("second")}))
 	item = stored(db, statusKey("rds-instance#a"))
 	assert.Equal(t, fmt.Sprint(current.Add(7*24*time.Hour).Unix()), item["expires_at"].(*types.AttributeValueMemberN).Value)
 }
@@ -514,7 +545,7 @@ func TestGetPutStatusForGroupPseudoID(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, model.Status{}, got)
 
-	require.NoError(t, st.UpdateStatus(ctx, model.GroupStatusID("dev"), StatusPatch{LastError: Set("discover: access denied")}))
+	require.NoError(t, st.UpdateStatus(ctx, model.GroupStatusID("dev"), StatusPatch{LastError: new("discover: access denied")}))
 	got, err = st.GetStatus(ctx, model.GroupStatusID("dev"))
 	require.NoError(t, err)
 	assert.Equal(t, "discover: access denied", got.LastError)
@@ -548,7 +579,7 @@ func TestPendingOperationRequiresMatchingOperationID(t *testing.T) {
 		ID: "op-a", Action: model.ActionStop, Desired: model.DesiredStopped,
 		Observed: model.StateRunning, StartedAt: "2026-08-30T12:00:00Z",
 	}
-	require.NoError(t, st.UpdateStatus(ctx, resourceID, StatusPatch{LastError: Set("previous failure"), LastErrorAt: Set("2026-08-30T11:59:00Z")}))
+	require.NoError(t, st.UpdateStatus(ctx, resourceID, StatusPatch{LastError: new("previous failure"), LastErrorAt: new("2026-08-30T11:59:00Z")}))
 
 	require.NoError(t, st.BeginOperation(ctx, resourceID, op))
 	assert.Error(t, st.BeginOperation(ctx, resourceID, PendingOperation{ID: "op-b"}),

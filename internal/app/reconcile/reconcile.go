@@ -152,10 +152,7 @@ func leaseExpiration(ctx context.Context, now time.Time) time.Time {
 	if !ok {
 		return now.Add(defaultLeaseDuration)
 	}
-	remaining := time.Until(deadline)
-	if remaining < 0 {
-		remaining = 0
-	}
+	remaining := max(time.Until(deadline), 0)
 	return now.Add(remaining + leaseSafetyMargin)
 }
 
@@ -445,7 +442,7 @@ func markTransitioning(ctx context.Context, deps *Deps, resourceID string, prevS
 		return
 	}
 	if err := deps.Store.UpdateStatus(ctx, resourceID, state.StatusPatch{
-		TransitioningSince: state.Set(now.UTC().Format(time.RFC3339)),
+		TransitioningSince: new(now.UTC().Format(time.RFC3339)),
 	}); err != nil {
 		deps.Log.Error("transitioning-mark-failed", "resource_id", resourceID, "error", err.Error())
 	}
@@ -458,7 +455,7 @@ func clearTransitioning(ctx context.Context, deps *Deps, resourceID string, prev
 	if prevStatus.TransitioningSince == "" {
 		return
 	}
-	if err := deps.Store.UpdateStatus(ctx, resourceID, state.StatusPatch{TransitioningSince: state.Set("")}); err != nil {
+	if err := deps.Store.UpdateStatus(ctx, resourceID, state.StatusPatch{TransitioningSince: new("")}); err != nil {
 		deps.Log.Error("transitioning-clear-failed", "resource_id", resourceID, "error", err.Error())
 	}
 }
@@ -525,8 +522,8 @@ func clearRecoveredError(ctx context.Context, deps *Deps, group, resourceID stri
 		return
 	}
 	if err := deps.Store.UpdateStatus(ctx, resourceID, state.StatusPatch{
-		LastError:   state.Set(""),
-		LastErrorAt: state.Set(""),
+		LastError:   new(""),
+		LastErrorAt: new(""),
 	}); err != nil {
 		deps.Log.Error("error-clear-failed", "group", group, "resource_id", resourceID, "error", err.Error())
 		return
@@ -544,8 +541,8 @@ func recordFailure(ctx context.Context, deps *Deps, group, resourceID string, pr
 	at := now.UTC().Format(time.RFC3339)
 
 	if serr := deps.Store.UpdateStatus(ctx, resourceID, state.StatusPatch{
-		LastError:   state.Set(err.Error()),
-		LastErrorAt: state.Set(at),
+		LastError:   new(err.Error()),
+		LastErrorAt: new(at),
 	}); serr != nil {
 		deps.Log.Error("error-record-failed", "group", group, "resource_id", resourceID, "error", serr.Error())
 	}

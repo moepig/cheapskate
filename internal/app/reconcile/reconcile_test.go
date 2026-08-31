@@ -104,6 +104,34 @@ func runEmpty(t *testing.T, f *fixture) Summary {
 	return summary
 }
 
+// context の deadline がない場合は既定時間を用い、deadline がある場合は残り時間と安全余裕を含む期限を返す。
+// 期限切れの context では負の残り時間を加算せず、安全余裕だけを確保する。
+func TestLeaseExpiration(t *testing.T) {
+	t.Run("without deadline", func(t *testing.T) {
+		assert.Equal(t, now.Add(defaultLeaseDuration), leaseExpiration(context.Background(), now))
+	})
+
+	t.Run("active deadline", func(t *testing.T) {
+		before := time.Now()
+		deadline := before.Add(time.Hour)
+		ctx, cancel := context.WithDeadline(context.Background(), deadline)
+		defer cancel()
+
+		got := leaseExpiration(ctx, now)
+		after := time.Now()
+
+		assert.GreaterOrEqual(t, got, now.Add(deadline.Sub(after)+leaseSafetyMargin))
+		assert.LessOrEqual(t, got, now.Add(deadline.Sub(before)+leaseSafetyMargin))
+	})
+
+	t.Run("expired deadline", func(t *testing.T) {
+		ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Minute))
+		defer cancel()
+
+		assert.Equal(t, now.Add(leaseSafetyMargin), leaseExpiration(ctx, now))
+	})
+}
+
 func TestStopsRunningPinnedResource(t *testing.T) {
 	f := newFixture(t)
 	f.pinnedStoppedGroup("dev-db", rdsInstance("dev-db"))
@@ -495,6 +523,90 @@ func TestPendingOperationRecoversWithoutRepeatingAWSAction(t *testing.T) {
 	}
 	assert.Equal(t, 1, actionNotifications)
 	assert.Len(t, f.notifier.Published, 2, "復旧した操作の通知とは別に recovered を送信しない")
+}
+
+// 未完了操作の各フィールドを個別に破損させ、操作を再開できる値として解釈されないことを確かめる。
+// 不完全な監査証跡に基づく AWS 操作の再実行を防ぐため、フィールド間の不整合も拒否する。
+func TestPendingOperationRejectsInvalidStatus(t *testing.T) {
+	valid := model.Status{
+		PendingOperationID: "op-a",
+		PendingAction:      model.ActionStop,
+		PendingDesired:     model.DesiredStopped,
+		PendingObserved:    model.StateRunning,
+		PendingStartedAt:   now.Format(time.RFC3339),
+	}
+	cases := []struct {
+		name   string
+		change func(*model.Status)
+		want   string
+	}{
+		{"invalid started_at", func(s *model.Status) { s.PendingStartedAt = "not-a-time" }, "invalid started_at"},
+		{"invalid action", func(s *model.Status) { s.PendingAction = model.ActionNone }, "invalid action"},
+		{"invalid desired", func(s *model.Status) { s.PendingDesired = model.DesiredNone }, "invalid desired state"},
+		{"invalid observed", func(s *model.Status) { s.PendingObserved = model.StateTransitioning }, "invalid observed state"},
+		{"inconsistent action", func(s *model.Status) { s.PendingAction = model.ActionStart }, "inconsistent action"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			status := valid
+			tc.change(&status)
+
+			op, startedAt, err := pendingOperation(status)
+
+			require.ErrorContains(t, err, tc.want)
+			assert.Equal(t, state.PendingOperation{}, op)
+			assert.True(t, startedAt.IsZero())
+		})
+	}
+}
+
+// 未完了操作は 30 分未満では再実行せず、30 分に達した時点で放棄してエラーとして記録する。
+// 境界時刻の比較が変わっても、AWS 操作の早すぎる再実行や無期限の停止を生じさせないためである。
+func TestPendingOperationRecoveryTimeoutBoundary(t *testing.T) {
+	cases := []struct {
+		name          string
+		age           time.Duration
+		wantAbandoned bool
+	}{
+		{"before boundary", pendingRecoveryAfter - time.Second, false},
+		{"at boundary", pendingRecoveryAfter, true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			resource := rdsInstance("dev-db")
+			resourceID := resource.ID()
+			f.pinnedStoppedGroup("dev-db", resource)
+			f.rds.Observations[resource.Ref] = model.Observation{State: model.StateRunning}
+			op := state.PendingOperation{
+				ID: "op-a", Action: model.ActionStop, Desired: model.DesiredStopped,
+				Observed: model.StateRunning, StartedAt: now.Add(-tc.age).Format(time.RFC3339),
+			}
+			require.NoError(t, f.deps.Store.BeginOperation(context.Background(), resourceID, op))
+
+			summary := runEmpty(t, f)
+
+			assert.Empty(t, f.rds.Stopped, "未完了操作の確認時に AWS 操作を再実行してはならない")
+			assert.Empty(t, summary.Actions)
+			status := f.db.Item("status#" + resourceID)
+			require.NotNil(t, status)
+			pendingID, ok := status["pending_operation_id"].(*types.AttributeValueMemberS)
+			require.True(t, ok)
+			if tc.wantAbandoned {
+				require.Len(t, summary.Errors, 1)
+				assert.Contains(t, summary.Errors[0].Error, "did not converge")
+				assert.Equal(t, "", pendingID.Value)
+				lastError, ok := status["last_error"].(*types.AttributeValueMemberS)
+				require.True(t, ok)
+				assert.Contains(t, lastError.Value, "did not converge")
+			} else {
+				assert.Empty(t, summary.Errors)
+				assert.Equal(t, "op-a", pendingID.Value)
+			}
+		})
+	}
 }
 
 // エラー記録用の PutStatus が失敗した場合も、Run は panic せず他のリソースの処理を継続しなければならない

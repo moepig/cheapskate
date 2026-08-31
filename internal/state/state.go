@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"sort"
 	"strconv"
 	"strings"
@@ -465,12 +466,8 @@ func (s *Store) updateStatus(
 	}
 	names := make(map[string]string, len(attrs)+len(conditionNames))
 	values := make(map[string]types.AttributeValue, len(attrs)+len(conditionValues))
-	for name, value := range conditionNames {
-		names[name] = value
-	}
-	for name, value := range conditionValues {
-		values[name] = value
-	}
+	maps.Copy(names, conditionNames)
+	maps.Copy(values, conditionValues)
 	terms := make([]string, 0, len(attrs))
 	for i, attr := range attrs {
 		n, v := fmt.Sprintf("#a%d", i), fmt.Sprintf(":v%d", i)
@@ -589,7 +586,7 @@ func (s *Store) batchGet(ctx context.Context, keys []itemKey) ([]map[string]type
 		request.Keys = append(request.Keys, marshalKey(key))
 	}
 	var raws []map[string]types.AttributeValue
-	for attempt := 0; attempt < batchGetMaxAttempts; attempt++ {
+	for attempt := range batchGetMaxAttempts {
 		out, err := s.db.BatchGetItem(ctx, &dynamodb.BatchGetItemInput{RequestItems: map[string]types.KeysAndAttributes{s.table: request}})
 		if err != nil {
 			return nil, err

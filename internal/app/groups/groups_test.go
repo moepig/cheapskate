@@ -240,7 +240,7 @@ func TestRemoveGroupDeletesOverrideStatusAndGroup(t *testing.T) {
 	require.NoError(t, Pin(ctx, s, group, model.DesiredStopped))
 	_, err = SetOverride(ctx, s, group, model.DesiredRunning, time.Hour, now)
 	require.NoError(t, err)
-	require.NoError(t, s.UpdateStatus(ctx, model.GroupStatusID(group), state.StatusPatch{LastError: state.Set("boom")}))
+	require.NoError(t, s.UpdateStatus(ctx, model.GroupStatusID(group), state.StatusPatch{LastError: new("boom")}))
 
 	require.NoError(t, RemoveGroup(ctx, s, group))
 
@@ -261,7 +261,7 @@ func TestRemoveGroupStopsOnOverrideDeleteFailure(t *testing.T) {
 	require.NoError(t, Pin(ctx, s, group, model.DesiredStopped))
 	_, err = SetOverride(ctx, s, group, model.DesiredRunning, time.Hour, now)
 	require.NoError(t, err)
-	require.NoError(t, s.UpdateStatus(ctx, model.GroupStatusID(group), state.StatusPatch{LastError: state.Set("boom")}))
+	require.NoError(t, s.UpdateStatus(ctx, model.GroupStatusID(group), state.StatusPatch{LastError: new("boom")}))
 
 	f.FailOn("delete", "override#"+group, assert.AnError)
 	require.ErrorIs(t, RemoveGroup(ctx, s, group), assert.AnError)
@@ -282,7 +282,7 @@ func TestRemoveGroupStopsOnStatusDeleteFailure(t *testing.T) {
 	require.NoError(t, Pin(ctx, s, group, model.DesiredStopped))
 	_, err = SetOverride(ctx, s, group, model.DesiredRunning, time.Hour, now)
 	require.NoError(t, err)
-	require.NoError(t, s.UpdateStatus(ctx, model.GroupStatusID(group), state.StatusPatch{LastError: state.Set("boom")}))
+	require.NoError(t, s.UpdateStatus(ctx, model.GroupStatusID(group), state.StatusPatch{LastError: new("boom")}))
 
 	f.FailOn("delete", "status#group#"+group, assert.AnError)
 	require.ErrorIs(t, RemoveGroup(ctx, s, group), assert.AnError)
@@ -328,7 +328,7 @@ func TestGetDetailResolvesResourcesWithStatus(t *testing.T) {
 	_, err := SetSelector(ctx, s, group, devSelector)
 	require.NoError(t, err)
 	require.NoError(t, Pin(ctx, s, group, model.DesiredStopped))
-	require.NoError(t, s.UpdateStatus(ctx, "rds-instance#db", state.StatusPatch{ObservedState: state.Set(model.StateStopped)}))
+	require.NoError(t, s.UpdateStatus(ctx, "rds-instance#db", state.StatusPatch{ObservedState: new(model.StateStopped)}))
 
 	resources := []model.Resource{{Type: model.TypeRdsInstance, Ref: "db", ARN: "arn:aws:rds:...:db:db"}}
 	d := &porttest.Discoverer{Resources: resources}

@@ -65,13 +65,13 @@ func TestStatusRoundtrip(t *testing.T) {
 	ctx := context.Background()
 
 	err := s.UpdateStatus(ctx, "ecs-service#dev/api", state.StatusPatch{
-		LastAction:    state.Set(model.ActionStop),
-		ObservedState: state.Set(model.StateRunning),
+		LastAction:    new(model.ActionStop),
+		ObservedState: new(model.StateRunning),
 		// nil のフィールドは、対応する属性を変更してはならない
 	})
 	require.NoError(t, err)
 	// 2 回目の部分更新は、置き換えではなく統合でなければならない
-	require.NoError(t, s.UpdateStatus(ctx, "ecs-service#dev/api", state.StatusPatch{LastAction: state.Set(model.ActionStart)}))
+	require.NoError(t, s.UpdateStatus(ctx, "ecs-service#dev/api", state.StatusPatch{LastAction: new(model.ActionStart)}))
 
 	status, err := s.GetStatus(ctx, "ecs-service#dev/api")
 	require.NoError(t, err)
@@ -85,7 +85,7 @@ func TestGroupStatusRoundtrip(t *testing.T) {
 	s := newStore(t)
 	ctx := context.Background()
 
-	require.NoError(t, s.UpdateStatus(ctx, model.GroupStatusID("dev"), state.StatusPatch{LastError: state.Set("discover: access denied")}))
+	require.NoError(t, s.UpdateStatus(ctx, model.GroupStatusID("dev"), state.StatusPatch{LastError: new("discover: access denied")}))
 	status, err := s.GetStatus(ctx, model.GroupStatusID("dev"))
 	require.NoError(t, err)
 	assert.Equal(t, "discover: access denied", status.LastError)
@@ -98,7 +98,7 @@ func TestScanAllJoinsGroupAndOverrideAgainstRealDynamoDB(t *testing.T) {
 
 	require.NoError(t, s.PutGroup(ctx, model.GroupSpec{Name: "dev", Mode: model.ModePinned, Desired: model.DesiredStopped}))
 	require.NoError(t, s.PutOverride(ctx, "dev", model.Override{Desired: model.DesiredRunning, ExpiresAt: now.Add(time.Hour).Unix()}))
-	require.NoError(t, s.UpdateStatus(ctx, "rds-instance#a", state.StatusPatch{LastAction: state.Set(model.ActionStop)}))
+	require.NoError(t, s.UpdateStatus(ctx, "rds-instance#a", state.StatusPatch{LastAction: new(model.ActionStop)}))
 
 	res, err := s.ScanAll(ctx, now)
 	require.NoError(t, err)

@@ -168,7 +168,7 @@ func SetSelector(ctx context.Context, s Store, group string, sel model.Selector)
 		}
 		return true, nil
 	}
-	patch := state.GroupPatch{TagKey: state.Set(next.TagKey), TagValue: state.Set(next.TagValue), Types: state.Set(next.Types)}
+	patch := state.GroupPatch{TagKey: new(next.TagKey), TagValue: new(next.TagValue), Types: new(next.Types)}
 	if err := s.UpdateGroup(ctx, group, patch); err != nil {
 		return false, err
 	}
@@ -207,7 +207,7 @@ func Pin(ctx context.Context, s Store, group string, desired model.DesiredState)
 	if err != nil {
 		return err
 	}
-	return s.UpdateGroup(ctx, group, state.GroupPatch{Mode: state.Set(next.Mode), Desired: state.Set(next.Desired)})
+	return s.UpdateGroup(ctx, group, state.GroupPatch{Mode: new(next.Mode), Desired: new(next.Desired)})
 }
 
 // mode=pinned を解除し、書き込んだアイテムを返す
@@ -220,7 +220,7 @@ func Unpin(ctx context.Context, s Store, group string) (model.GroupSpec, error) 
 	if err != nil {
 		return model.GroupSpec{}, err
 	}
-	if err := s.UpdateGroup(ctx, group, state.GroupPatch{Mode: state.Set(next.Mode)}); err != nil {
+	if err := s.UpdateGroup(ctx, group, state.GroupPatch{Mode: new(next.Mode)}); err != nil {
 		return model.GroupSpec{}, err
 	}
 	return next, nil
@@ -237,8 +237,8 @@ func Schedule(ctx context.Context, s Store, group string, spec model.ScheduleSpe
 		return model.GroupSpec{}, err
 	}
 	if err := s.UpdateGroup(ctx, group, state.GroupPatch{
-		Mode: state.Set(next.Mode), Desired: state.Set(next.Desired), StartCron: state.Set(next.StartCron),
-		StopCron: state.Set(next.StopCron), Timezone: state.Set(next.Timezone),
+		Mode: new(next.Mode), Desired: new(next.Desired), StartCron: new(next.StartCron),
+		StopCron: new(next.StopCron), Timezone: new(next.Timezone),
 	}); err != nil {
 		return model.GroupSpec{}, err
 	}
@@ -252,7 +252,7 @@ func Disable(ctx context.Context, s Store, group string) error {
 		return err
 	}
 	next := existing.Disabled()
-	return s.UpdateGroup(ctx, group, state.GroupPatch{Mode: state.Set(next.Mode)})
+	return s.UpdateGroup(ctx, group, state.GroupPatch{Mode: new(next.Mode)})
 }
 
 // グループに期限付きの override を書き込み、その失効時刻を返す

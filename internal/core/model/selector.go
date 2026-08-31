@@ -3,7 +3,6 @@ package model
 import (
 	"fmt"
 	"slices"
-	"sort"
 	"strings"
 )
 
@@ -55,6 +54,6 @@ func (s Selector) Validate() error {
 // 種別リストの重複を除去してソートした結果を返す
 func normalizeTypes(types []ResourceType) []ResourceType {
 	out := slices.Clone(types)
-	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	slices.Sort(out)
 	return slices.Compact(out)
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"testing"
 	"time"
 
@@ -254,9 +255,7 @@ func TestUnusableScheduleCronIsReported(t *testing.T) {
 				"tag_key": s("env"), "tag_value": s("sched"),
 				"types": &types.AttributeValueMemberSS{Value: []string{string(model.TypeRdsInstance)}},
 			}
-			for k, v := range attrs {
-				item[k] = v
-			}
+			maps.Copy(item, attrs)
 			f.db.Seed(item)
 			f.discoverer.ByTagValue["sched"] = []model.Resource{rds("dev-db")}
 

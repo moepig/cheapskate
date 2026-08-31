@@ -22,11 +22,11 @@ type PendingOperation struct {
 func (s *Store) BeginOperation(ctx context.Context, resourceID string, op PendingOperation) error {
 	empty := ""
 	return s.updateStatus(ctx, resourceID, StatusPatch{
-		PendingOperationID: Set(op.ID),
-		PendingAction:      Set(op.Action),
-		PendingDesired:     Set(op.Desired),
-		PendingObserved:    Set(op.Observed),
-		PendingStartedAt:   Set(op.StartedAt),
+		PendingOperationID: new(op.ID),
+		PendingAction:      new(op.Action),
+		PendingDesired:     new(op.Desired),
+		PendingObserved:    new(op.Observed),
+		PendingStartedAt:   new(op.StartedAt),
 	}, "attribute_not_exists(#pending_operation_id) OR #pending_operation_id = :empty",
 		map[string]string{"#pending_operation_id": "pending_operation_id"},
 		map[string]types.AttributeValue{":empty": &types.AttributeValueMemberS{Value: empty}})
@@ -36,17 +36,17 @@ func (s *Store) BeginOperation(ctx context.Context, resourceID string, op Pendin
 func (s *Store) CompleteOperation(ctx context.Context, resourceID string, op PendingOperation) error {
 	empty := ""
 	return s.updateStatus(ctx, resourceID, StatusPatch{
-		ObservedState:      Set(op.Observed),
-		LastAction:         Set(op.Action),
-		LastDesired:        Set(op.Desired),
-		LastActionAt:       Set(op.StartedAt),
-		LastError:          Set(empty),
-		LastErrorAt:        Set(empty),
-		PendingOperationID: Set(empty),
-		PendingAction:      Set(model.ActionNone),
-		PendingDesired:     Set(model.DesiredNone),
-		PendingObserved:    Set(model.ObservedState("")),
-		PendingStartedAt:   Set(empty),
+		ObservedState:      new(op.Observed),
+		LastAction:         new(op.Action),
+		LastDesired:        new(op.Desired),
+		LastActionAt:       new(op.StartedAt),
+		LastError:          new(empty),
+		LastErrorAt:        new(empty),
+		PendingOperationID: new(empty),
+		PendingAction:      new(model.ActionNone),
+		PendingDesired:     new(model.DesiredNone),
+		PendingObserved:    new(model.ObservedState("")),
+		PendingStartedAt:   new(empty),
 	}, "#pending_operation_id = :operation_id",
 		map[string]string{"#pending_operation_id": "pending_operation_id"},
 		map[string]types.AttributeValue{
@@ -58,11 +58,11 @@ func (s *Store) CompleteOperation(ctx context.Context, resourceID string, op Pen
 func (s *Store) AbandonOperation(ctx context.Context, resourceID, operationID string) error {
 	empty := ""
 	return s.updateStatus(ctx, resourceID, StatusPatch{
-		PendingOperationID: Set(empty),
-		PendingAction:      Set(model.ActionNone),
-		PendingDesired:     Set(model.DesiredNone),
-		PendingObserved:    Set(model.ObservedState("")),
-		PendingStartedAt:   Set(empty),
+		PendingOperationID: new(empty),
+		PendingAction:      new(model.ActionNone),
+		PendingDesired:     new(model.DesiredNone),
+		PendingObserved:    new(model.ObservedState("")),
+		PendingStartedAt:   new(empty),
 	}, "#pending_operation_id = :operation_id",
 		map[string]string{"#pending_operation_id": "pending_operation_id"},
 		map[string]types.AttributeValue{":operation_id": &types.AttributeValueMemberS{Value: operationID}})
