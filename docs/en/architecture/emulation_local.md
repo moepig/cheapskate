@@ -16,7 +16,7 @@ Floci is a LocalStack Community-compatible emulator, adopted after LocalStack Co
 | Health check | `/_localstack/health` |
 | docker socket | Mounted, because the RDS/ECS emulation starts real containers |
 
-The Floci reference pins a manifest digest as well as the `latest` tag. Its port is published on `127.0.0.1` only, all Linux capabilities are dropped, and `no-new-privileges` is set. Both the Compose and testcontainers-go paths apply the same constraints.
+The Floci reference pins a manifest digest as well as the `latest` tag. Its port is published on `127.0.0.1` only. All Linux capabilities are first dropped, then only `CHOWN`, `DAC_OVERRIDE`, `SETGID`, and `SETUID` are restored for the startup handoff that adjusts the socket group, owns the data directory, and permanently changes to the `floci` user. `no-new-privileges` is also set. Both the Compose and testcontainers-go paths apply the same constraints.
 
 > [!WARNING]
 > Mounting the Docker socket gives the container powerful control over the host Docker daemon. It remains because RDS/ECS emulation requires it; never expose the emulator to an untrusted network, and run it only on development or test hosts.

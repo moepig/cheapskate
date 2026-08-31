@@ -9,5 +9,12 @@ services:
     user: root
     cap_drop:
       - ALL
+    # The root entrypoint adjusts the mounted Docker socket's group, chowns /app/data, then
+    # permanently drops to the floci user. Keep only the capabilities required for that handoff.
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - SETGID
+      - SETUID
     security_opt:
       - no-new-privileges:true

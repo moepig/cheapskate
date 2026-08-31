@@ -68,6 +68,9 @@ func startFloci(ctx context.Context) (string, error) {
 		HostConfigModifier: func(hc *container.HostConfig) {
 			hc.Binds = append(hc.Binds, "/var/run/docker.sock:/var/run/docker.sock")
 			hc.CapDrop = append(hc.CapDrop, "ALL")
+			// Floci の entrypoint は docker ソケットのグループ調整とデータ領域の所有者変更を行ったあと、
+			// floci ユーザーへ恒久的に権限を落とす。その引き継ぎに必要な capability だけを戻す。
+			hc.CapAdd = append(hc.CapAdd, "CHOWN", "DAC_OVERRIDE", "SETGID", "SETUID")
 			hc.SecurityOpt = append(hc.SecurityOpt, "no-new-privileges")
 		},
 	}

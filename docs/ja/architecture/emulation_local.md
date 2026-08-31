@@ -16,7 +16,7 @@ LocalStack Community 互換のエミュレータである。LocalStack Community
 | ヘルスチェック | `/_localstack/health` |
 | docker ソケット | マウントする。RDS/ECS のエミュレーションが実コンテナを起動するため |
 
-Floci の参照は `latest` タグだけでなく manifest digest も固定する。ポートは `127.0.0.1` のみに公開し、Linux capability をすべて削除し、`no-new-privileges` を設定する。compose と testcontainers-go の両経路で同じ制約を適用する。
+Floci の参照は `latest` タグだけでなく manifest digest も固定する。ポートは `127.0.0.1` のみに公開し、Linux capability はいったんすべて削除して、起動時のソケットグループ調整、データ領域の所有者変更、`floci` ユーザーへの権限移譲に必要な `CHOWN`、`DAC_OVERRIDE`、`SETGID`、`SETUID` だけを戻す。さらに `no-new-privileges` を設定する。compose と testcontainers-go の両経路で同じ制約を適用する。
 
 > [!WARNING]
 > docker ソケットのマウントは、コンテナからホストの docker デーモンを操作できる強い権限を与える。RDS/ECS エミュレーションに必要なため残しているが、信頼できないネットワークへ公開せず、開発・テスト専用ホストでのみ実行すること。
