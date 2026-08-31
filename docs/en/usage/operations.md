@@ -210,11 +210,13 @@ Deletion never touches an AWS resource. Afterwards the resources are no longer m
 > [!CAUTION]
 > Unless leaving them stopped and unmanaged is the intent, start them with `override running` before `remove` and wait one cycle. An ECS service unmanaged while stopped is left at desiredCount 0 with Auto Scaling 0-0, and there is no way to put it back from cheapskate. For the recovery procedure, see the ECS-specific notes in [troubleshooting.md](troubleshooting.md).
 
-The per-resource `status#` records remain. So do those for resources that no longer match a selector, with no effect on behaviour.
+The per-resource `status#` records remain immediately after deletion, but become eligible for DynamoDB TTL deletion `STATUS_RETENTION_DAYS` after their last status update. Deletion is asynchronous and can take up to 48 hours after expiry. They have no effect on behaviour while they remain.
 
 ```console
 cheapskate-cli doctor --prune   # deletes orphaned records only (touching neither the configuration nor the AWS resources)
 ```
+
+Use `doctor --prune` to remove them before the retention period or to remove existing orphaned status items that have no `expires_at`.
 
 To delete a single one by hand, use the `pk` and `sk` from the `doctor` finding directly as the key.
 

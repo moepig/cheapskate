@@ -36,8 +36,8 @@ func CreateTable(ctx context.Context, db *dynamodb.Client, name string) error {
 		return fmt.Errorf("table %s not active: %w", name, err)
 	}
 
-	// ベストエフォートで実行する
-	// TTL の判定は state.GetOverride と state.ScanAll でも行うため、ここでの失敗は動作に影響しない
+	// DynamoDB Local など TTL API を実装しない開発環境でも初期化を続けるため、ベストエフォートで実行する。
+	// 本番環境ではデプロイ手順で TTL を有効化する。
 	_, _ = db.UpdateTimeToLive(ctx, &dynamodb.UpdateTimeToLiveInput{
 		TableName: &name,
 		TimeToLiveSpecification: &types.TimeToLiveSpecification{

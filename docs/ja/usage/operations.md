@@ -210,11 +210,13 @@ cheapskate-cli clear-override --group dev  # override# だけを削除
 > [!CAUTION]
 > 停止させたまま管理を外す意図がない場合は、`remove` の前に `override running` で起動させ、サイクルを 1 回待つこと。ECS サービスを停止中に管理から外した場合、desiredCount 0 かつ Auto Scaling 0-0 のまま残り、cheapskate 側に戻す手段はない。復旧手順は、[troubleshooting.md](troubleshooting.md) の ECS サービスに固有の事項を参照。
 
-リソースごとの `status#` は残る。セレクタに一致しなくなったリソースの `status#` も同様に残るが、動作への影響はない。
+リソースごとの `status#` は削除直後には残るが、最後の Status 更新から `STATUS_RETENTION_DAYS` が経過すると DynamoDB TTL の削除対象になる。削除は非同期であり、期限後も最大 48 時間残る場合がある。残っている間も動作への影響はない。
 
 ```console
 cheapskate-cli doctor --prune   # 孤立レコードだけを削除する(設定と AWS リソースには触れない)
 ```
+
+保持期間を待たずに削除する場合や、`expires_at` を持たない既存の孤立 Status を削除する場合は `doctor --prune` を用いる。
 
 1 件だけ手動で削除する場合、`doctor` の各 finding の `pk` と `sk` をそのまま鍵として使える。
 

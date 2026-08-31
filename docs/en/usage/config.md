@@ -11,10 +11,11 @@ The variables it reads are given below. It reads no others.
 | `STATE_TABLE_NAME` | yes | DynamoDB table name |
 | `NOTIFICATION_TOPIC_ARN` | no | SNS topic ARN. Empty or unset disables notifications |
 | `DEFAULT_TIMEZONE` | no | The IANA timezone used for cron evaluation (default `UTC`) |
+| `STATUS_RETENTION_DAYS` | no | Days from the last status update until DynamoDB TTL deletion (default `30`). Must be a positive integer |
 | `METRICS_ENABLED` | no | Whether to emit CloudWatch custom metrics (default `false`). A boolean (`true`/`false`, `1`/`0`) |
 | `METRICS_NAMESPACE` | no | The namespace for the CloudWatch metrics (default `cheapskate`) |
 
-A value of `METRICS_ENABLED` that cannot be interpreted (`fasle`, say) fails startup rather than falling back to the default. `METRICS_NAMESPACE` yields the default `cheapskate` whether it is unset or empty, so use `METRICS_ENABLED` to turn metrics off.
+An invalid `STATUS_RETENTION_DAYS` or `METRICS_ENABLED` fails startup rather than falling back to the default. `METRICS_NAMESPACE` yields the default `cheapskate` whether it is unset or empty, so use `METRICS_ENABLED` to turn metrics off.
 
 Disabling metrics loses the trends in failure and action counts. Per-resource and per-group failures do not appear in the built-in Lambda `Errors` metric, so provide SNS or status/log monitoring separately. While disabled, one `metrics-disabled` log line is written per cold start.
 

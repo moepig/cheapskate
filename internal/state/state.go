@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -33,14 +34,33 @@ type Store struct {
 	db              API
 	table           string
 	batchGetBackoff backoff.Exponential
+	statusRetention time.Duration
+	now             func() time.Time
 }
 
-func New(db API, table string) *Store {
-	return &Store{
+// Status に設定する既定の保持期間。
+const DefaultStatusRetention = 30 * 24 * time.Hour
+
+// Store の生成時に内部設定を変更する。
+type StoreOption func(*Store)
+
+// Status の最後の更新から TTL 削除までの保持期間を設定する。
+func WithStatusRetention(retention time.Duration) StoreOption {
+	return func(s *Store) { s.statusRetention = retention }
+}
+
+func New(db API, table string, options ...StoreOption) *Store {
+	s := &Store{
 		db:              db,
 		table:           table,
 		batchGetBackoff: backoff.NewExponential(25*time.Millisecond, time.Second),
+		statusRetention: DefaultStatusRetention,
+		now:             time.Now,
 	}
+	for _, option := range options {
+		option(s)
+	}
+	return s
 }
 
 type GroupRow struct {
@@ -456,6 +476,13 @@ func (s *Store) updateStatus(
 		n, v := fmt.Sprintf("#a%d", i), fmt.Sprintf(":v%d", i)
 		names[n] = attr.name
 		values[v] = &types.AttributeValueMemberS{Value: attr.value}
+		terms = append(terms, n+" = "+v)
+	}
+	if s.statusRetention > 0 {
+		i := len(attrs)
+		n, v := fmt.Sprintf("#a%d", i), fmt.Sprintf(":v%d", i)
+		names[n] = "expires_at"
+		values[v] = &types.AttributeValueMemberN{Value: strconv.FormatInt(s.now().Add(s.statusRetention).Unix(), 10)}
 		terms = append(terms, n+" = "+v)
 	}
 	in := &dynamodb.UpdateItemInput{

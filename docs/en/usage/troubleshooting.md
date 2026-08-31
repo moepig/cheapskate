@@ -67,8 +67,8 @@ The events left behind when processing ends partway, and what each calls for, ar
 | Both Publish attempts for a notification failed | No. The notification is abandoned and AWS actions continue | Monitor `*-notify-abandoned` logs if needed |
 | Stopping ECS failed before the desiredCount update | Yes. The scalable target rolls back to its original min/max automatically | Nothing. Only if the rollback failed too, see [ECS-specific notes](#ecs-specific-notes) |
 | A resource is stuck mid-transition | No. It is skipped on every cycle | See [Resources stuck mid-transition](#resources-stuck-mid-transition) |
-| A group was deleted but `override#` / `status#` remain | No | `doctor --prune` |
-| A `status#` remains for a resource whose tag was removed | No (with no effect on behaviour) | `doctor --prune` |
+| A group was deleted but `override#` / `status#` remain | DynamoDB TTL deletes records with `expires_at` after expiry | Retry `remove` or use `doctor --prune` |
+| A `status#` remains for a resource whose tag was removed | DynamoDB TTL deletes it after the retention period from its last update | Use `doctor --prune` for immediate deletion |
 | Selectors collide and one group is being ignored | No | See [Selector collisions](#selector-collisions) |
 | An ECS service was unmanaged while stopped | No. It stays at desiredCount 0 / Auto Scaling 0-0 | See [ECS-specific notes](#ecs-specific-notes) |
 
@@ -83,6 +83,8 @@ cheapskate-cli doctor --stuck-after 2h     # change the limit for counting as tr
 ```
 
 In the web console, the diagnostics page shows the same results and deletes orphaned records under the same conditions.
+
+TTL deletion is asynchronous and can take up to 48 hours after expiry. Existing status items with no `expires_at` are ineligible for automatic deletion; use `doctor --prune` for orphaned items that will receive no further updates.
 
 The `kind` values reported, and whether `--prune` acts on them, are collected below.
 
@@ -156,7 +158,7 @@ To take a group out of the managed set, delete its configuration records.
 cheapskate-cli remove --group dev
 ```
 
-Deletion goes `override#` → `status#group#` → `group#`, so a failure partway leaves the group itself in place and a retry can still reach it. The per-resource `status#` records remain; use `doctor --prune` to remove them.
+Deletion goes `override#` → `status#group#` → `group#`, so a failure partway leaves the group itself in place and a retry can still reach it. Per-resource `status#` records remain immediately after deletion, but DynamoDB TTL removes them after the retention period. Use `doctor --prune` to remove them immediately.
 
 Deletion never touches an AWS resource. Afterwards the resources stay exactly as cheapskate last left them.
 

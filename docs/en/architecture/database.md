@@ -11,7 +11,7 @@ What the table is required to provide is given below.
 | Partition key | `pk` (String) |
 | Sort key | `sk` (String) |
 | GSI / LSI | none |
-| TTL | attribute `expires_at` (Number, epoch seconds). Overrides and the reconcile lease carry it |
+| TTL | attribute `expires_at` (Number, epoch seconds). Overrides, status items, and the reconcile lease carry it |
 
 ## The item kinds
 
@@ -77,8 +77,9 @@ The domain representation is `model.Status`. The values are a snapshot taken whe
 | `pending_operation_id` | S | The operation ID written before an AWS action. Non-empty means completion is awaiting confirmation |
 | `pending_action` / `pending_desired` / `pending_observed` | S | The pending action, its target, and the observation before it ran |
 | `pending_started_at` | S | When the pending operation started (RFC3339) |
+| `expires_at` | N | Epoch seconds at the last status update plus `STATUS_RETENTION_DAYS`. The attribute DynamoDB TTL acts on |
 
-Status is latest-only, not a history. Before an AWS action, the pending attributes are written conditionally. Afterwards, the same operation ID is required to advance the item to the last-action state. If Lambda stops between these steps, the next invocation confirms completion from the AWS observation instead of repeating the action. Notifications are not stored in status. See [Reconcile persistence boundaries](../development/reconcile.md) for the persistence and notification boundaries.
+Status is latest-only, not a history. Every update extends `expires_at`; DynamoDB TTL deletes status items that stop receiving updates after the retention period. Before an AWS action, the pending attributes are written conditionally. Afterwards, the same operation ID is required to advance the item to the last-action state. If Lambda stops between these steps, the next invocation confirms completion from the AWS observation instead of repeating the action. Notifications are not stored in status. See [Reconcile persistence boundaries](../development/reconcile.md) for the persistence and notification boundaries.
 
 `<type>#<ref>` is the identifier produced by `model.Resource.ID()`, which `internal/aws/tagging` derives from the ARN. The form of `ref` per type is given below.
 
@@ -97,7 +98,9 @@ The attributes to update are given by `state.StatusPatch`. Every field is a poin
 
 ### Deletion
 
-The item for a resource that no longer matches a selector is not deleted automatically, and leaving it has no effect on behaviour. The only deletion is the orphan pruning that goes through the diagnosis; its criteria and scope are described in [overview.md](overview.md).
+An item that stops receiving updates, for example because its resource no longer matches a selector, becomes eligible for DynamoDB TTL deletion after the retention period. Deletion is asynchronous and the item can remain for up to 48 hours after expiry. To remove it before the retention period elapses, use the diagnosis-driven orphan pruning described in [overview.md](overview.md).
+
+An existing status item with no `expires_at` is not eligible for TTL deletion. The reconciler assigns an expiry when it updates the item; use `doctor --prune` for existing orphaned status items that receive no further updates.
 
 ## `STATUS#group#<name>` / `CURRENT` — per-group results
 

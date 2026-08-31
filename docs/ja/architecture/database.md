@@ -11,7 +11,7 @@ state を保持する DynamoDB テーブル 1 つのキー配置とアイテム�
 | パーティションキー | `pk`(String) |
 | ソートキー | `sk`(String) |
 | GSI / LSI | なし |
-| TTL | 属性 `expires_at`(Number、epoch 秒)。override と reconcile リースが持つ |
+| TTL | 属性 `expires_at`(Number、epoch 秒)。override、Status、reconcile リースが持つ |
 
 ## アイテム種別一覧
 
@@ -77,8 +77,9 @@ state を保持する DynamoDB テーブル 1 つのキー配置とアイテム�
 | `pending_operation_id` | S | AWS 操作の前に記録する操作 ID。空でなければ完了確認待ち |
 | `pending_action` / `pending_desired` / `pending_observed` | S | 未完了操作のアクション、目的、操作前の観測値 |
 | `pending_started_at` | S | 未完了操作の開始時刻(RFC3339) |
+| `expires_at` | N | 最後の Status 更新時刻に `STATUS_RETENTION_DAYS` を加えた epoch 秒。DynamoDB TTL の対象属性 |
 
-Status は履歴ではなく最新値 1 件だけを保持する。AWS 操作の前に pending 属性を条件付きで保存し、操作後は同じ操作 ID を条件に last 属性へ進める。途中で Lambda が終了した場合、次回は AWS の観測結果から完了を確定し、同じ操作を再実行しない。通知は Status に保持しない。永続化と通知の境界は、[Reconcile の永続化境界](../development/reconcile.md) を参照。
+Status は履歴ではなく最新値 1 件だけを保持する。更新のたびに `expires_at` を延長し、更新されなくなった Status は保持期間後に DynamoDB TTL が削除する。AWS 操作の前に pending 属性を条件付きで保存し、操作後は同じ操作 ID を条件に last 属性へ進める。途中で Lambda が終了した場合、次回は AWS の観測結果から完了を確定し、同じ操作を再実行しない。通知は Status に保持しない。永続化と通知の境界は、[Reconcile の永続化境界](../development/reconcile.md) を参照。
 
 `<種別>#<ref>` は `model.Resource.ID()` が生成する識別子であり、`internal/aws/tagging` が ARN から導出する。種別ごとの `ref` の形式を、以下に示す。
 
@@ -97,7 +98,9 @@ Status は履歴ではなく最新値 1 件だけを保持する。AWS 操作の
 
 ### 削除
 
-セレクタに一致しなくなったリソースのアイテムは自動削除されない。残存しても動作に影響しない。削除を行うのは診断経由の孤立レコード削除のみであり、その判定条件と削除範囲は [overview.md](overview.md) にある。
+セレクタに一致しなくなるなどして更新が止まったアイテムは、最後の更新から保持期間が経過すると DynamoDB TTL の削除対象になる。削除は非同期であり、期限後も最大 48 時間残る場合がある。保持期間より前に削除する場合は、[overview.md](overview.md) に示す診断経由の孤立レコード削除を用いる。
+
+`expires_at` を持たない既存の Status は TTL の対象外である。reconciler が更新すると期限が設定されるが、更新されない既存の孤立 Status は `doctor --prune` で削除する。
 
 ## `STATUS#group#<名前>` / `CURRENT` — グループ単位の実行結果
 

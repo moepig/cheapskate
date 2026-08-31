@@ -29,11 +29,11 @@ func stored(db *mocks.DynaStore, k itemKey) map[string]types.AttributeValue {
 	return db.Item(k.PK, k.SK)
 }
 
-func newFixture(t *testing.T) (*mocks.DynaStore, *Store) {
+func newFixture(t *testing.T, options ...StoreOption) (*mocks.DynaStore, *Store) {
 	t.Helper()
 	ctrl := gomock.NewController(t)
 	api, db := mocks.NewDynaStore(ctrl)
-	return db, New(api, "t")
+	return db, New(api, "t", options...)
 }
 
 func seedGroup(db *mocks.DynaStore, name string, mode model.Mode, desired model.DesiredState) {
@@ -430,6 +430,23 @@ func TestUpdateStatusDistinguishesClearFromUntouched(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, got.LastError, "空文字を指すポインタは属性を消す")
 	assert.Equal(t, model.ActionStop, got.LastAction, "パッチに含めなかった属性は触らない")
+}
+
+// Status の更新は expires_at を最後の更新時刻から保持期間後へ進める
+// 更新されなくなった Status を DynamoDB TTL の自動削除対象とし、孤立 Status の蓄積を避ける
+func TestStatusUpdateSetsAndRefreshesExpiration(t *testing.T) {
+	db, st := newFixture(t, WithStatusRetention(7*24*time.Hour))
+	current := time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)
+	st.now = func() time.Time { return current }
+
+	require.NoError(t, st.UpdateStatus(context.Background(), "rds-instance#a", StatusPatch{LastError: Set("first")}))
+	item := stored(db, statusKey("rds-instance#a"))
+	assert.Equal(t, fmt.Sprint(current.Add(7*24*time.Hour).Unix()), item["expires_at"].(*types.AttributeValueMemberN).Value)
+
+	current = current.Add(2 * 24 * time.Hour)
+	require.NoError(t, st.UpdateStatus(context.Background(), "rds-instance#a", StatusPatch{LastError: Set("second")}))
+	item = stored(db, statusKey("rds-instance#a"))
+	assert.Equal(t, fmt.Sprint(current.Add(7*24*time.Hour).Unix()), item["expires_at"].(*types.AttributeValueMemberN).Value)
 }
 
 // 削除は pk の組み立てのみを行うが、種別ごとの接頭辞が正しくない場合、対象のアイテムが残り、対象外のアイテムが削除される

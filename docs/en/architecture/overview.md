@@ -110,7 +110,7 @@ The verdict rests on both a Scan of the whole table and discovery for every grou
 
 Only records whose subject is proven absent by the Scan and the discovery alone may be deleted. Configuration itself, anything requiring human judgement, and the AWS resources are never touched.
 
-The reconciler does not delete orphaned `status#` records for the same reason. Discovery results lag behind through the Tagging API, so the match situation observed mid-reconcile is not grounds for deleting an audit record.
+For the same reason, the reconciler does not immediately delete a `status#` record based on the matches seen during reconciliation. Instead, every status update extends its expiry and DynamoDB TTL deletes an item that has not been updated for the retention period. This does not use a temporary Tagging API lag as an orphan verdict.
 
 ## Repository layout
 

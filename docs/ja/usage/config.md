@@ -11,10 +11,11 @@
 | `STATE_TABLE_NAME` | はい | DynamoDB テーブル名 |
 | `NOTIFICATION_TOPIC_ARN` | いいえ | SNS トピック ARN。空または未設定で通知を無効にする |
 | `DEFAULT_TIMEZONE` | いいえ | cron 評価に使う IANA タイムゾーン(既定 `UTC`) |
+| `STATUS_RETENTION_DAYS` | いいえ | Status の最後の更新から DynamoDB TTL による削除までの日数(既定 `30`)。正の整数で指定する |
 | `METRICS_ENABLED` | いいえ | CloudWatch カスタムメトリクスを発行するか(既定 `false`)。真偽値(`true`/`false`、`1`/`0`) |
 | `METRICS_NAMESPACE` | いいえ | CloudWatch メトリクスの名前空間(既定 `cheapskate`) |
 
-`METRICS_ENABLED` が解釈できない値(`fasle` など)である場合、既定値へ倒さず起動を失敗させる。`METRICS_NAMESPACE` は未設定でも空文字列でも既定の `cheapskate` となるため、メトリクスの無効化には `METRICS_ENABLED` を用いる。
+`STATUS_RETENTION_DAYS` または `METRICS_ENABLED` が解釈できない場合、既定値へ倒さず起動を失敗させる。`METRICS_NAMESPACE` は未設定でも空文字列でも既定の `cheapskate` となるため、メトリクスの無効化には `METRICS_ENABLED` を用いる。
 
 メトリクスを無効にすると、失敗件数とアクション件数の推移が観測できなくなる。リソース単位・グループ単位の失敗は Lambda 組み込みの `Errors` には現れないため、SNS または Status／ログの監視を別途用意する。無効時は、コールドスタートごとに `metrics-disabled` のログを 1 行出力する。
 

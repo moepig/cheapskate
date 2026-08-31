@@ -67,8 +67,8 @@ aws cloudwatch put-metric-alarm --alarm-name cheapskate-reconcile-errors \
 | 通知の Publish が 2 回失敗した | 解消しない。通知の送信を打ち切り、AWS 操作は続行する | 必要に応じて `*-notify-abandoned` ログを監視する |
 | ECS の停止が desiredCount 更新の手前で失敗した | 解消する。スケーラブルターゲットは元の min/max へ自動で巻き戻る | なし。巻き戻しにも失敗した場合のみ [ECS サービスに固有の事項](#ecs-サービスに固有の事項) |
 | リソースが遷移中のまま停止した | 解消しない。毎サイクル skip され続ける | [遷移中のまま停止したリソース](#遷移中のまま停止したリソース) |
-| グループを削除したが `override#` / `status#` が残った | 解消しない | `doctor --prune` |
-| タグを外したリソースの `status#` が残った | 解消しない(動作への影響はない) | `doctor --prune` |
+| グループを削除したが `override#` / `status#` が残った | `expires_at` のあるレコードは期限後に DynamoDB TTL が削除する | `remove` の再実行または `doctor --prune` |
+| タグを外したリソースの `status#` が残った | 最後の更新から保持期間後に DynamoDB TTL が削除する | すぐに削除する場合は `doctor --prune` |
 | セレクタが重複して片方のグループが無視されている | 解消しない | [セレクタの重複](#セレクタの重複) |
 | ECS サービスを停止中に管理から外した | 解消しない。desiredCount 0 / Auto Scaling 0-0 のまま残る | [ECS サービスに固有の事項](#ecs-サービスに固有の事項) |
 
@@ -83,6 +83,8 @@ cheapskate-cli doctor --stuck-after 2h     # 遷移中とみなす上限を変�
 ```
 
 Web コンソールでは、diagnostics ページが同一の診断結果を表示し、同一の条件で孤立レコードを削除する。
+
+TTL の削除は非同期であり、期限後も最大 48 時間かかる場合がある。`expires_at` を持たない既存の Status は自動削除の対象外であるため、更新されない孤立 Status は `doctor --prune` で削除する。
 
 報告される `kind` と、`--prune` の対象かどうかを、以下にまとめる。
 
@@ -156,7 +158,7 @@ cheapskate-cli pin --group dev running     # disable を実行済みの場合
 cheapskate-cli remove --group dev
 ```
 
-`override#` → `status#group#` → `group#` の順に削除するため、途中で失敗してもグループ本体が残り、再試行で到達できる。リソース単位の `status#` は残るため、削除する場合は `doctor --prune` を用いる。
+`override#` → `status#group#` → `group#` の順に削除するため、途中で失敗してもグループ本体が残り、再試行で到達できる。リソース単位の `status#` は削除直後には残るが、保持期間後に DynamoDB TTL が削除する。すぐに削除する場合は `doctor --prune` を用いる。
 
 削除は AWS リソースに一切触れない。削除後もリソースは cheapskate が最後に置いた状態のまま残る。
 
