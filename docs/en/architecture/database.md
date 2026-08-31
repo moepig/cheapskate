@@ -8,32 +8,34 @@ What the table is required to provide is given below.
 
 | Item | Value |
 |---|---|
-| Partition key | `pk` (String) only |
-| Sort key | none |
+| Partition key | `pk` (String) |
+| Sort key | `sk` (String) |
 | GSI / LSI | none |
 | Billing mode | any (on-demand recommended) |
-| TTL | attribute `expires_at` (Number, epoch seconds). Only `override#` items carry it |
+| TTL | attribute `expires_at` (Number, epoch seconds). Overrides and the reconcile lease carry it |
 
-With no sort key, the item kind and its subject are encoded entirely in the `pk` string: a prefix (`group#` / `override#` / `status#`) and what follows it.
+Configuration shares `pk=CONFIG`, with `GROUP#` / `OVERRIDE#` in `sk`. Each status has `pk=STATUS#<resource ID>` and places its current value at `sk=CURRENT`. The full-reconcile lease is `pk=LOCK, sk=RECONCILE`.
 
 ## The item kinds
 
-Four kinds of item are stored. The form of the `pk` for each, together with its writers and readers, is collected below.
+Five kinds of item are stored. Their keys, writers, and readers are collected below.
 
-| Item | `pk` form | Writer | Reader |
-|---|---|---|---|
-| Group configuration | `group#<name>` | `cheapskate-cli` / web console | reconciler, CLI, web console |
-| Override | `override#<name>` | Same as above | Same as above |
-| Status (per resource) | `status#<type>#<ref>` | reconciler | CLI, web console |
-| Status (per group) | `status#group#<name>` | reconciler | CLI, web console |
+| Item | `pk` | `sk` | Writer | Reader |
+|---|---|---|---|---|
+| Group configuration | `CONFIG` | `GROUP#<name>` | `cheapskate-cli` / web console | reconciler, CLI, web console |
+| Override | `CONFIG` | `OVERRIDE#<name>` | Same as above | Same as above |
+| Status (per resource) | `STATUS#<type>#<ref>` | `CURRENT` | reconciler | CLI, web console |
+| Status (per group) | `STATUS#group#<name>` | `CURRENT` | reconciler | CLI, web console |
+| Reconcile lease | `LOCK` | `RECONCILE` | reconciler | reconciler |
 
 ## group# — group configuration
 
-The domain representation is `model.GroupSpec`. The group name is held in the `Name` field rather than derived from the `pk`. The attributes are given below.
+The domain representation is `model.GroupSpec`. Storage puts the group name in `sk`, and reading restores it to the `Name` field. The attributes are given below.
 
 | Attribute | Type | Meaning |
 |---|---|---|
-| `pk` | S | `group#<name>` |
+| `pk` | S | `CONFIG` |
+| `sk` | S | `GROUP#<name>` |
 | `mode` | S | `pinned` \| `schedule` \| `disabled`. Unset is treated as `disabled` |
 | `desired` | S | Meaningful only with `mode: pinned`. `running` \| `stopped` |
 | `start_cron` / `stop_cron` | S | Only with `mode: schedule`. Five-field cron expressions |
@@ -41,7 +43,7 @@ The domain representation is `model.GroupSpec`. The group name is held in the `N
 | `tag_key` / `tag_value` | S | The selector's tag condition |
 | `types` | SS | The resource types the selector targets |
 
-A group name matches `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`. Neither `#` nor `/` may appear: `#` is the `pk` separator, and `/` can collide with an ECS `ref`.
+A group name matches `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`. Neither `#` nor `/` may appear: `#` is the `sk` separator, and `/` can collide with an ECS `ref`.
 
 A group may be created with no selector (`tag_key`, `tag_value`, and `types` all empty), but setting `mode` to `pinned` or `schedule` requires one. An empty StringSet cannot be represented in DynamoDB, so with no selector the `types` attribute is omitted entirely.
 
@@ -51,7 +53,8 @@ The domain representation is `model.Override`. The attributes are given below.
 
 | Attribute | Type | Meaning |
 |---|---|---|
-| `pk` | S | `override#<name>` |
+| `pk` | S | `CONFIG` |
+| `sk` | S | `OVERRIDE#<name>` |
 | `desired` | S | `running` \| `stopped` |
 | `expires_at` | N | epoch seconds. The attribute DynamoDB TTL acts on |
 
@@ -63,21 +66,30 @@ The domain representation is `model.Status`. The values are a snapshot taken whe
 
 | Attribute | Type | Meaning |
 |---|---|---|
+| `pk` | S | `STATUS#<resource ID>` |
+| `sk` | S | `CURRENT` |
 | `observed_state` | S | The actual state observed at the time of the last action |
 | `last_action` | S | The last action performed |
+| `last_desired` | S | The desired state targeted by the last action |
 | `last_action_at` | S | When that happened (RFC3339) |
 | `last_error` | S | The last error |
 | `last_error_at` | S | When that happened (RFC3339) |
 | `transitioning_since` | S | When the ongoing transition started (RFC3339). Unlike the other attributes this is not a snapshot: it disappears once the transition resolves |
+| `pending_operation_id` | S | The operation ID written before an AWS action. Non-empty means completion is awaiting confirmation |
+| `pending_action` / `pending_desired` / `pending_observed` | S | The pending action, its target, and the observation before it ran |
+| `pending_started_at` | S | When the pending operation started (RFC3339) |
+| `notification_pending` | S | The operation ID whose notification must be retried |
+
+Status is latest-only, not a history. Before an AWS action, the pending attributes are written conditionally. Afterwards, the same operation ID is required to advance the item to the last-action and notification-pending state. If Lambda stops between these steps, the next invocation confirms completion from the AWS observation instead of repeating the action. Notifications include `operation_id`; a successful Publish clears the marker, so stopping before that clear causes a retry with the same ID.
 
 `<type>#<ref>` is the identifier produced by `model.Resource.ID()`, which `internal/aws/tagging` derives from the ARN. The form of `ref` per type is given below.
 
 | Type | `ref` form | Example `pk` |
 |---|---|---|
-| `rds-instance` | DB instance identifier | `status#rds-instance#dev-db` |
-| `rds-cluster` | Cluster identifier | `status#rds-cluster#dev-cluster` |
-| `ecs-service` | `<cluster name>/<service name>` | `status#ecs-service#dev-cluster/api` |
-| `ec2-instance` | Instance ID | `status#ec2-instance#i-0abc123` |
+| `rds-instance` | DB instance identifier | `STATUS#rds-instance#dev-db` |
+| `rds-cluster` | Cluster identifier | `STATUS#rds-cluster#dev-cluster` |
+| `ecs-service` | `<cluster name>/<service name>` | `STATUS#ecs-service#dev-cluster/api` |
+| `ec2-instance` | Instance ID | `STATUS#ec2-instance#i-0abc123` |
 
 ### Writing
 
@@ -97,16 +109,21 @@ The attribute shape is identical to `status#<type>#<ref>`. Its subject is the pr
 
 Selector collisions are recorded here rather than on the resource side. Written to a shared item, the error clearing by the group that owns the resource and the error recording by the groups that lose the tie would alternate on the same item every cycle, and the notifications would flap.
 
+## Reconcile lease
+
+`LOCK` / `RECONCILE` is a lease preventing two full reconciles from running at once. It holds an invocation-specific `owner` and an `expires_at` timestamp. Acquisition is an `UpdateItem` conditioned on the item being absent or expired; release is a `DeleteItem` conditioned on matching the owner. An invocation that cannot acquire it performs no configuration read or AWS call and returns success.
+
 ## Read/write matrix
 
 Which components may read and write each kind of item is collected below.
 
 | Item | reconciler | `cheapskate-cli` / web console |
 |---|---|---|
-| `group#<name>` | read only | read/write, deleted when the group is deleted |
-| `override#<name>` | read only | read/write, deleted on explicit clearing and when the group is deleted |
-| `status#<type>#<ref>` | write only | read only, deletes orphans only |
-| `status#group#<name>` | write only | read only, deletes when the group is deleted and for orphans only |
+| Group configuration | read only | read/write, deleted when the group is deleted |
+| Override | read only | read/write, deleted on explicit clearing and when the group is deleted |
+| Resource status | read/write | read only, deletes orphans only |
+| Group status | read/write | read only, deletes when the group is deleted and for orphans only |
+| Reconcile lease | read/write/delete | no access |
 
 Three layers hold this separation in place. What each layer guarantees is given below.
 
@@ -114,8 +131,10 @@ Three layers hold this separation in place. What each layer guarantees is given 
 |---|---|
 | Types | The window onto `internal/state` is an interface declaring only what each consumer needs. `reconcile.Store` has no `PutGroup`/`PutOverride`, and `groups.Store` and `doctor.Store` have no `UpdateStatus` |
 | Code | As a result, neither a path from the reconciler that writes configuration nor a path from the CLI or web console that writes status will compile |
-| IAM | The reconciler's execution role is granted no `dynamodb:PutItem`, and its `UpdateItem` is confined to `status#*` by a `dynamodb:LeadingKeys` condition. The CLI and web console roles are granted no `UpdateItem` |
+| IAM | Reconciler `UpdateItem` is confined to `STATUS#*` and `LOCK`, and `DeleteItem` to `LOCK`. The CLI and web console can alter only `CONFIG` |
 
 ## Access patterns
 
-With no sort key and no GSI, fetching every attribute of one group would take three `GetItem` calls. To avoid that, any operation that reads the whole table is completed in a single `Scan` (with pagination), telling the kinds apart by `pk` prefix and joining them in memory by group name. Operating on one group alone uses `GetItem` and `PutItem`.
+Normal lists and reconciles use a strongly consistent `Query` on `pk=CONFIG`, then strongly consistent `BatchGetItem` requests—at most 100 keys each—for only the statuses they need. A full-table `Scan` is reserved for `doctor`. Displaying one group reads its configuration, override, and group status in one `BatchGetItem`.
+
+Group configuration changes are attribute-level `UpdateItem` requests. Concurrent changes to different attributes are retained; for the same attribute, the last write wins. No read-followed-by-wholesale-replacement is used.

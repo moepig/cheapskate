@@ -46,7 +46,7 @@ tgt := &RdsInstanceTarget{Client: c}
 
 ### 例外: `internal/state/mocks/dynastore.go`
 
-同じ `mocks` パッケージ内にあるが手書きである。生成された `MockAPI` をインメモリテーブルに接続し、実際の Scan/GetItem/PutItem/UpdateItem/DeleteItem と同じ振る舞いを与える。テーブル操作の口を、以下に示す。
+同じ `mocks` パッケージ内にあるが手書きである。生成された `MockAPI` をインメモリテーブルに接続し、実際の Query/Scan/BatchGetItem/GetItem/PutItem/UpdateItem/DeleteItem と同じ振る舞いを与える。テーブル操作の口を、以下に示す。
 
 ```go
 api, db := mocks.NewDynaStore(ctrl)      // api を state.New に渡し、db でテーブルを操作する

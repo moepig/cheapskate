@@ -46,7 +46,7 @@ tgt := &RdsInstanceTarget{Client: c}
 
 ### The exception: `internal/state/mocks/dynastore.go`
 
-It sits in the same `mocks` package but is hand-written. It connects the generated `MockAPI` to an in-memory table and gives it the same behaviour as real Scan/GetItem/PutItem/UpdateItem/DeleteItem. Its handles for operating on the table are given below.
+It sits in the same `mocks` package but is hand-written. It connects the generated `MockAPI` to an in-memory table and gives it the same behaviour as real Query/Scan/BatchGetItem/GetItem/PutItem/UpdateItem/DeleteItem. Its handles for operating on the table are given below.
 
 ```go
 api, db := mocks.NewDynaStore(ctrl)      // pass api to state.New and operate the table through db

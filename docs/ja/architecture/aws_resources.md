@@ -20,11 +20,11 @@ flowchart LR
         aws.rds イベント"]
         fn["Reconciler Lambda
         (コンテナイメージ,
-        予約同時実行数 1)"]
+        予約同時実行数 1 を推奨)"]
         role["実行ロール
         (lambda.amazonaws.com)"]
         ddb[("DynamoDB state テーブル
-        group# / override# / status#")]
+        CONFIG / STATUS# / LOCK")]
         tagapi["Resource Groups
         Tagging API
         (GetResources, 読み取り専用)"]
@@ -39,7 +39,7 @@ flowchart LR
         logs["CloudWatch Logs"]
     end
 
-    ops -- "group# / override# を書き込む" --> ddb
+    ops -- "CONFIG パーティションへ書き込む" --> ddb
 
     schedrole -. "lambda:InvokeFunction" .-> sched
     sched -- "Input: {}" --> fn
@@ -47,7 +47,8 @@ flowchart LR
     (ロールなし)" --> fn
 
     fn -. 引き受け .-> role
-    role -- "Scan/GetItem/PutItem/UpdateItem" --> ddb
+    role -- "Query/BatchGetItem/GetItem/
+    PutItem/UpdateItem/DeleteItem" --> ddb
     role -- "GetResources" --> tagapi
     role -- "Describe/Stop/Start" --> rds
     role -- "DescribeServices/UpdateService" --> ecs
@@ -73,8 +74,8 @@ flowchart LR
 
 | リソース | 役割 | 必須 |
 |---|---|---|
-| DynamoDB state テーブル | 望ましい状態(`group#`/`override#`)と reconciler が書く実行結果(`status#`)を保持する唯一の永続ストア | 必須 |
-| Reconciler Lambda(コンテナイメージ) | reconcile ループの実体。予約同時実行数 1 で多重実行を排除する | 必須 |
+| DynamoDB state テーブル | `CONFIG` に望ましい状態、`STATUS#` に実行結果、`LOCK` に排他リースを保持する唯一の永続ストア | 必須 |
+| Reconciler Lambda(コンテナイメージ) | reconcile ループの実体。DynamoDB のグローバルリースで多重実行を排除する。予約同時実行数 1 も、不要な起動と課金を抑えるために推奨する | 必須 |
 | Lambda 実行ロール | DynamoDB の読み書き、`tag:GetResources`、RDS/ECS/EC2 の Describe と制御系 API、Application Auto Scaling、(設定時)`sns:Publish`、CloudWatch Logs | 必須 |
 | EventBridge Scheduler(`rate(5 minutes)`) | 定期 reconcile のトリガー。`{}` を渡す | 必須 |
 | EventBridge ルール(`aws.rds` イベント) | RDS 自動起動イベント受信時に即時 reconcile をトリガーする。ターゲット呼び出しは Lambda のリソースベースポリシーで許可し、ルール側に IAM ロールを要しない | 必須 |
@@ -114,7 +115,8 @@ flowchart LR
     apigw -- "プロキシイベント
     (Lambda Web Adapter が HTTP 化)" --> fn
     fn -. 引き受け .-> role
-    role -- "Scan/GetItem/PutItem/DeleteItem" --> ddb
+    role -- "Scan/Query/BatchGetItem/GetItem/
+    PutItem/UpdateItem/DeleteItem" --> ddb
     role -- "GetResources" --> tagapi
     role -- "CreateLogGroup/Stream,
     PutLogEvents" --> logs
@@ -130,8 +132,8 @@ flowchart LR
 | API Gateway REST API(v1) | ブラウザからの唯一の入口。IP 制限に必要なリソースポリシーが HTTP API(v2)に無いため v1 を使う |
 | リソースポリシー(IP 許可リスト) | 唯一のアクセス制御 |
 | Webconsole Lambda | reconciler とは別のコンテナイメージから作る別関数 |
-| Lambda 実行ロール | state テーブルへの `dynamodb:Scan/GetItem/PutItem/DeleteItem`、リソース種別ごとの `Describe*`、`tag:GetResources`、CloudWatch Logs。RDS/ECS/EC2 の制御系権限は持たない |
-| DynamoDB state テーブル | reconcile ループと同一のテーブル。`group#`/`override#` を書き、`status#` は読むのと孤立レコードの削除のみ行う |
+| Lambda 実行ロール | state テーブルへの `dynamodb:Scan/Query/BatchGetItem/GetItem/PutItem/UpdateItem/DeleteItem`、リソース種別ごとの `Describe*`、`tag:GetResources`、CloudWatch Logs。Scan は diagnostics だけが使い、RDS/ECS/EC2 の制御系権限は持たない |
+| DynamoDB state テーブル | reconcile ループと同一のテーブル。`CONFIG` の設定を書き、`STATUS#` は読み取りと孤立レコードの削除だけを行う |
 | Resource Groups Tagging API | グループページでの検出リソース一覧表示に使う |
 
 デプロイは任意である。ローカルで動かす場合、この節の AWS リソースは不要となる。

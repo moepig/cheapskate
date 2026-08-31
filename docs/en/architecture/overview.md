@@ -27,15 +27,16 @@ For the design of `cheapskate-cli` see [cheapskate-cli.md](cheapskate-cli.md), a
 
 ## Data model
 
-The state lives in a single DynamoDB table. There are three kinds of item; their contents and writers are given below.
+The state lives in a single DynamoDB table. There are four kinds of item; their contents and writers are given below.
 
 | Item | Content | Writer |
 |---|---|---|
-| `group#<name>` | How the group's desired state is decided, and its selector | `cheapskate-cli` / web console / IaC |
-| `override#<name>` | A time-limited override of the desired state | Same as above |
-| `status#<...>` | The reconciler's results (last action, last error, ongoing transition) | reconciler |
+| `CONFIG` / `GROUP#<name>` | How the group's desired state is decided, and its selector | `cheapskate-cli` / web console / IaC |
+| `CONFIG` / `OVERRIDE#<name>` | A time-limited override of the desired state | Same as above |
+| `STATUS#<resource_id>` / `CURRENT` | The reconciler's results (last action, last error, ongoing operation) | reconciler |
+| `LOCK` / `RECONCILE` | The lease that excludes overlapping full reconciles | reconciler |
 
-The items written by the configuration side and those written by the reconciler never overlap. Because of that separation, managing `group#` with IaC does not drift against the reconciler's writes. For details, see the key layout, attributes, and read/write matrix in [database.md](database.md).
+The items written by the configuration side and those written by the reconciler never overlap. Because of that separation, managing group configuration with IaC does not drift against the reconciler's writes. For details, see the key layout, attributes, and read/write matrix in [database.md](database.md).
 
 ## Resolving the desired state
 
@@ -52,7 +53,7 @@ Cron evaluation compares the most recent past firing time of `start_cron` and of
 
 ## The reconcile loop
 
-One invocation begins with a single Scan of the whole table and processes every group. The work for one group is as follows.
+One invocation acquires a global lease in the table, queries the `CONFIG` partition, batch-gets the required status records, and processes every group. If another invocation owns the lease, it returns successfully without reading or mutating AWS resources. The work for one group is as follows.
 
 ```
 desired = resolve desired state       # if disabled, skip without discovering
@@ -81,7 +82,9 @@ The rules the loop follows, and the reasoning behind each, are collected below.
 | When several groups' selectors match the same resource, the group that sorts first by name manages it | The owner has to be decided unambiguously |
 | The groups that lose the tie record the whole cycle's duplicates as a single entry on their own `status#group#<name>` | It keeps that record separate from the resource-side `status#` that the owning group writes |
 | Group-level failures (an invalid cron or timezone, a discovery failure, a selector collision) are recorded on `status#group#<name>` and notified, and are cleared exactly once, after all of that group's work is finished | It avoids the notification flapping that comes from recording and clearing within the same cycle |
-| On a cycle with one or more per-resource failures, the loop runs to completion and the handler then returns an error | Whether to swallow a failure and whether to report it to the caller are separate questions |
+| Even with per-resource failures, the loop runs to completion and Lambda returns success | This avoids an EventBridge retry of the entire cycle; status, logs, SNS, and optional custom metrics report the failed resources |
+
+Immediately before an action, the reconciler conditionally records a pending operation with a unique `operation_id` in status, and marks it complete after success. If execution stops before the completion write, the next cycle resolves the outcome from the observed state instead of sending the same action again. Notification retry state and the `operation_id` are durable in the same status record.
 
 ### Operations per resource type
 

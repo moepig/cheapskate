@@ -36,7 +36,7 @@ CLI 固有のデータアクセスコードは持たない。
 | `set-selector` | `group#` のセレクタを設定する。グループが無ければ `mode: disabled` で作成する | 行わない |
 | `pin` / `unpin` / `schedule` / `disable` | `group#` の `mode` と関連属性を更新する | 行わない |
 | `override` / `clear-override` | `override#` の PUT(TTL 付き)と DELETE | 行わない |
-| `list` | テーブル全体の 1 回の Scan | 行わない |
+| `list` | `CONFIG` パーティションの Query と対応する Status の BatchGetItem | 行わない |
 | `show` | 1 グループの設定 + override + 検出したリソース(状態付き) | 対象グループのみ |
 | `remove` | グループの `group#`/`override#`/`status#group#` を削除する | 行わない |
 | `doctor` | テーブルの不整合を診断する。`--prune` を付けたときだけ孤立レコードを削除する | 全グループ |

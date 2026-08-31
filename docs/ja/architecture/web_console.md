@@ -33,7 +33,7 @@ reconciler とは別のコンテナイメージを、別の Lambda 関数とし�
 | 認証 | 無し。アクセス制御は API Gateway リソースポリシーの IP 許可リストのみであり、許可 CIDR 内の全員が操作できる |
 | CSRF | `POST` で `Origin` / `Sec-Fetch-Site` ヘッダを検証し、same-origin 以外を拒否する |
 | CSP | `default-src 'none'`、`frame-ancestors 'none'` 等 |
-| 権限 | 実行ロールは state テーブルへの `dynamodb:Scan/GetItem/PutItem/DeleteItem`、リソース種別ごとの `Describe*`、`tag:GetResources` のみを持つ |
+| 権限 | 実行ロールは state テーブルへの `dynamodb:Scan/Query/BatchGetItem/GetItem/PutItem/UpdateItem/DeleteItem`、リソース種別ごとの `Describe*`、`tag:GetResources` のみを持つ。Scan は diagnostics だけが使う |
 
 画面へ出すエラーは必ずログにも出力する。認証が無く、アクセス制御が IP 許可リストのみである以上、変更の履歴を後から辿れる先はログに限られるためである。詳細は、[logging.md](logging.md) の Web コンソールのイベント一覧を参照。
 
@@ -43,7 +43,7 @@ reconciler とは別のコンテナイメージを、別の Lambda 関数とし�
 
 | ページ | 内容 | 検出 |
 |---|---|---|
-| 一覧 | 全グループを 1 行ずつ表示する(設定 + セレクタ + override + 直近のエラー) | 行わない。テーブル全体の 1 回の Scan で描画する |
+| 一覧 | 全グループを 1 行ずつ表示する(設定 + セレクタ + override + 直近のエラー) | 行わない。`CONFIG` の Query と対応する Status の BatchGetItem で描画する |
 | グループ | 設定 + override + 検出したリソース(種別/名前/直近のアクション/観測状態/遷移の開始時刻/直近のエラー/現在の状態)と、設定操作のフォーム | 行う |
 | diagnostics | `cheapskate-cli doctor` と同じ診断の表示と、同じ条件での孤立レコードの削除 | 行う |
 

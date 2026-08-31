@@ -33,7 +33,7 @@ There is no authentication, and access control rests entirely on the IP allowlis
 | Authentication | None. Access control is the IP allowlist in the API Gateway resource policy alone, so everyone inside an allowed CIDR can operate the console |
 | CSRF | `POST` validates the `Origin` and `Sec-Fetch-Site` headers and rejects anything other than same-origin |
 | CSP | `default-src 'none'`, `frame-ancestors 'none'`, and so on |
-| Permissions | The execution role holds only `dynamodb:Scan/GetItem/PutItem/DeleteItem` on the state table, the `Describe*` calls per resource type, and `tag:GetResources` |
+| Permissions | The execution role holds only `dynamodb:Scan/Query/BatchGetItem/GetItem/PutItem/UpdateItem/DeleteItem` on the state table, the `Describe*` calls per resource type, and `tag:GetResources`. Only diagnostics uses Scan |
 
 Every error shown on screen is also written to the log. With no authentication and an IP allowlist as the only access control, the log is the only place a history of changes can be traced. For details, see the web console event list in [logging.md](logging.md).
 
@@ -43,7 +43,7 @@ The content of each page, and whether it performs discovery, is collected below.
 
 | Page | Content | Discovery |
 |---|---|---|
-| List | Every group on one row (configuration + selector + override + last error) | No. Rendered from a single Scan of the whole table |
+| List | Every group on one row (configuration + selector + override + last error) | No. Rendered from a Query of `CONFIG` and a BatchGetItem for the corresponding status records |
 | Group | Configuration + override + the discovered resources (type / name / last action / observed state / when the transition started / last error / current state), plus the configuration forms | Yes |
 | Diagnostics | The same diagnosis as `cheapskate-cli doctor`, and orphan pruning under the same conditions | Yes |
 

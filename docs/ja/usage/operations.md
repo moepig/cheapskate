@@ -12,11 +12,11 @@ flowchart LR
     raw["aws dynamodb"]
 
     subgraph tbl["state テーブル"]
-        grp["group#&lt;名前&gt;
+        grp["CONFIG / GROUP#&lt;名前&gt;
         グループの設定"]
-        ovr["override#&lt;名前&gt;
+        ovr["CONFIG / OVERRIDE#&lt;名前&gt;
         期限付きの上書き"]
-        st["status#...
+        st["STATUS#... / CURRENT
         実行結果"]
     end
 
@@ -113,7 +113,8 @@ cheapskate-cli set-selector --group dev --tag-key cheapskate:group --tag-value d
 
 ```console
 aws dynamodb put-item --table-name <state-テーブル名> --item '{
-  "pk":        {"S": "group#dev"},
+  "pk":        {"S": "CONFIG"},
+  "sk":        {"S": "GROUP#dev"},
   "mode":      {"S": "pinned"},
   "desired":   {"S": "stopped"},
   "tag_key":   {"S": "cheapskate:group"},
@@ -122,7 +123,7 @@ aws dynamodb put-item --table-name <state-テーブル名> --item '{
 }'
 ```
 
-Terraform では `aws_dynamodb_table_item` により `group#` を管理できる。reconciler は `group#` に書き込まないため、ドリフトは発生しない。
+Terraform では `aws_dynamodb_table_item` により `CONFIG` / `GROUP#<名前>` を管理できる。reconciler はこのアイテムに書き込まないため、ドリフトは発生しない。
 
 ## 変更
 
@@ -215,10 +216,10 @@ cheapskate-cli clear-override --group dev  # override# だけを削除
 cheapskate-cli doctor --prune   # 孤立レコードだけを削除する(設定と AWS リソースには触れない)
 ```
 
-1 件だけ手動で削除する場合、`doctor` の各 finding の `pk` をそのまま鍵として使える。
+1 件だけ手動で削除する場合、`doctor` の各 finding の `pk` と `sk` をそのまま鍵として使える。
 
 ```console
-aws dynamodb delete-item --table-name <state-テーブル名> --key '{"pk":{"S":"status#ecs-service#dev-cluster/api"}}'
+aws dynamodb delete-item --table-name <state-テーブル名> --key '{"pk":{"S":"STATUS#ecs-service#dev-cluster/api"},"sk":{"S":"CURRENT"}}'
 ```
 
 グループの管理を一時的に止めるだけであれば、削除ではなく `disable` を用いる。設定は残る。ただし disabled なグループには override を登録できないため、あとから起動させるには `pin` または `schedule` へ戻す必要がある。
@@ -229,7 +230,7 @@ aws dynamodb delete-item --table-name <state-テーブル名> --key '{"pk":{"S":
 
 | 権限 | 用途 |
 |---|---|
-| state テーブルへの `dynamodb:Scan` / `GetItem` / `PutItem` / `DeleteItem` | レコードの読み書き |
+| state テーブルへの `dynamodb:Scan` / `Query` / `BatchGetItem` / `GetItem` / `PutItem` / `UpdateItem` / `DeleteItem` | レコードの読み書き。Scan は `doctor` だけが使う |
 | `tag:GetResources` | セレクタに一致するリソースの一覧 |
 | RDS/ECS/EC2 の `Describe*` | `show` とグループページの現在の状態 |
 

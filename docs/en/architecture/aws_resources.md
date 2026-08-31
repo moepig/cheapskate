@@ -20,11 +20,11 @@ flowchart LR
         aws.rds events"]
         fn["Reconciler Lambda
         (container image,
-        reserved concurrency 1)"]
+        reserved concurrency 1 recommended)"]
         role["execution role
         (lambda.amazonaws.com)"]
         ddb[("DynamoDB state table
-        group# / override# / status#")]
+        CONFIG / STATUS# / LOCK")]
         tagapi["Resource Groups
         Tagging API
         (GetResources, read-only)"]
@@ -39,7 +39,7 @@ flowchart LR
         logs["CloudWatch Logs"]
     end
 
-    ops -- "writes group# / override#" --> ddb
+    ops -- "writes the CONFIG partition" --> ddb
 
     schedrole -. "lambda:InvokeFunction" .-> sched
     sched -- "Input: {}" --> fn
@@ -47,7 +47,8 @@ flowchart LR
     policy (no role)" --> fn
 
     fn -. assumes .-> role
-    role -- "Scan/GetItem/PutItem/UpdateItem" --> ddb
+    role -- "Query/BatchGetItem/GetItem/
+    PutItem/UpdateItem/DeleteItem" --> ddb
     role -- "GetResources" --> tagapi
     role -- "Describe/Stop/Start" --> rds
     role -- "DescribeServices/UpdateService" --> ecs
@@ -73,8 +74,8 @@ The role of each resource in the diagram, and whether it is required, is collect
 
 | Resource | Role | Required |
 |---|---|---|
-| DynamoDB state table | The only persistent store, holding the desired state (`group#`/`override#`) and the results the reconciler writes (`status#`) | Required |
-| Reconciler Lambda (container image) | The reconcile loop itself. Reserved concurrency of 1 rules out concurrent runs | Required |
+| DynamoDB state table | The only persistent store: desired state in `CONFIG`, reconcile results in `STATUS#`, and the exclusion lease in `LOCK` | Required |
+| Reconciler Lambda (container image) | The reconcile loop itself. A global DynamoDB lease excludes concurrent runs; reserved concurrency of 1 is also recommended to avoid unnecessary invocations and cost | Required |
 | Lambda execution role | DynamoDB reads and writes, `tag:GetResources`, the Describe and control APIs for RDS/ECS/EC2, Application Auto Scaling, `sns:Publish` (when configured), and CloudWatch Logs | Required |
 | EventBridge Scheduler (`rate(5 minutes)`) | The trigger for the periodic reconcile. Passes `{}` | Required |
 | EventBridge rule (`aws.rds` events) | Triggers an immediate reconcile when an RDS auto-start event arrives. Target invocation is allowed by the Lambda's resource-based policy, so the rule needs no IAM role | Required |
@@ -114,7 +115,8 @@ flowchart LR
     apigw -- "proxy event
     (turned into HTTP by the Lambda Web Adapter)" --> fn
     fn -. assumes .-> role
-    role -- "Scan/GetItem/PutItem/DeleteItem" --> ddb
+    role -- "Scan/Query/BatchGetItem/GetItem/
+    PutItem/UpdateItem/DeleteItem" --> ddb
     role -- "GetResources" --> tagapi
     role -- "CreateLogGroup/Stream,
     PutLogEvents" --> logs
@@ -130,8 +132,8 @@ The role of each resource in the diagram is collected below.
 | API Gateway REST API (v1) | The only entrance from a browser. v1 is used because the HTTP API (v2) has no resource policy, which is what the IP restriction needs |
 | Resource policy (IP allowlist) | The only access control |
 | Webconsole Lambda | A separate function, built from a different container image than the reconciler |
-| Lambda execution role | `dynamodb:Scan/GetItem/PutItem/DeleteItem` on the state table, the `Describe*` calls per resource type, `tag:GetResources`, and CloudWatch Logs. It holds no RDS/ECS/EC2 control permissions |
-| DynamoDB state table | The same table as the reconcile loop. It writes `group#`/`override#`, and for `status#` it only reads and deletes orphans |
+| Lambda execution role | `dynamodb:Scan/Query/BatchGetItem/GetItem/PutItem/UpdateItem/DeleteItem` on the state table, the `Describe*` calls per resource type, `tag:GetResources`, and CloudWatch Logs. Only diagnostics uses Scan, and the role holds no RDS/ECS/EC2 control permissions |
+| DynamoDB state table | The same table as the reconcile loop. It writes configuration in `CONFIG`, and only reads or prunes orphaned `STATUS#` records |
 | Resource Groups Tagging API | Used to list the discovered resources on a group page |
 
 Deploying it is optional. Running the console locally makes the AWS resources in this section unnecessary.

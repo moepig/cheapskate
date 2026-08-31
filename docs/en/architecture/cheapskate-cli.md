@@ -36,7 +36,7 @@ The item operations each command performs, and whether it discovers, are collect
 | `set-selector` | Sets the selector on `group#`, creating the group with `mode: disabled` if absent | No |
 | `pin` / `unpin` / `schedule` / `disable` | Updates `mode` and the related attributes on `group#` | No |
 | `override` / `clear-override` | PUT (with a TTL) and DELETE on `override#` | No |
-| `list` | A single Scan of the whole table | No |
+| `list` | A Query of the `CONFIG` partition plus a BatchGetItem for the corresponding status records | No |
 | `show` | One group's configuration + override + the discovered resources, with their states | That group only |
 | `remove` | Deletes the group's `group#`/`override#`/`status#group#` | No |
 | `doctor` | Diagnoses inconsistencies in the table; deletes orphans only with `--prune` | Every group |

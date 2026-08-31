@@ -47,7 +47,7 @@ type GroupRow struct {
 }
 
 // 登録済みの全グループを、override とグループ単位のステータスを解決した状態で返す
-// グループごとの GetItem ではなく、Scan 1 回 (state.ScanAll) で取得する
+// CONFIG パーティションの Query と、対応する status の BatchGetItem で取得する
 // override やステータスが存在し group# アイテムが存在しない名前は孤立データとみなし、結果に含めない
 func List(ctx context.Context, s Store, now time.Time) ([]GroupRow, error) {
 	stored, err := s.ListGroups(ctx, now)

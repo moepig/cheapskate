@@ -12,11 +12,11 @@ flowchart LR
     raw["aws dynamodb"]
 
     subgraph tbl["state table"]
-        grp["group#&lt;name&gt;
+        grp["CONFIG / GROUP#&lt;name&gt;
         group configuration"]
-        ovr["override#&lt;name&gt;
+        ovr["CONFIG / OVERRIDE#&lt;name&gt;
         time-limited override"]
-        st["status#...
+        st["STATUS#... / CURRENT
         results"]
     end
 
@@ -113,7 +113,8 @@ Writing the raw record directly looks as follows.
 
 ```console
 aws dynamodb put-item --table-name <state-table-name> --item '{
-  "pk":        {"S": "group#dev"},
+  "pk":        {"S": "CONFIG"},
+  "sk":        {"S": "GROUP#dev"},
   "mode":      {"S": "pinned"},
   "desired":   {"S": "stopped"},
   "tag_key":   {"S": "cheapskate:group"},
@@ -122,7 +123,7 @@ aws dynamodb put-item --table-name <state-table-name> --item '{
 }'
 ```
 
-In Terraform, `group#` can be managed with `aws_dynamodb_table_item`. The reconciler never writes to `group#`, so no drift occurs.
+In Terraform, `CONFIG` / `GROUP#<name>` can be managed with `aws_dynamodb_table_item`. The reconciler never writes that item, so no drift occurs.
 
 ## Changing
 
@@ -215,10 +216,10 @@ The per-resource `status#` records remain. So do those for resources that no lon
 cheapskate-cli doctor --prune   # deletes orphaned records only (touching neither the configuration nor the AWS resources)
 ```
 
-To delete a single one by hand, the `pk` in each `doctor` finding serves as the key directly.
+To delete a single one by hand, use the `pk` and `sk` from the `doctor` finding directly as the key.
 
 ```console
-aws dynamodb delete-item --table-name <state-table-name> --key '{"pk":{"S":"status#ecs-service#dev-cluster/api"}}'
+aws dynamodb delete-item --table-name <state-table-name> --key '{"pk":{"S":"STATUS#ecs-service#dev-cluster/api"},"sk":{"S":"CURRENT"}}'
 ```
 
 To stop managing a group only temporarily, use `disable` rather than deletion; the configuration stays. Note that a disabled group accepts no override, so starting it later means returning it to `pin` or `schedule` first.
@@ -229,7 +230,7 @@ The permissions needed by the principal running `cheapskate-cli` or the web cons
 
 | Permission | Purpose |
 |---|---|
-| `dynamodb:Scan` / `GetItem` / `PutItem` / `DeleteItem` on the state table | Reading and writing the records |
+| `dynamodb:Scan` / `Query` / `BatchGetItem` / `GetItem` / `PutItem` / `UpdateItem` / `DeleteItem` on the state table | Reading and writing records. Only `doctor` uses Scan |
 | `tag:GetResources` | Listing the resources matching a selector |
 | `Describe*` on RDS/ECS/EC2 | The current state in `show` and on the group page |
 
