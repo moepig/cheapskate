@@ -65,23 +65,38 @@ func New(db API, table string, options ...StoreOption) *Store {
 }
 
 type GroupRow struct {
-	Name     string
-	Group    model.GroupSpec
-	HasGroup bool
-	Override *model.Override
-	Status   model.Status
-	Err      error
+	Name                    string
+	Group                   model.GroupSpec
+	HasGroup                bool
+	Override                *model.Override
+	Status                  model.Status
+	GroupErr                error
+	OverrideErr             error
+	StatusErr               error
+	StatusCorruptAttributes []string
 }
 
 type ScanResult struct {
 	Groups   []GroupRow
-	Statuses map[string]model.Status
+	Statuses map[string]StatusRecord
 }
 
-// StatusRecordはstatusの値と、そのアイテムだけに限定された復号エラーを保持する。
+// Status の値と属性単位の復号エラーを保持する。
 type StatusRecord struct {
-	Status model.Status
-	Err    error
+	model.Status
+	Err               error
+	CorruptAttributes []string
+}
+
+// pending operation の属性に復号できない値があるかを報告する。
+// 該当する場合は AWS 操作が実行済みかを確定できないため、reconciler は fail-closed とする。
+func (r StatusRecord) PendingCorrupt() bool {
+	for _, attribute := range r.CorruptAttributes {
+		if strings.HasPrefix(attribute, "pending_") {
+			return true
+		}
+	}
+	return false
 }
 
 // ListGroupsは設定partitionを一貫性の強い読み取りで取得し、グループ単位のstatusを結合する。
@@ -119,9 +134,8 @@ func (s *Store) ListGroups(ctx context.Context, now time.Time) ([]GroupRow, erro
 	for i := range rows {
 		if record, ok := statuses[model.GroupStatusID(rows[i].Name)]; ok {
 			rows[i].Status = record.Status
-			if record.Err != nil {
-				rows[i].Err = record.Err
-			}
+			rows[i].StatusErr = record.Err
+			rows[i].StatusCorruptAttributes = record.CorruptAttributes
 		}
 	}
 	return rows, nil
@@ -146,12 +160,10 @@ func (s *Store) GetGroupRow(ctx context.Context, name string, now time.Time) (Gr
 		if !ok || pk != groupStatusKey(name).PK || sk != currentSK {
 			continue
 		}
-		var item statusItem
-		if err := attributevalue.UnmarshalMap(raw, &item); err != nil {
-			row.Err = fmt.Errorf("unmarshal group status %s: %w", name, err)
-		} else {
-			row.Status = item.status()
-		}
+		record := decodeStatusRecord(model.GroupStatusID(name), raw)
+		row.Status = record.Status
+		row.StatusErr = record.Err
+		row.StatusCorruptAttributes = record.CorruptAttributes
 	}
 	return row, nil
 }
@@ -173,25 +185,21 @@ func (s *Store) ScanAll(ctx context.Context, now time.Time) (ScanResult, error) 
 	}
 
 	rows := decodeConfigRows(raws, now)
-	statuses := map[string]model.Status{}
+	statuses := map[string]StatusRecord{}
 	for _, raw := range raws {
 		pk, sk, ok := rawKey(raw)
 		if !ok || !strings.HasPrefix(pk, statusPKPrefix) || sk != currentSK {
 			continue
 		}
 		resourceID := strings.TrimPrefix(pk, statusPKPrefix)
-		var item statusItem
-		if err := attributevalue.UnmarshalMap(raw, &item); err != nil {
-			if name, ok := model.GroupFromStatusID(resourceID); ok {
-				row := rowForName(&rows, name)
-				row.Err = fmt.Errorf("unmarshal group status %s: %w", name, err)
-			}
-			continue
-		}
+		record := decodeStatusRecord(resourceID, raw)
 		if name, ok := model.GroupFromStatusID(resourceID); ok {
-			rowForName(&rows, name).Status = item.status()
+			row := rowForName(&rows, name)
+			row.Status = record.Status
+			row.StatusErr = record.Err
+			row.StatusCorruptAttributes = record.CorruptAttributes
 		} else {
-			statuses[resourceID] = item.status()
+			statuses[resourceID] = record
 		}
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].Name < rows[j].Name })
@@ -220,7 +228,7 @@ func decodeConfigRows(raws []map[string]types.AttributeValue, now time.Time) []G
 			name := strings.TrimPrefix(sk, groupSKPrefix)
 			var item groupItem
 			if err := attributevalue.UnmarshalMap(raw, &item); err != nil {
-				rowFor(name).Err = fmt.Errorf("unmarshal group %s: %w", name, err)
+				rowFor(name).GroupErr = fmt.Errorf("unmarshal group %s: %w", name, err)
 				continue
 			}
 			row := rowFor(name)
@@ -229,7 +237,7 @@ func decodeConfigRows(raws []map[string]types.AttributeValue, now time.Time) []G
 			name := strings.TrimPrefix(sk, overrideSKPrefix)
 			var item overrideItem
 			if err := attributevalue.UnmarshalMap(raw, &item); err != nil {
-				rowFor(name).Err = fmt.Errorf("unmarshal override %s: %w", name, err)
+				rowFor(name).OverrideErr = fmt.Errorf("unmarshal override %s: %w", name, err)
 				continue
 			}
 			override := item.override()
@@ -237,7 +245,7 @@ func decodeConfigRows(raws []map[string]types.AttributeValue, now time.Time) []G
 				continue
 			}
 			if override.Desired.Validate() != nil {
-				rowFor(name).Err = fmt.Errorf("%s: override desired must be running|stopped", name)
+				rowFor(name).OverrideErr = fmt.Errorf("%s: override desired must be running|stopped", name)
 				continue
 			}
 			rowFor(name).Override = &override
@@ -406,11 +414,8 @@ func (s *Store) GetStatus(ctx context.Context, resourceID string) (model.Status,
 	if err != nil || raw == nil {
 		return model.Status{}, err
 	}
-	var item statusItem
-	if err := attributevalue.UnmarshalMap(raw, &item); err != nil {
-		return model.Status{}, fmt.Errorf("unmarshal status %s: %w", resourceID, err)
-	}
-	return item.status(), nil
+	record := decodeStatusRecord(resourceID, raw)
+	return record.Status, record.Err
 }
 
 // GetStatusesは指定されたstatusを100件単位の一貫性の強いBatchGetItemで取得する。
@@ -437,12 +442,7 @@ func (s *Store) GetStatuses(ctx context.Context, resourceIDs []string) (map[stri
 				continue
 			}
 			id := strings.TrimPrefix(pk, statusPKPrefix)
-			var item statusItem
-			if err := attributevalue.UnmarshalMap(raw, &item); err != nil {
-				out[id] = StatusRecord{Err: fmt.Errorf("unmarshal status %s: %w", id, err)}
-				continue
-			}
-			out[id] = StatusRecord{Status: item.status()}
+			out[id] = decodeStatusRecord(id, raw)
 		}
 	}
 	return out, nil

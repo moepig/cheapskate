@@ -161,7 +161,9 @@ func TestScanAllJoinsGroupOverrideGroupStatus(t *testing.T) {
 	require.NotNil(t, r.Override)
 	assert.Equal(t, model.DesiredRunning, r.Override.Desired)
 	assert.Equal(t, "discover: access denied", r.Status.LastError)
-	assert.NoError(t, r.Err)
+	assert.NoError(t, r.GroupErr)
+	assert.NoError(t, r.OverrideErr)
+	assert.NoError(t, r.StatusErr)
 }
 
 // リソース単位の平坦なステータスマップは resource_id をキーとし、グループとは独立に返る
@@ -184,8 +186,8 @@ func TestScanAllReturnsFlatPerResourceStatuses(t *testing.T) {
 	assert.Equal(t, model.ActionStart, res.Statuses["ecs-service#dev-cluster/api"].LastAction)
 }
 
-// あるグループの override が壊れている場合も、他のグループを一覧から除外してはならない
-// scan を中断せず、その行の Err として現れなければならない
+// あるグループの override が壊れている場合も、他のグループを一覧から除外してはならない。
+// Scan を中断せず、その行の OverrideErr として現れなければならない。
 func TestScanAllRecordsPerRowErrorForMalformedOverride(t *testing.T) {
 	db, st := newFixture(t)
 	now := time.Now()
@@ -203,13 +205,13 @@ func TestScanAllRecordsPerRowErrorForMalformedOverride(t *testing.T) {
 	for _, r := range res.Groups {
 		byName[r.Name] = r
 	}
-	assert.Error(t, byName["broken"].Err, "malformed override must set Err on its row")
+	assert.Error(t, byName["broken"].OverrideErr, "malformed override must set OverrideErr on its row")
 	assert.True(t, byName["broken"].HasGroup, "group must still be joined despite the bad override")
-	assert.NoError(t, byName["fine"].Err, "unrelated row must be unaffected")
+	assert.NoError(t, byName["fine"].OverrideErr, "unrelated row must be unaffected")
 }
 
-// unmarshal できない status#group#<name> アイテムは、他グループの scan を中断させてはならない
-// そのグループの行の Err として現れなければならない
+// 復号できない status#group#<name> アイテムは、他グループの Scan を中断させてはならない。
+// そのグループの行の StatusErr として現れなければならない。
 func TestScanAllRecordsPerRowErrorForMalformedGroupStatus(t *testing.T) {
 	db, st := newFixture(t)
 	now := time.Now()
@@ -226,14 +228,16 @@ func TestScanAllRecordsPerRowErrorForMalformedGroupStatus(t *testing.T) {
 	for _, r := range res.Groups {
 		byName[r.Name] = r
 	}
-	assert.Error(t, byName["broken"].Err, "malformed group-status must set Err on its row")
-	assert.NoError(t, byName["fine"].Err, "unrelated row must be unaffected")
+	assert.Error(t, byName["broken"].StatusErr, "malformed group-status must set StatusErr on its row")
+	assert.NoError(t, byName["broken"].GroupErr)
+	assert.NoError(t, byName["broken"].OverrideErr)
+	assert.NoError(t, byName["fine"].StatusErr, "unrelated row must be unaffected")
 }
 
-// unmarshal できない group# アイテムは、他グループの scan を中断させてはならない
-// その行の Err として現れ、かつ HasGroup は false のままでなければならない
-// 設定を読めていない状態を、登録済みのグループとして扱う根拠が存在しないためである
-// doctor はこの組み合わせを corrupt-record として報告し、孤立判定を見送る
+// 復号できない group# アイテムは、他グループの Scan を中断させてはならない。
+// その行の GroupErr として現れ、かつ HasGroup は false のままでなければならない。
+// 設定を読めていない状態を、登録済みのグループとして扱う根拠が存在しないためである。
+// doctor はこの組み合わせを corrupt-record として報告し、孤立判定を見送る。
 func TestScanAllRecordsPerRowErrorForMalformedGroup(t *testing.T) {
 	db, st := newFixture(t)
 	now := time.Now()
@@ -249,9 +253,9 @@ func TestScanAllRecordsPerRowErrorForMalformedGroup(t *testing.T) {
 	for _, r := range res.Groups {
 		byName[r.Name] = r
 	}
-	assert.Error(t, byName["broken"].Err, "malformed group must set Err on its row")
+	assert.Error(t, byName["broken"].GroupErr, "malformed group must set GroupErr on its row")
 	assert.False(t, byName["broken"].HasGroup, "読めなかった設定を登録済みとして扱ってはならない")
-	assert.NoError(t, byName["fine"].Err, "unrelated row must be unaffected")
+	assert.NoError(t, byName["fine"].GroupErr, "unrelated row must be unaffected")
 	assert.True(t, byName["fine"].HasGroup)
 }
 
@@ -270,10 +274,9 @@ func TestScanAllSkipsItemsWithoutPK(t *testing.T) {
 	assert.Empty(t, res.Statuses)
 }
 
-// 壊れたリソース単位の status アイテムには、エラーを対応づける行が存在しない
-// リソースとグループの対応づけには、この scan ではなく動的な探索を要するためである
-// したがってスキップし、他の行は影響を受けない
-func TestScanAllSkipsMalformedPerResourceStatus(t *testing.T) {
+// 壊れたリソース単位の Status は、読めた属性と属性単位のエラーを同じレコードとして返す。
+// リソースとグループの対応づけを必要とせず、キーのリソース ID により doctor が破損箇所を報告できる必要がある。
+func TestScanAllReturnsMalformedPerResourceStatus(t *testing.T) {
 	db, st := newFixture(t)
 	now := time.Now()
 	db.Seed(seeded(statusKey("rds-instance#a"), map[string]types.AttributeValue{
@@ -284,8 +287,11 @@ func TestScanAllSkipsMalformedPerResourceStatus(t *testing.T) {
 	res, err := st.ScanAll(context.Background(), now)
 	require.NoError(t, err)
 	require.Len(t, res.Groups, 1)
-	assert.NoError(t, res.Groups[0].Err)
-	assert.NotContains(t, res.Statuses, "rds-instance#a")
+	assert.NoError(t, res.Groups[0].GroupErr)
+	require.Contains(t, res.Statuses, "rds-instance#a")
+	record := res.Statuses["rds-instance#a"]
+	assert.Error(t, record.Err)
+	assert.Equal(t, []string{"last_action"}, record.CorruptAttributes)
 }
 
 func TestScanAllExpiredOverrideIsIgnored(t *testing.T) {

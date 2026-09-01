@@ -270,9 +270,9 @@ func TestUnusableScheduleCronIsReported(t *testing.T) {
 	}
 }
 
-// 読めないレコードは、そのグループのメンバーの特定を不能にする
-// 孤立判定はグループのメンバー全体の列挙を前提とするため、判定を見送る
-func TestCorruptRecordIsReportedAndBlocksPruning(t *testing.T) {
+// グループを持たない壊れた override は管理対象リソースの特定に影響しない。
+// 破損自体は報告し、独立した孤立 Status の判定は継続する。
+func TestOrphanCorruptOverrideDoesNotBlockUnrelatedPruning(t *testing.T) {
 	f := newFixture(t)
 	f.db.Seed(map[string]types.AttributeValue{
 		"pk": s("override#dev"), "desired": s(model.DesiredRunning),
@@ -283,9 +283,28 @@ func TestCorruptRecordIsReportedAndBlocksPruning(t *testing.T) {
 	report := f.run(t, Options{Prune: true})
 
 	require.Len(t, only(report, KindCorruptRecord), 1)
+	require.Len(t, only(report, KindOrphanStatus), 1)
+	assert.Empty(t, report.Blocked)
+	assert.Equal(t, 1, report.Pruned)
+}
+
+// 復号できないリソース Status はキーを含む corrupt-record として報告する。
+// 破損した pending operation を孤立レコードとして自動削除しないため、同じレコードに orphan-status は付けない。
+func TestMalformedResourceStatusIsReportedButNotPruned(t *testing.T) {
+	f := newFixture(t)
+	f.db.Seed(map[string]types.AttributeValue{
+		"pk": s("status#rds-instance#broken"), "last_action": &types.AttributeValueMemberBOOL{Value: true},
+	})
+
+	report := f.run(t, Options{Prune: true})
+
+	found := only(report, KindCorruptRecord)
+	require.Len(t, found, 1)
+	assert.Equal(t, "rds-instance#broken", found[0].Resource)
+	assert.Equal(t, "STATUS#rds-instance#broken", found[0].PK)
 	assert.Empty(t, only(report, KindOrphanStatus))
-	assert.NotEmpty(t, report.Blocked)
 	assert.Zero(t, report.Pruned)
+	assert.NotNil(t, f.db.Item("status#rds-instance#broken"))
 }
 
 // 読めない group# アイテムを、未登録のグループとして扱ってはならない

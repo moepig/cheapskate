@@ -185,8 +185,8 @@ The output of each command is given below.
 
 | Command | Output |
 | --- | --- |
-| `list` | `{"command": "list", "groups": [...]}`. Each group carries `name`, its configuration (`mode`, `desired`, the crons, `timezone`, `selector`), `override` (with `expires_at` as RFC3339 UTC), and `status`. A broken record lands in that group's `error`, and the other groups are printed as usual |
-| `show` | `{"command": "show", "group": {...}, "resources": [...]}`. `group` has the same shape as in `list`. `resources` is always an array, each element carrying `type`, `ref`, `arn`, `status`, `live` (the current state), and `config` (the settings from the resource's tags). A discovery failure adds `discover_error` and still exits 0 |
+| `list` | `{"command": "list", "groups": [...]}`. Each group carries `name`, its configuration (`mode`, `desired`, the crons, `timezone`, `selector`), `override` (with `expires_at` as RFC3339 UTC), and `status`. Decode failures appear as `config_error`, `override_error`, or `status_error` for the affected data, and the other groups are printed as usual |
+| `show` | `{"command": "show", "group": {...}, "resources": [...]}`. `group` has the same shape as in `list`. `resources` is always an array, each element carrying `type`, `ref`, `arn`, `status`, `live` (the current state), and `config` (the settings from the resource's tags). A status decode failure adds `status_error`, a current-state failure adds `live_error`, and a discovery failure adds `discover_error`; each still exits 0 |
 | Mutating commands | Return `command`, `group`, and only what the command wrote. The group is not read back in full |
 | `doctor` | `{"command": "doctor", "findings": [...], "pruned": 0, "counts": {...}}`. For the meaning of each finding, see the `doctor` diagnosis in [troubleshooting.md](troubleshooting.md) |
 

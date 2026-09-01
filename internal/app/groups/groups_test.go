@@ -315,8 +315,10 @@ func TestListSurfacesPerRowErrorWithoutAbortingOthers(t *testing.T) {
 	for _, r := range rows {
 		byName[r.Name] = r
 	}
-	assert.Error(t, byName["broken"].Err, "malformed row must carry its error")
-	assert.NoError(t, byName["fine"].Err, "unrelated row must be unaffected")
+	assert.Error(t, byName["broken"].OverrideErr, "malformed override must carry its own error")
+	assert.NoError(t, byName["broken"].ConfigErr)
+	assert.NoError(t, byName["broken"].StatusErr)
+	assert.NoError(t, byName["fine"].OverrideErr, "unrelated row must be unaffected")
 }
 
 // GetDetail はグループのセレクタに現在一致する全リソースを解決し、そのステータスと結合しなければならない
@@ -341,6 +343,31 @@ func TestGetDetailResolvesResourcesWithStatus(t *testing.T) {
 	assert.Nil(t, detail.Resources[0].Live, "no port.Describer wired for rds-instance in this test, so Live must stay nil")
 	assert.NoError(t, detail.DiscoverErr)
 	assert.Equal(t, []model.Selector{devSelector}, d.Selectors, "resources must be discovered with the group's own selector")
+}
+
+// Status の一部を復号できない場合も、読めた監査属性とリソース行を返す。
+// 復号エラーは StatusErr に分離し、現在状態の取得や他の行を妨げない。
+func TestGetDetailReturnsPartialStatusWithDecodeError(t *testing.T) {
+	f, s := newFixture(t)
+	ctx := context.Background()
+	group := "dev"
+	_, err := SetSelector(ctx, s, group, devSelector)
+	require.NoError(t, err)
+	require.NoError(t, Pin(ctx, s, group, model.DesiredStopped))
+	f.Seed(map[string]types.AttributeValue{
+		"pk":          &types.AttributeValueMemberS{Value: "status#rds-instance#db"},
+		"last_action": &types.AttributeValueMemberS{Value: "stop"},
+		"last_error":  &types.AttributeValueMemberBOOL{Value: true},
+	})
+
+	d := &porttest.Discoverer{Resources: []model.Resource{{Type: model.TypeRdsInstance, Ref: "db"}}}
+	detail, err := GetDetail(ctx, s, d, nil, group, now)
+
+	require.NoError(t, err)
+	require.Len(t, detail.Resources, 1)
+	assert.Equal(t, model.ActionStop, detail.Resources[0].Status.LastAction)
+	require.Error(t, detail.Resources[0].StatusErr)
+	assert.ErrorContains(t, detail.Resources[0].StatusErr, "last_error")
 }
 
 // リソース種別に port.Describer が結線されている場合は必ず問い合わせ、その Observation を ResourceRow.Live へ格納しなければならない

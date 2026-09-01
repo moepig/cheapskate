@@ -1,6 +1,13 @@
 package state
 
-import "cheapskate/internal/core/model"
+import (
+	"fmt"
+	"strings"
+
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+
+	"cheapskate/internal/core/model"
+)
 
 const (
 	configPK         = "CONFIG"
@@ -110,6 +117,47 @@ func (i statusItem) status() model.Status {
 		PendingObserved:    model.ObservedState(i.PendingObserved),
 		PendingStartedAt:   i.PendingStartedAt,
 	}
+}
+
+// Status の各属性を独立して復号し、読めた属性と読めなかった属性を同じ結果に保持する。
+// 1 属性の型が壊れていても、pending operation の有無や通知の重複排除に使う他の属性を失わない。
+func decodeStatusRecord(resourceID string, raw map[string]types.AttributeValue) StatusRecord {
+	var item statusItem
+	fields := []struct {
+		name string
+		set  func(string)
+	}{
+		{"observed_state", func(v string) { item.ObservedState = v }},
+		{"last_action", func(v string) { item.LastAction = v }},
+		{"last_desired", func(v string) { item.LastDesired = v }},
+		{"last_action_at", func(v string) { item.LastActionAt = v }},
+		{"last_error", func(v string) { item.LastError = v }},
+		{"last_error_at", func(v string) { item.LastErrorAt = v }},
+		{"transitioning_since", func(v string) { item.TransitioningSince = v }},
+		{"pending_operation_id", func(v string) { item.PendingOperationID = v }},
+		{"pending_action", func(v string) { item.PendingAction = v }},
+		{"pending_desired", func(v string) { item.PendingDesired = v }},
+		{"pending_observed", func(v string) { item.PendingObserved = v }},
+		{"pending_started_at", func(v string) { item.PendingStartedAt = v }},
+	}
+	record := StatusRecord{}
+	for _, field := range fields {
+		value, exists := raw[field.name]
+		if !exists {
+			continue
+		}
+		text, ok := value.(*types.AttributeValueMemberS)
+		if !ok {
+			record.CorruptAttributes = append(record.CorruptAttributes, field.name)
+			continue
+		}
+		field.set(text.Value)
+	}
+	record.Status = item.status()
+	if len(record.CorruptAttributes) > 0 {
+		record.Err = fmt.Errorf("unmarshal status %s: attributes must be strings: %s", resourceID, strings.Join(record.CorruptAttributes, ", "))
+	}
+	return record
 }
 
 // GroupPatchはグループ設定の属性単位の変更を表す。

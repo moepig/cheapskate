@@ -220,14 +220,15 @@ type overrideJSON struct {
 }
 
 // list と show が出力するグループ 1 件であり、設定に加えて、解決済みの override とグループ単位のステータスを持つ
-// Error は、このグループの壊れたアイテムに対するエラーを保持する
-// この場合もグループを一覧に残す
+// 設定、override、Status のエラーを別々に保持し、いずれの場合もグループを一覧に残す。
 type groupJSON struct {
 	Name string `json:"name"`
 	configJSON
-	Override *overrideJSON `json:"override,omitempty"`
-	Status   model.Status  `json:"status"`
-	Error    string        `json:"error,omitempty"`
+	Override      *overrideJSON `json:"override,omitempty"`
+	Status        model.Status  `json:"status"`
+	ConfigError   string        `json:"config_error,omitempty"`
+	OverrideError string        `json:"override_error,omitempty"`
+	StatusError   string        `json:"status_error,omitempty"`
 }
 
 func newConfigJSON(item model.GroupSpec) configJSON {
@@ -263,8 +264,14 @@ func cmdList(ctx context.Context, s store, out io.Writer) error {
 	groups := make([]groupJSON, 0, len(rows))
 	for _, row := range rows {
 		g := groupJSON{Name: row.Name, configJSON: newConfigJSON(row.Group), Override: newOverrideJSON(row.Override), Status: row.Status}
-		if row.Err != nil {
-			g.Error = row.Err.Error()
+		if row.ConfigErr != nil {
+			g.ConfigError = row.ConfigErr.Error()
+		}
+		if row.OverrideErr != nil {
+			g.OverrideError = row.OverrideErr.Error()
+		}
+		if row.StatusErr != nil {
+			g.StatusError = row.StatusErr.Error()
 		}
 		groups = append(groups, g)
 	}
@@ -274,13 +281,14 @@ func cmdList(ctx context.Context, s store, out io.Writer) error {
 // showResource と showOutput は cmdShow の JSON を構成する
 // グループの動的に探索したメンバーリソースを、ステータスとともに解決した結果を保持する
 type showResource struct {
-	Type    model.ResourceType `json:"type"`
-	Ref     string             `json:"ref"`
-	ARN     string             `json:"arn"`
-	Config  any                `json:"config,omitempty"` // タグから読んだ種別固有の設定であり、該当がない種別では省略される
-	Live    *model.Observation `json:"live,omitempty"`   // 都度問い合わせた現在の状態であり、Describer が結線されていない種別では省略される
-	LiveErr string             `json:"live_error,omitempty"`
-	Status  model.Status       `json:"status"`
+	Type      model.ResourceType `json:"type"`
+	Ref       string             `json:"ref"`
+	ARN       string             `json:"arn"`
+	Config    any                `json:"config,omitempty"` // タグから読んだ種別固有の設定であり、該当がない種別では省略される
+	Live      *model.Observation `json:"live,omitempty"`   // 都度問い合わせた現在の状態であり、Describer が結線されていない種別では省略される
+	LiveErr   string             `json:"live_error,omitempty"`
+	Status    model.Status       `json:"status"`
+	StatusErr string             `json:"status_error,omitempty"`
 }
 
 // r のタグ由来の設定を JSON オブジェクトへ変換する。設定が存在しない場合は nil を返す
@@ -328,8 +336,14 @@ func cmdShow(ctx context.Context, s store, d port.Discoverer, describers map[mod
 		},
 		Resources: make([]showResource, 0, len(detail.Resources)),
 	}
-	if detail.Err != nil {
-		out.Group.Error = detail.Err.Error()
+	if detail.ConfigErr != nil {
+		out.Group.ConfigError = detail.ConfigErr.Error()
+	}
+	if detail.OverrideErr != nil {
+		out.Group.OverrideError = detail.OverrideErr.Error()
+	}
+	if detail.StatusErr != nil {
+		out.Group.StatusError = detail.StatusErr.Error()
 	}
 	for _, r := range detail.Resources {
 		res := showResource{
@@ -337,6 +351,9 @@ func cmdShow(ctx context.Context, s store, d port.Discoverer, describers map[mod
 		}
 		if r.LiveErr != nil {
 			res.LiveErr = r.LiveErr.Error()
+		}
+		if r.StatusErr != nil {
+			res.StatusErr = r.StatusErr.Error()
 		}
 		out.Resources = append(out.Resources, res)
 	}

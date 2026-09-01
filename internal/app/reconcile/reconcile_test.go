@@ -1048,19 +1048,55 @@ func TestRecoveredNotifyFailureLeavesErrorCleared(t *testing.T) {
 		"PutStatus は成功しているので last_error は消えたままでなければならない")
 }
 
-// 復号できないグループstatusは設定行のエラーとして報告し、初回の通知を抑止しない。
-func TestMalformedPreviousStatusIsReportedAndNotified(t *testing.T) {
+// グループ Status は reconcile の出力であり、その破損によって有効な設定の適用を停止してはならない。
+// 破損はログと doctor に委ね、リソース操作を継続する。
+func TestMalformedGroupStatusDoesNotBlockResources(t *testing.T) {
 	f := newFixture(t)
-	f.seedGroup("dev", model.ModePinned, model.DesiredStopped)
+	f.pinnedStoppedGroup("dev", rdsInstance("dev-db"))
+	f.rds.Observations["dev-db"] = model.Observation{State: model.StateRunning}
 	f.db.Seed(map[string]types.AttributeValue{
-		"pk": s("status#group#dev"), "last_error": &types.AttributeValueMemberBOOL{Value: true},
+		"pk": s("status#group#dev"), "last_action": &types.AttributeValueMemberBOOL{Value: true},
+	})
+
+	summary := runEmpty(t, f)
+
+	assert.Empty(t, summary.Errors)
+	assert.Equal(t, []string{"dev-db"}, f.rds.Stopped)
+	require.Len(t, summary.Actions, 1)
+	assert.Equal(t, model.ActionStop, summary.Actions[0].Action)
+}
+
+// 監査属性だけが壊れたリソース Status では、読めた pending 属性に基づいて安全性を判定できる。
+// 監査属性の破損は AWS 操作を停止させない。
+func TestMalformedAuditStatusDoesNotBlockResource(t *testing.T) {
+	f := newFixture(t)
+	f.pinnedStoppedGroup("dev", rdsInstance("dev-db"))
+	f.rds.Observations["dev-db"] = model.Observation{State: model.StateRunning}
+	f.db.Seed(map[string]types.AttributeValue{
+		"pk": s("status#rds-instance#dev-db"), "last_action": &types.AttributeValueMemberBOOL{Value: true},
+	})
+
+	summary := runEmpty(t, f)
+
+	assert.Empty(t, summary.Errors)
+	assert.Equal(t, []string{"dev-db"}, f.rds.Stopped)
+}
+
+// pending 属性を復号できない場合、AWS 操作が実行済みかを判断できない。
+// 同じ操作の再送を避けるため、リソースを fail-closed とする。
+func TestMalformedPendingStatusBlocksResource(t *testing.T) {
+	f := newFixture(t)
+	f.pinnedStoppedGroup("dev", rdsInstance("dev-db"))
+	f.rds.Observations["dev-db"] = model.Observation{State: model.StateRunning}
+	f.db.Seed(map[string]types.AttributeValue{
+		"pk": s("status#rds-instance#dev-db"), "pending_operation_id": &types.AttributeValueMemberBOOL{Value: true},
 	})
 
 	summary := runEmpty(t, f)
 
 	require.Len(t, summary.Errors, 1)
-	assert.Contains(t, summary.Errors[0].Error, "unmarshal status group#dev")
-	assert.Len(t, f.notifier.Published, 1, "復号できないstatusも通知する")
+	assert.Contains(t, summary.Errors[0].Error, "pending_operation_id")
+	assert.Empty(t, f.rds.Stopped)
 }
 
 // 起動が成立しない失敗は、空の Summary による成功ではなく Run のエラーとする

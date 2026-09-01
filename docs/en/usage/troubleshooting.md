@@ -93,13 +93,15 @@ The `kind` values reported, and whether `--prune` acts on them, are collected be
 | `orphan-override` | An `override#` remains with no `group#` | Yes |
 | `orphan-group-status` | A `status#group#` remains with no `group#` | Yes |
 | `orphan-status` | A `status#` for a resource matching no group's selector | Yes |
-| `corrupt-record` | A record that fails to read or validate | No |
+| `corrupt-record` | A record that fails to read or validate; for status, includes the resource ID and DynamoDB key | No |
 | `config-error` | A registered configuration the reconciler cannot follow (pinned with no desired, and the like) | No |
 | `discover-error` | The selector is valid but discovering the resources failed | No |
 | `selector-overlap` | Several groups' selectors match the same resource | No |
 | `stuck-transitioning` | Still transitioning beyond `--stuck-after` | No |
 
 `--prune` deletes only records whose group or resource is proven absent by the table read and the discovery alone. It touches neither the configuration itself (`group#`), nor anything requiring human judgement, nor the AWS resources.
+
+When only status audit attributes fail to decode, the reconciler continues with the attributes it could read. When a pending attribute fails to decode, it does not act on that resource, preventing a repeated AWS action. Both cases are reported as `corrupt-record` and are never removed by `--prune`.
 
 As a safeguard, a cycle in which even one discovery fails withholds the `orphan-status` verdict entirely, so that the audit record of a resource that merely could not be discovered is not deleted. In that case `blocked` carries the reason.
 

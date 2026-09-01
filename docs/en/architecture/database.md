@@ -81,6 +81,8 @@ The domain representation is `model.Status`. The values are a snapshot taken whe
 
 Status is latest-only, not a history. Every update extends `expires_at`; DynamoDB TTL deletes status items that stop receiving updates after the retention period. Before an AWS action, the pending attributes are written conditionally. Afterwards, the same operation ID is required to advance the item to the last-action state. If Lambda stops between these steps, the next invocation confirms completion from the AWS observation instead of repeating the action. Notifications are not stored in status. See [Reconcile persistence boundaries](../development/reconcile.md) for the persistence and notification boundaries.
 
+Each status attribute is decoded independently. A malformed audit attribute leaves the valid attributes and its decode error available, while group and override resolution and AWS actions continue. A malformed `pending_` attribute fails that resource closed because the reconciler cannot determine whether the AWS action already ran. Decode errors are shown by `cheapskate-cli`, the web console, and `doctor`.
+
 `<type>#<ref>` is the identifier produced by `model.Resource.ID()`, which `internal/aws/tagging` derives from the ARN. The form of `ref` per type is given below.
 
 | Type | `ref` form | Example `pk` |
@@ -104,7 +106,7 @@ An existing status item with no `expires_at` is not eligible for TTL deletion. T
 
 ## `STATUS#group#<name>` / `CURRENT` — per-group results
 
-The attribute shape is identical to `STATUS#<type>#<ref>` / `CURRENT`. Its subject is the processing of a group rather than an individual resource, and it records the failures that stem from that group's own configuration: an invalid cron or timezone, a discovery failure, a selector collision.
+The attribute shape is identical to `STATUS#<type>#<ref>` / `CURRENT`. Its subject is the processing of a group rather than an individual resource, and it records the failures that stem from that group's own configuration: an invalid cron or timezone, a discovery failure, a selector collision. A group-status decode error is distinct from a group-configuration error and does not stop resource reconciliation.
 
 `"group"` is never used as a resource-type constant, so this does not collide with the `pk` space of real resources. It is deleted together with `CONFIG` / `GROUP#<name>` and `CONFIG` / `OVERRIDE#<name>` when a group is deleted. Per-resource `STATUS#<type>#<ref>` / `CURRENT` items are not.
 

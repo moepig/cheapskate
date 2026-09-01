@@ -5,14 +5,16 @@
   {{range .Rows}}
   <tr>
     <td><a href="{{$.Base}}/group?name={{.Name}}"><strong>{{.Name}}</strong></a></td>
-    {{if .Err}}
-    <td colspan="5" class="danger">error: {{.Err}}</td>
+    {{if .ConfigErr}}
+    <td colspan="5" class="danger">config error: {{.ConfigErr}}</td>
+    {{else if .OverrideErr}}
+    <td colspan="5" class="danger">override error: {{.OverrideErr}}</td>
     {{else}}
     <td>{{.Group.Mode}}</td>
     <td>{{groupDesc .Group}}</td>
     <td>{{selDesc .Group}}</td>
     <td>{{with ovDesc .Override}}{{.}}{{else}}<span class="muted">-</span>{{end}}</td>
-    <td>{{with .Status.LastError}}<span class="danger">{{.}}</span>{{else}}<span class="muted">-</span>{{end}}</td>
+    <td>{{if .StatusErr}}<span class="danger">status error: {{.StatusErr}}</span>{{else}}{{with .Status.LastError}}<span class="danger">{{.}}</span>{{else}}<span class="muted">-</span>{{end}}{{end}}</td>
     {{end}}
   </tr>
   {{else}}

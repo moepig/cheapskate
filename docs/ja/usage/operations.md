@@ -185,8 +185,8 @@ $ cheapskate-cli show --group dev | jq -c '.resources[] | {ref, live: .live.stat
 
 | コマンド | 出力 |
 | --- | --- |
-| `list` | `{"command": "list", "groups": [...]}`。各グループは `name`、設定(`mode`・`desired`・cron・`timezone`・`selector`)、`override`(`expires_at` は RFC3339 UTC)、`status` を持つ。レコードが壊れている場合はそのグループの `error` に入り、他のグループは通常どおり出力される |
-| `show` | `{"command": "show", "group": {...}, "resources": [...]}`。`group` は `list` と同じ形である。`resources` は常に配列であり、各要素に `type`、`ref`、`arn`、`status`、`live`(現在の状態)、`config`(リソースのタグ由来の設定)が入る。リソースの検出に失敗した場合は `discover_error` を含む(終了コードは 0 のまま) |
+| `list` | `{"command": "list", "groups": [...]}`。各グループは `name`、設定(`mode`・`desired`・cron・`timezone`・`selector`)、`override`(`expires_at` は RFC3339 UTC)、`status` を持つ。復号エラーは対象ごとに `config_error`、`override_error`、`status_error` に入り、他のグループは通常どおり出力される |
+| `show` | `{"command": "show", "group": {...}, "resources": [...]}`。`group` は `list` と同じ形である。`resources` は常に配列であり、各要素に `type`、`ref`、`arn`、`status`、`live`(現在の状態)、`config`(リソースのタグ由来の設定)が入る。Status を復号できない場合は `status_error`、現在状態を取得できない場合は `live_error`、リソースの検出に失敗した場合は `discover_error` を含む(終了コードは 0 のまま) |
 | 更新系 | `command`、`group` と、そのコマンドが書き込んだ内容のみを返す。グループ全体の読み直しは行わない |
 | `doctor` | `{"command": "doctor", "findings": [...], "pruned": 0, "counts": {...}}`。各 finding の意味は [troubleshooting.md](troubleshooting.md) の doctor による診断を参照 |
 

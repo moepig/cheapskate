@@ -37,14 +37,16 @@ type Store interface {
 }
 
 // ターゲットグループ1件と、そのoverrideおよびグループ単位のstatus。
-// override、group#、group-status のいずれかが壊れている場合は Err を設定する
-// この場合も行自体は返し、一覧全体を失敗させない
+// 設定、override、Status の復号エラーを個別に保持する。
+// 復号エラーがある場合も行自体は返し、一覧全体を失敗させない。
 type GroupRow struct {
-	Name     string
-	Group    model.GroupSpec
-	Override *model.Override
-	Status   model.Status
-	Err      error
+	Name        string
+	Group       model.GroupSpec
+	Override    *model.Override
+	Status      model.Status
+	ConfigErr   error
+	OverrideErr error
+	StatusErr   error
 }
 
 // 登録済みの全グループを、override とグループ単位のステータスを解決した状態で返す
@@ -66,7 +68,10 @@ func List(ctx context.Context, s Store, now time.Time) ([]GroupRow, error) {
 }
 
 func toGroupRow(gr state.GroupRow) GroupRow {
-	return GroupRow{Name: gr.Name, Group: gr.Group, Override: gr.Override, Status: gr.Status, Err: gr.Err}
+	return GroupRow{
+		Name: gr.Name, Group: gr.Group, Override: gr.Override, Status: gr.Status,
+		ConfigErr: gr.GroupErr, OverrideErr: gr.OverrideErr, StatusErr: gr.StatusErr,
+	}
 }
 
 // グループのセレクタに現在一致するリソース 1 件と、そのステータス
@@ -74,10 +79,11 @@ func toGroupRow(gr state.GroupRow) GroupRow {
 // 種別に対応する Describer が存在しない場合、および Describe の呼び出しが失敗した場合、Live は nil となる (LiveErr を参照)
 // いずれの場合も状態を不明として扱い、行全体のエラーとはしない
 type ResourceRow struct {
-	Resource model.Resource
-	Status   model.Status
-	Live     *model.Observation
-	LiveErr  error
+	Resource  model.Resource
+	Status    model.Status
+	StatusErr error
+	Live      *model.Observation
+	LiveErr   error
 }
 
 // グループの詳細であり、設定、override、グループ単位のステータスを含む
@@ -89,7 +95,9 @@ type GroupDetail struct {
 	Group       model.GroupSpec
 	Override    *model.Override
 	Status      model.Status
-	Err         error
+	ConfigErr   error
+	OverrideErr error
+	StatusErr   error
 	Resources   []ResourceRow
 	DiscoverErr error
 }
@@ -108,7 +116,10 @@ func GetDetail(ctx context.Context, s Store, d port.Discoverer, describers map[m
 	if !row.HasGroup {
 		return GroupDetail{}, fmt.Errorf("group %q is not registered", group)
 	}
-	detail := GroupDetail{Name: row.Name, Group: row.Group, Override: row.Override, Status: row.Status, Err: row.Err}
+	detail := GroupDetail{
+		Name: row.Name, Group: row.Group, Override: row.Override, Status: row.Status,
+		ConfigErr: row.GroupErr, OverrideErr: row.OverrideErr, StatusErr: row.StatusErr,
+	}
 
 	cfg, perr := model.ParseGroup(row.Group)
 	if perr != nil || cfg.Selector.Empty() {
@@ -129,7 +140,8 @@ func GetDetail(ctx context.Context, s Store, d port.Discoverer, describers map[m
 	}
 	rows := make([]ResourceRow, 0, len(resources))
 	for _, r := range resources {
-		row := ResourceRow{Resource: r, Status: statuses[r.ID()].Status}
+		record := statuses[r.ID()]
+		row := ResourceRow{Resource: r, Status: record.Status, StatusErr: record.Err}
 		if describer, ok := describers[r.Type]; ok {
 			if obs, err := describer.Describe(ctx, r.Ref); err != nil {
 				row.LiveErr = err

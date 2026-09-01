@@ -105,6 +105,7 @@ func Run(ctx context.Context, s Store, d port.Discoverer, now time.Time, opts Op
 	}
 
 	report.checkOverlaps(owners)
+	report.checkCorruptStatuses(sr.Statuses)
 	report.checkOrphanStatuses(sr.Statuses, owners)
 	report.checkStuck(sr.Statuses, owners, now, opts.StuckAfter)
 
@@ -147,18 +148,18 @@ func (r *Report) block(format string, args ...any) {
 
 // グループ行 1 件を診断し、そのセレクタにマッチするリソースを owners へ積む
 func (r *Report) inspectGroup(ctx context.Context, d port.Discoverer, row state.GroupRow, owners map[string][]string) {
-	if row.Err != nil {
-		r.add(Finding{Kind: KindCorruptRecord, Group: row.Name, Detail: row.Err.Error()})
+	if row.GroupErr != nil {
+		r.add(Finding{Kind: KindCorruptRecord, Group: row.Name, PK: state.GroupPK(row.Name), SK: state.GroupSK(row.Name), Detail: row.GroupErr.Error()})
 		// group# 自身が壊れている場合、そのセレクタが一致するリソースを特定できない
 		r.block("group %q has a corrupt record; its members could not be enumerated", row.Name)
-		if !row.HasGroup {
-			// HasGroup は group# の読み取り成否を表し、group# の不在を表さない
-			// 読めなかったレコードが group# 自身である場合、アイテムは存在するが、ここでは観測できない
-			// これをグループの不在の根拠とすると、有効な override や group-status を孤立レコードとして削除する
-			// 同一のレポートが同時に corrupt-record を報告する状態にもなる
-			// 両者の区別は Scan だけでは付かないため、孤立判定を見送る
-			return
-		}
+		return
+	}
+	if row.OverrideErr != nil {
+		r.add(Finding{Kind: KindCorruptRecord, Group: row.Name, PK: state.OverridePK(row.Name), SK: state.OverrideSK(row.Name), Detail: row.OverrideErr.Error()})
+	}
+	if row.StatusErr != nil {
+		r.add(Finding{Kind: KindCorruptRecord, Group: row.Name, Resource: model.GroupStatusID(row.Name),
+			PK: state.GroupStatusPK(row.Name), SK: state.GroupStatusSK(), Detail: row.StatusErr.Error()})
 	}
 	if !row.HasGroup {
 		// override や group-status のみが残存している
@@ -204,6 +205,18 @@ func (r *Report) inspectGroup(ctx context.Context, d port.Discoverer, row state.
 	}
 }
 
+// 復号できないリソース Status を、キーと復号エラーを含む検出項目として追加する。
+func (r *Report) checkCorruptStatuses(statuses map[string]state.StatusRecord) {
+	for id, record := range statuses {
+		if record.Err == nil {
+			continue
+		}
+		r.add(Finding{
+			Kind: KindCorruptRecord, Resource: id, PK: state.StatusPK(id), SK: state.StatusSK(), Detail: record.Err.Error(),
+		})
+	}
+}
+
 // 同じリソースが 2 つ以上のグループのセレクタに一致する状態を報告する
 // reconciler ではグループ名順で最初のグループが所有し、以降のグループは自身の status#group# にエラーを記録する (reconcile.ReconcileGroup を参照)
 // 後者の設定は反映されないため、設定の不整合として扱う
@@ -222,11 +235,14 @@ func (r *Report) checkOverlaps(owners map[string][]string) {
 // どのグループのセレクタにも一致しないリソースの status# を報告する
 // タグの削除、リソースの削除、グループの削除のいずれかにより残存した監査記録である
 // 探索が 1 つでも欠けているサイクルでは、判定を行わない
-func (r *Report) checkOrphanStatuses(statuses map[string]model.Status, owners map[string][]string) {
+func (r *Report) checkOrphanStatuses(statuses map[string]state.StatusRecord, owners map[string][]string) {
 	if len(r.Blocked) > 0 {
 		return
 	}
-	for id := range statuses {
+	for id, record := range statuses {
+		if record.Err != nil {
+			continue
+		}
 		if len(owners[id]) > 0 {
 			continue
 		}
@@ -241,8 +257,9 @@ func (r *Report) checkOrphanStatuses(statuses map[string]model.Status, owners ma
 // reconciler は遷移中のリソースを毎サイクル skip し、エラーも通知も出さないため、この報告が唯一の検知経路となる
 // 解析できない transitioning_since は壊れたレコードとして扱う
 // 削除の漏れではなく、書き込み側の不具合を示すためである
-func (r *Report) checkStuck(statuses map[string]model.Status, owners map[string][]string, now time.Time, stuckAfter time.Duration) {
-	for id, st := range statuses {
+func (r *Report) checkStuck(statuses map[string]state.StatusRecord, owners map[string][]string, now time.Time, stuckAfter time.Duration) {
+	for id, record := range statuses {
+		st := record.Status
 		if st.TransitioningSince == "" {
 			continue
 		}

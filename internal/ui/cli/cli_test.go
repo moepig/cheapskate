@@ -155,7 +155,9 @@ func TestCmdListRendersGroupsAsJSON(t *testing.T) {
 	require.NotNil(t, dev.Selector)
 	assert.Equal(t, selectorJSON{TagKey: "env", TagValue: "dev", Types: []model.ResourceType{model.TypeRdsInstance}}, *dev.Selector)
 	assert.Nil(t, dev.Override)
-	assert.Empty(t, dev.Error)
+	assert.Empty(t, dev.ConfigError)
+	assert.Empty(t, dev.OverrideError)
+	assert.Empty(t, dev.StatusError)
 
 	staging := groups["staging"]
 	assert.Equal(t, model.ModeSchedule, staging.Mode)
@@ -208,9 +210,9 @@ func TestCmdListRendersPerRowErrorWithoutAbortingOthers(t *testing.T) {
 	groups := byName(t, got.Groups)
 	require.Contains(t, groups, "broken")
 	require.Contains(t, groups, "fine")
-	assert.Contains(t, groups["broken"].Error, "broken: override desired must be running|stopped")
+	assert.Contains(t, groups["broken"].OverrideError, "broken: override desired must be running|stopped")
 	assert.Equal(t, model.ModePinned, groups["fine"].Mode)
-	assert.Empty(t, groups["fine"].Error, "an unrelated group must not be affected by another group's error")
+	assert.Empty(t, groups["fine"].OverrideError, "an unrelated group must not be affected by another group's error")
 }
 
 func TestCmdListPropagatesQueryError(t *testing.T) {
@@ -312,7 +314,33 @@ func TestCmdShowRendersPerResourceLiveError(t *testing.T) {
 	assert.Empty(t, got.DiscoverErr, "探索は成功しているので discover_error は空でなければならない")
 }
 
-// 壊れた行はグループの "error" フィールドとして現れ、show 全体を失敗させてはならない
+// Status の復号エラーはリソース単位の status_error として出力し、読めた属性も保持する。
+func TestCmdShowRendersPerResourceStatusError(t *testing.T) {
+	f, s := newTestStore(t)
+	ctx := context.Background()
+
+	sel := model.Selector{TagKey: "env", TagValue: "dev", Types: []model.ResourceType{model.TypeRdsInstance}}
+	_, err := groups.SetSelector(ctx, s, "dev", sel)
+	require.NoError(t, err)
+	require.NoError(t, groups.Pin(ctx, s, "dev", model.DesiredStopped))
+	f.Seed(map[string]types.AttributeValue{
+		"pk":          &types.AttributeValueMemberS{Value: "status#rds-instance#dev-db"},
+		"last_action": &types.AttributeValueMemberS{Value: "stop"},
+		"last_error":  &types.AttributeValueMemberBOOL{Value: true},
+	})
+	d := &porttest.Discoverer{Resources: []model.Resource{{Type: model.TypeRdsInstance, Ref: "dev-db"}}}
+
+	var buf bytes.Buffer
+	require.NoError(t, cmdShow(ctx, s, d, nil, []string{"--group", "dev"}, &buf))
+
+	var got showOutput
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &got))
+	require.Len(t, got.Resources, 1)
+	assert.Equal(t, model.ActionStop, got.Resources[0].Status.LastAction)
+	assert.Contains(t, got.Resources[0].StatusErr, "last_error")
+}
+
+// 壊れた override はグループの override_error フィールドとして現れ、show 全体を失敗させてはならない。
 // cmdList については、TestCmdListRendersPerRowErrorWithoutAbortingOthers が同じ規約を検証する
 func TestCmdShowRendersPerRowError(t *testing.T) {
 	f, s := newTestStore(t)
@@ -333,7 +361,7 @@ func TestCmdShowRendersPerRowError(t *testing.T) {
 
 	var got showOutput
 	require.NoError(t, json.Unmarshal(buf.Bytes(), &got))
-	assert.Contains(t, got.Group.Error, "override desired must be running|stopped")
+	assert.Contains(t, got.Group.OverrideError, "override desired must be running|stopped")
 	assert.Equal(t, "dev", got.Group.Name)
 }
 

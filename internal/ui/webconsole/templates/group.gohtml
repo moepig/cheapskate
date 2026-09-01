@@ -6,7 +6,9 @@
   <tr><th>Config</th><td>{{groupDesc .Detail.Group}}</td></tr>
   <tr><th>Selector</th><td>{{selDesc .Detail.Group}}</td></tr>
   <tr><th>Override</th><td>{{with ovDesc .Detail.Override}}{{.}}{{else}}<span class="muted">-</span>{{end}}</td></tr>
-  {{if .Detail.Err}}<tr><th>Error</th><td class="danger">{{.Detail.Err}}</td></tr>{{end}}
+  {{if .Detail.ConfigErr}}<tr><th>Config error</th><td class="danger">{{.Detail.ConfigErr}}</td></tr>{{end}}
+  {{if .Detail.OverrideErr}}<tr><th>Override error</th><td class="danger">{{.Detail.OverrideErr}}</td></tr>{{end}}
+  {{if .Detail.StatusErr}}<tr><th>Status error</th><td class="danger">{{.Detail.StatusErr}}</td></tr>{{end}}
   {{if .Detail.Status.LastError}}<tr><th>Last error</th><td class="danger">{{.Detail.Status.LastError}} at {{.Detail.Status.LastErrorAt}}</td></tr>{{end}}
 </table>
 </div>
@@ -27,7 +29,7 @@
     <td>{{with .Status.TransitioningSince}}{{.}}{{else}}<span class="muted">-</span>{{end}}</td>
     <td>{{with actDesc .Status}}{{.}}{{else}}<span class="muted">-</span>{{end}}</td>
     <td>{{with .Status.ObservedState}}{{.}}{{else}}<span class="muted">-</span>{{end}}</td>
-    <td>{{with .Status.LastError}}<span class="danger">{{.}}</span>{{else}}<span class="muted">-</span>{{end}}</td>
+    <td>{{if .StatusErr}}<span class="danger">status error: {{.StatusErr}}</span>{{else}}{{with .Status.LastError}}<span class="danger">{{.}}</span>{{else}}<span class="muted">-</span>{{end}}{{end}}</td>
   </tr>
   {{else}}
   <tr><td colspan="8" class="muted">No matching resources{{if .Detail.Group.TagKey}} (nothing currently tagged {{.Detail.Group.TagKey}}={{.Detail.Group.TagValue}}){{end}}.</td></tr>

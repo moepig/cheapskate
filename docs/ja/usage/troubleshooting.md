@@ -93,13 +93,15 @@ TTL の削除は非同期であり、期限後も最大 48 時間かかる場合
 | `orphan-override` | `group#` がないのに `override#` が残っている | 削除する |
 | `orphan-group-status` | `group#` がないのに `status#group#` が残っている | 削除する |
 | `orphan-status` | どのグループのセレクタにも一致しないリソースの `status#` | 削除する |
-| `corrupt-record` | 読み取りまたは検証に失敗するレコード | 削除しない |
+| `corrupt-record` | 読み取りまたは検証に失敗するレコード。Status の場合はリソース ID と DynamoDB キーを含む | 削除しない |
 | `config-error` | 登録済みだが reconciler が従えない設定(pinned なのに desired がない等) | 削除しない |
 | `discover-error` | セレクタは妥当だがリソースの検出が失敗した | 削除しない |
 | `selector-overlap` | 複数グループのセレクタが同じリソースに一致している | 削除しない |
 | `stuck-transitioning` | `--stuck-after` を超えて遷移中のまま | 削除しない |
 
 `--prune` の削除対象は、そのグループやリソースが存在しないことがテーブルの読み取りと検出のみで確定するレコードに限られる。設定そのもの(`group#`)、人間の判断を要する項目、および AWS リソースには触れない。
+
+Status の監査属性だけを復号できない場合、reconciler は読めた属性を使用して処理を継続する。pending 属性を復号できない場合は同じ AWS 操作の再送を防ぐため、そのリソースを操作しない。いずれも `corrupt-record` として報告し、`--prune` では削除しない。
 
 安全装置として、検出が 1 つでも失敗したサイクルでは `orphan-status` の判定そのものを見送る。一時的に検出できなかっただけのリソースの監査記録を削除しないためである。この場合、`blocked` に理由が入る。
 

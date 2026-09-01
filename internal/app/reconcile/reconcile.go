@@ -203,6 +203,9 @@ func (c *claims) claim(resourceID, group string) (owner string, ok bool) {
 // Discover の直後にクリアし、リソースのループで再度グループ単位のエラーを記録した場合、クリアの通知と記録の通知を毎サイクル繰り返すためである
 func ReconcileGroup(ctx context.Context, row state.GroupRow, claimed *claims, deps *Deps, now time.Time) []Result {
 	groupStatusID := model.GroupStatusID(row.Name)
+	if row.StatusErr != nil {
+		deps.Log.Warn("group-status-corrupt", "group", row.Name, "error", row.StatusErr.Error())
+	}
 
 	desired, cfg, err := resolveGroup(row, deps, now)
 	if err != nil {
@@ -246,11 +249,14 @@ func ReconcileGroup(ctx context.Context, row state.GroupRow, claimed *claims, de
 		}
 
 		record := statuses[resourceID]
-		if record.Err != nil {
+		if record.Err != nil && record.PendingCorrupt() {
 			result.Error = record.Err.Error()
 			recordFailure(ctx, deps, row.Name, resourceID, record.Status, record.Err, now)
 			results = append(results, result)
 			continue
+		}
+		if record.Err != nil {
+			deps.Log.Warn("resource-status-corrupt", "group", row.Name, "resource_id", resourceID, "error", record.Err.Error())
 		}
 		if err := reconcileResource(ctx, deps, row.Name, res, desired, record.Status, now, &result); err != nil {
 			result.Error = err.Error()
@@ -272,8 +278,11 @@ func ReconcileGroup(ctx context.Context, row state.GroupRow, claimed *claims, de
 }
 
 func resolveGroup(row state.GroupRow, deps *Deps, now time.Time) (model.DesiredState, model.GroupConfig, error) {
-	if row.Err != nil { // このグループ配下の override/group/group-status アイテムが壊れている
-		return model.DesiredNone, model.GroupConfig{}, row.Err
+	if row.GroupErr != nil {
+		return model.DesiredNone, model.GroupConfig{}, row.GroupErr
+	}
+	if row.OverrideErr != nil {
+		return model.DesiredNone, model.GroupConfig{}, row.OverrideErr
 	}
 	cfg, err := model.ParseGroup(row.Group)
 	if err != nil {
