@@ -14,7 +14,7 @@ Custom metrics are disabled by default and are emitted only when `METRICS_ENABLE
 
 | Metric | Meaning | When emitted |
 | --- | --- | --- |
-| `ReconciledResources` | Resources processed in the cycle | Only on a cycle that ran to completion |
+| `ReconciledResources` | Unique resources that entered their owning group's processing path in the cycle | Only on a cycle that ran to completion |
 | `ReconcileActions` | Starts and stops performed | Only on a cycle that ran to completion |
 | `ReconcileErrors` | Per-resource and per-group failures | Only on a cycle that ran to completion |
 | `ReconcileAborted` | `1` when the cycle never got going, `0` when it completed | Every cycle |
@@ -22,6 +22,8 @@ Custom metrics are disabled by default and are emitted only when `METRICS_ENABLE
 `ReconcileAborted` alone is emitted as `0` on completion too. Emitting only one side would leave alarms permanently in insufficient-data, with no way to tell trouble from silence.
 
 When a cycle is cut short, the other three data points do not exist. It is not that the counts were zero, but that nothing was ever reached to count.
+
+`ReconciledResources` excludes disabled groups, group-level errors, discovery failures, later groups whose ownership could not be established, and the losing side of selector collisions. A resource that enters its owner's processing path and then fails status validation or Describe is counted. A resource appearing in several discovery results is counted once. This is not the configured inventory size; it is the number that reached the processing path in that cycle.
 
 If the Lambda times out or panics, the process dies and no metric is emitted at all.
 
@@ -42,7 +44,7 @@ What the built-in metrics and the EMF metrics each capture is collected below.
 | `Throttles` (built-in) | Invocations backing up against the reserved concurrency of 1 |
 | `ReconcileErrors` | The number of per-resource and per-group failures. Emitted only when enabled |
 | `ReconcileActions` | Starts and stops happening. Permanently 0 means the configuration is not taking effect |
-| `ReconciledResources` | How the number of managed resources moves over time |
+| `ReconciledResources` | How the number of resources reaching the processing path moves over time |
 
 The handler returns success even when individual resources or groups fail, preventing EventBridge from retrying the entire cycle. Status, SNS, logs, and the enabled `ReconcileErrors` metric expose those failures.
 
@@ -79,7 +81,7 @@ Disabling loses the counts and the trends, nothing else. What remains and what i
 | --- | --- |
 | The built-in `Errors` / `Duration` / `Throttles` | `ReconcileErrors` (per-resource and per-group failure count) |
 | SNS notifications (actions, failures, recoveries) | `ReconcileActions` (actions happening) |
-| `last_error` on `status#` | `ReconciledResources` (the trend in managed resources) |
+| `last_error` on `status#` | `ReconciledResources` (the trend in resources reaching the processing path) |
 | The log | `ReconcileAborted` (detecting that invocation stopped) |
 
 With custom metrics disabled, per-resource and per-group failures do not appear in the built-in `Errors` metric. Proactive detection requires SNS, status/log monitoring, or enabling the custom metrics.

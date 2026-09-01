@@ -14,7 +14,7 @@ reconciler は `PutMetricData` を呼ばない。EMF(CloudWatch Embedded Metric 
 
 | メトリクス | 意味 | 発行タイミング |
 | --- | --- | --- |
-| `ReconciledResources` | そのサイクルで処理したリソース件数 | サイクル完走時のみ |
+| `ReconciledResources` | そのサイクルで所有グループの処理へ入った一意なリソース件数 | サイクル完走時のみ |
 | `ReconcileActions` | 実行した start/stop の件数 | サイクル完走時のみ |
 | `ReconcileErrors` | リソース単位・グループ単位の失敗件数 | サイクル完走時のみ |
 | `ReconcileAborted` | サイクル自体が立ち上がらなかったとき `1`、完走したとき `0` | 毎サイクル |
@@ -22,6 +22,8 @@ reconciler は `PutMetricData` を呼ばない。EMF(CloudWatch Embedded Metric 
 `ReconcileAborted` だけは完走時にも `0` を出す。片側しか出さないとアラームが常にデータ不足に落ち、異常と無音を区別できなくなるためである。
 
 サイクルが中断した場合、残り 3 つのデータポイントは存在しない。処理件数が 0 だったのではなく、数える対象に到達していないためである。
+
+`ReconciledResources` は disabled グループ、グループ単位のエラー、探索失敗、所有権を確定できなかった後続グループ、およびセレクタ重複の負け側を数えない。所有者として処理へ入り、Status の検証または Describe 以降で失敗したリソースは数える。同じリソースが複数の探索結果に現れても 1 件である。この値は設定上の管理対象総数ではなく、そのサイクルで処理経路へ到達した件数である。
 
 Lambda がタイムアウトまたは panic した場合は、プロセスが落ちるためどのメトリクスも出ない。
 
@@ -42,7 +44,7 @@ Lambda がタイムアウトまたは panic した場合は、プロセスが落
 | `Throttles`(組み込み) | 予約同時実行数 1 に対する呼び出しの詰まり |
 | `ReconcileErrors` | リソース単位・グループ単位の失敗件数。有効化した場合だけ発行する |
 | `ReconcileActions` | start/stop の発生。恒常的に 0 なら設定が効いていない |
-| `ReconciledResources` | 管理下のリソース数の推移 |
+| `ReconciledResources` | 処理経路へ到達したリソース数の推移 |
 
 リソース単位・グループ単位の失敗があってもハンドラは成功を返し、EventBridge にサイクル全体を再実行させない。これらの失敗は Status、SNS、ログ、および有効化した `ReconcileErrors` で観測する。
 
@@ -79,7 +81,7 @@ Lambda がタイムアウトまたは panic した場合は、プロセスが落
 | --- | --- |
 | Lambda 組み込みの `Errors` / `Duration` / `Throttles` | `ReconcileErrors`(リソース単位・グループ単位の失敗件数) |
 | SNS 通知(アクション・失敗・復旧) | `ReconcileActions`(アクションの発生) |
-| `status#` の `last_error` | `ReconciledResources`(管理下リソース数の推移) |
+| `status#` の `last_error` | `ReconciledResources`(処理経路へ到達したリソース数の推移) |
 | ログ | `ReconcileAborted`(呼び出しが途切れたことの検知) |
 
 メトリクス無効時、リソース単位・グループ単位の失敗は組み込みの `Errors` に現れない。能動的に検知するには SNS、Status／ログの監視、またはカスタムメトリクスの有効化が必要である。

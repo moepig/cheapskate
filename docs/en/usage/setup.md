@@ -101,7 +101,7 @@ When `METRICS_ENABLED=true` is explicitly set, the reconciler emits four metrics
 
 | Metric | Meaning |
 | --- | --- |
-| `ReconciledResources` | Resources processed in the cycle |
+| `ReconciledResources` | Unique resources entering their owning group's processing path in the cycle |
 | `ReconcileActions` | Starts and stops performed |
 | `ReconcileErrors` | Per-resource and per-group failures |
 | `ReconcileAborted` | 1 when the cycle never got going, 0 normally |

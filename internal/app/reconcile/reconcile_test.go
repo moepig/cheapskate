@@ -288,11 +288,23 @@ func TestDisabledGroupSkipsDiscoveryAndAllResources(t *testing.T) {
 	f := newFixture(t)
 	f.seedGroup("dev", model.ModeDisabled, "")
 
-	runEmpty(t, f)
+	summary := runEmpty(t, f)
 
 	assert.Zero(t, f.discoverer.Calls(), "disabled group must never call Discover")
 	assert.Empty(t, f.rds.Stopped)
 	assert.Empty(t, f.ecs.Stopped)
+	assert.Zero(t, summary.Reconciled)
+}
+
+func TestActiveGroupWithNoResourcesReconcilesZero(t *testing.T) {
+	f := newFixture(t)
+	f.seedGroup("dev", model.ModePinned, model.DesiredStopped)
+
+	summary := runEmpty(t, f)
+
+	assert.Zero(t, summary.Reconciled)
+	assert.Empty(t, summary.Actions)
+	assert.Empty(t, summary.Errors)
 }
 
 // 探索の直後に消えるリソースは、エラーではなくスキップとして扱う
@@ -771,6 +783,7 @@ func TestDisabledGroupIgnoresLiveOverride(t *testing.T) {
 
 	assert.Empty(t, f.rds.Started, "disabled group must not start anything, even with a live override")
 	assert.Zero(t, f.discoverer.Calls(), "disabled group must never call Discover")
+	assert.Zero(t, summary.Reconciled)
 	assert.Empty(t, summary.Errors)
 }
 
@@ -840,6 +853,7 @@ func TestGroupLevelErrorRecordedOnceNotPerResource(t *testing.T) {
 
 	summary := runEmpty(t, f)
 	require.Len(t, summary.Errors, 1, "a group-level error must be recorded once, not per resource")
+	assert.Zero(t, summary.Reconciled)
 	assert.Equal(t, "dev", summary.Errors[0].Group)
 	assert.Empty(t, summary.Errors[0].ResourceID, "a group-level error has no single resource_id")
 	assert.Zero(t, f.discoverer.Calls(), "Discover must never be called once group resolution fails")
@@ -960,9 +974,28 @@ func TestSelectorOverlapFirstGroupWinsBySortedName(t *testing.T) {
 	summary := runEmpty(t, f)
 
 	assert.Equal(t, []string{"shared-db"}, f.rds.Stopped, "the first group (a-first, pinned stopped) must act on the shared resource")
+	assert.Equal(t, 1, summary.Reconciled, "重複セレクタの負け側を同じリソースとして重ねて数えてはならない")
 	require.Len(t, summary.Errors, 1)
 	assert.Equal(t, "z-second", summary.Errors[0].Group, "the losing group must get the per-resource error")
 	assert.Equal(t, "rds-instance#shared-db", summary.Errors[0].ResourceID)
+}
+
+// 所有グループが Status の一括取得前に失敗した場合、重複セレクタの負け側が返す結果行だけを根拠に処理件数へ加えてはならない。
+func TestOverlapLoserDoesNotCountResourceWhenOwnerCouldNotProcessIt(t *testing.T) {
+	f := newFixture(t)
+	f.seedGroup("a-first", model.ModePinned, model.DesiredStopped)
+	f.seedGroup("z-second", model.ModePinned, model.DesiredRunning)
+	shared := rdsInstance("shared-db")
+	f.discoverer.ByTagValue["a-first"] = []model.Resource{shared}
+	f.discoverer.ByTagValue["z-second"] = []model.Resource{shared}
+	f.db.FailOnNth("batch-get", "", 2, fmt.Errorf("status unavailable"))
+
+	summary := runEmpty(t, f)
+
+	assert.Zero(t, summary.Reconciled)
+	assert.Empty(t, f.rds.Stopped)
+	assert.Empty(t, f.rds.Started)
+	require.Len(t, summary.Errors, 2)
 }
 
 // セレクタ重複のエラーは、リソースが共有する status# ではなく、報告する側のグループの status#group# に記録しなければならない
@@ -1099,6 +1132,7 @@ func TestEarlierDiscoverFailureBlocksLaterGroups(t *testing.T) {
 	summary := runEmpty(t, f)
 
 	require.Len(t, summary.Errors, 2)
+	assert.Zero(t, summary.Reconciled)
 	byGroup := map[string]Result{}
 	for _, result := range summary.Errors {
 		byGroup[result.Group] = result
@@ -1122,6 +1156,7 @@ func TestLaterDiscoverFailureDoesNotBlockEarlierOwner(t *testing.T) {
 	summary := runEmpty(t, f)
 
 	require.Len(t, summary.Errors, 1)
+	assert.Equal(t, 1, summary.Reconciled)
 	assert.Equal(t, "z-broken", summary.Errors[0].Group)
 	assert.Equal(t, []string{"fine-db"}, f.rds.Stopped)
 }

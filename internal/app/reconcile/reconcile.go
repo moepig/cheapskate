@@ -57,10 +57,12 @@ type Result struct {
 	Action     model.Action        `json:"action,omitempty"`
 	Skipped    string              `json:"skipped,omitempty"`
 	Error      string              `json:"error,omitempty"`
+	processed  bool
 }
 
 // ハンドラの戻り値
 type Summary struct {
+	// 所有グループの処理へ入った一意なリソース数。
 	Reconciled int      `json:"reconciled"`
 	Actions    []Result `json:"actions"`
 	Errors     []Result `json:"errors"`
@@ -155,8 +157,12 @@ func Run(ctx context.Context, raw json.RawMessage, deps *Deps, now time.Time) (S
 		results = append(results, reconcilePreparedGroup(ctx, group, claimed, deps, now)...)
 	}
 
-	summary := Summary{Reconciled: len(results), Actions: []Result{}, Errors: []Result{}}
+	summary := Summary{Actions: []Result{}, Errors: []Result{}}
+	processed := map[string]struct{}{}
 	for _, r := range results {
+		if r.processed {
+			processed[r.ResourceID] = struct{}{}
+		}
 		if r.Action != model.ActionNone {
 			summary.Actions = append(summary.Actions, r)
 		}
@@ -164,6 +170,7 @@ func Run(ctx context.Context, raw json.RawMessage, deps *Deps, now time.Time) (S
 			summary.Errors = append(summary.Errors, r)
 		}
 	}
+	summary.Reconciled = len(processed)
 	deps.Log.Info("summary",
 		"reconciled", summary.Reconciled,
 		"actions", len(summary.Actions),
@@ -306,6 +313,7 @@ func reconcilePreparedGroup(ctx context.Context, group preparedGroup, claimed *c
 			results = append(results, result)
 			continue
 		}
+		result.processed = true
 
 		record := statuses[resourceID]
 		if record.Err != nil && record.PendingCorrupt() {

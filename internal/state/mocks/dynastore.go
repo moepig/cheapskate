@@ -103,7 +103,10 @@ func (f *DynaStore) SetBatchGetUnprocessedResponses(n int) {
 // (op, pk) に注入された失敗を取り出して返す
 // 操作全体に対する "" の指定よりも、キー個別の指定を優先する
 func (f *DynaStore) takeFailure(op, pk string) error {
-	keys := []string{op + "|" + pk, op + "|"}
+	keys := []string{op + "|" + pk}
+	if pk != "" {
+		keys = append(keys, op+"|")
+	}
 	for _, key := range keys {
 		if err, ok := f.fail[key]; ok {
 			delete(f.fail, key)

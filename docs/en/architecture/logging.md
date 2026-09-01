@@ -50,7 +50,7 @@ An attribute of the same name carries the same meaning across components. All at
 | `reason` | - | string | Why it was treated that way | Free text |
 | `action` | - | string | The operation performed or requested | A value from the component's action list |
 | `result` | - | string | The outcome of the operation | Free text (the same wording shown on screen) |
-| `reconciled` | - | number | Resources seen in one cycle | A non-negative integer |
+| `reconciled` | - | number | Unique resources entering their owning group's processing path in one cycle | A non-negative integer |
 | `actions` | - | number | Actions performed in one cycle | A non-negative integer |
 | `errors` | - | number | Failures in one cycle | A non-negative integer |
 | `pruned` | - | number | Records the prune managed to delete | A non-negative integer. Present only when some deletions failed |

@@ -101,7 +101,7 @@ aws sns subscribe --topic-arn arn:aws:sns:ap-northeast-1:123456789012:cheapskate
 
 | メトリクス | 意味 |
 | --- | --- |
-| `ReconciledResources` | そのサイクルで処理したリソース件数 |
+| `ReconciledResources` | そのサイクルで所有グループの処理へ入った一意なリソース件数 |
 | `ReconcileActions` | 実行した start/stop の件数 |
 | `ReconcileErrors` | リソース単位・グループ単位の失敗件数 |
 | `ReconcileAborted` | サイクル自体が立ち上がらなかったとき 1、通常は 0 |
