@@ -23,6 +23,8 @@ type Status struct {
 	LastErrorAt        string        `json:"last_error_at,omitempty"`
 	TransitioningSince string        `json:"transitioning_since,omitempty"`
 	PendingOperationID string        `json:"pending_operation_id,omitempty"`
+	PendingGroup       string        `json:"pending_group,omitempty"`
+	PendingConfigHash  string        `json:"pending_config_hash,omitempty"`
 	PendingAction      Action        `json:"pending_action,omitempty"`
 	PendingDesired     DesiredState  `json:"pending_desired,omitempty"`
 	PendingObserved    ObservedState `json:"pending_observed,omitempty"`

@@ -7,6 +7,7 @@ package reconcile
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -233,6 +234,7 @@ func ReconcileGroup(ctx context.Context, row state.GroupRow, claimed *claims, de
 	}
 
 	var taken []string // 他のグループがすでに取得済みだったリソース
+	scope := newOperationScope(cfg, row.Override, desired, deps.DefaultTimezone)
 	results := make([]Result, 0, len(resources))
 	for _, res := range resources {
 		resourceID := res.ID()
@@ -258,9 +260,9 @@ func ReconcileGroup(ctx context.Context, row state.GroupRow, claimed *claims, de
 		if record.Err != nil {
 			deps.Log.Warn("resource-status-corrupt", "group", row.Name, "resource_id", resourceID, "error", record.Err.Error())
 		}
-		if err := reconcileResource(ctx, deps, row.Name, res, desired, record.Status, now, &result); err != nil {
+		if err := reconcileResource(ctx, deps, scope, res, desired, record.Status, now, &result); err != nil {
 			result.Error = err.Error()
-			recordFailure(ctx, deps, row.Name, resourceID, record.Status, err, now)
+			recordFailure(ctx, deps, result.Group, resourceID, record.Status, err, now)
 		}
 		results = append(results, result)
 	}
@@ -275,6 +277,43 @@ func ReconcileGroup(ctx context.Context, row state.GroupRow, claimed *claims, de
 		clearRecoveredError(ctx, deps, row.Name, groupStatusID, row.Status, now)
 	}
 	return results
+}
+
+// AWS 操作を開始したグループと、その時点で有効だった設定を識別する。
+// 動的なセレクタによりリソースの所属が変わっても、未完了操作の通知先と設定境界を保持する。
+type operationScope struct {
+	Group      string
+	ConfigHash string
+}
+
+// 操作結果に影響する設定を正規化し、同じ設定からは同じ値を生成する。
+func newOperationScope(cfg model.GroupConfig, override *model.Override, desired model.DesiredState, defaultTimezone string) operationScope {
+	payload := struct {
+		Group             string
+		Mode              model.Mode
+		ConfiguredDesired model.DesiredState
+		ResolvedDesired   model.DesiredState
+		StartCron         string
+		StopCron          string
+		Timezone          string
+		DefaultTimezone   string
+		TagKey            string
+		TagValue          string
+		Types             []string
+		OverrideDesired   model.DesiredState
+		OverrideExpiresAt int64
+	}{
+		Group: cfg.Name, Mode: cfg.Mode, ConfiguredDesired: cfg.Desired, ResolvedDesired: desired,
+		StartCron: cfg.StartCron, StopCron: cfg.StopCron, Timezone: cfg.Timezone, DefaultTimezone: defaultTimezone,
+		TagKey: cfg.Selector.TagKey, TagValue: cfg.Selector.TagValue, Types: model.TypeNames(cfg.Selector.Types),
+	}
+	if override != nil {
+		payload.OverrideDesired = override.Desired
+		payload.OverrideExpiresAt = override.ExpiresAt
+	}
+	raw, _ := json.Marshal(payload)
+	hash := sha256.Sum256(raw)
+	return operationScope{Group: cfg.Name, ConfigHash: hex.EncodeToString(hash[:])}
 }
 
 func resolveGroup(row state.GroupRow, deps *Deps, now time.Time) (model.DesiredState, model.GroupConfig, error) {
@@ -301,8 +340,9 @@ func resolveGroup(row state.GroupRow, deps *Deps, now time.Time) (model.DesiredS
 // 発見されたリソース 1 件を処理する
 // ターゲットを解決し、desired と observed を比較し、差異があれば操作し、永続化して通知する
 // いずれかの手順が失敗した時点で中断する。記録は呼び出し側が行う
-func reconcileResource(ctx context.Context, deps *Deps, groupName string, res model.Resource, desired model.DesiredState, status model.Status, now time.Time, result *Result) error {
+func reconcileResource(ctx context.Context, deps *Deps, scope operationScope, res model.Resource, desired model.DesiredState, status model.Status, now time.Time, result *Result) error {
 	resourceID := res.ID()
+	groupName := scope.Group
 
 	tgt, ok := deps.Targets[res.Type]
 	if !ok {
@@ -319,15 +359,20 @@ func reconcileResource(ctx context.Context, deps *Deps, groupName string, res mo
 		if err != nil {
 			return err
 		}
+		pendingGroup := firstNonEmpty(op.Group, groupName)
+		result.Group = pendingGroup
 		if observationMatchesDesired(obs.State, op.Desired) {
 			if err := deps.Store.CompleteOperation(ctx, resourceID, op); err != nil {
 				return fmt.Errorf("complete recovered operation %s: %w", op.ID, err)
 			}
-			result.Action = op.Action
-			deps.Log.Info("action-recovered", "group", groupName, "resource_id", resourceID,
+			contextChanged := op.Group != "" && (op.Group != scope.Group || op.ConfigHash != scope.ConfigHash)
+			result.Action, result.Desired = op.Action, op.Desired
+			deps.Log.Info("action-recovered", "group", pendingGroup, "resource_id", resourceID,
 				"operation_id", op.ID, "action", op.Action, "desired", op.Desired)
-			deliverActionNotification(ctx, deps, groupName, resourceID, op.ID, op.Action, op.Desired, op.StartedAt)
+			deliverActionNotification(ctx, deps, pendingGroup, resourceID, op.ID, op.Action, op.Desired, op.StartedAt)
 			status.PendingOperationID = ""
+			status.PendingGroup = ""
+			status.PendingConfigHash = ""
 			status.PendingAction = model.ActionNone
 			status.PendingDesired = model.DesiredNone
 			status.PendingObserved = ""
@@ -337,6 +382,13 @@ func reconcileResource(ctx context.Context, deps *Deps, groupName string, res mo
 			status.LastActionAt = op.StartedAt
 			status.LastError = ""
 			status.LastErrorAt = ""
+			if contextChanged {
+				deps.Log.Info("pending-operation-context-changed", "resource_id", resourceID,
+					"operation_id", op.ID, "pending_group", op.Group, "current_group", scope.Group,
+					"pending_config_hash", op.ConfigHash, "current_config_hash", scope.ConfigHash)
+				result.Skipped = "operation-context-changed"
+				return nil
+			}
 		} else if obs.State == model.StateTransitioning {
 			markTransitioning(ctx, deps, resourceID, status, now)
 			deps.Log.Info("skip-pending-transition", "resource_id", resourceID, "operation_id", op.ID,
@@ -389,7 +441,8 @@ func reconcileResource(ctx context.Context, deps *Deps, groupName string, res mo
 		return fmt.Errorf("create operation ID: %w", err)
 	}
 	op := state.PendingOperation{
-		ID: operationID, Action: action, Desired: desired, Observed: obs.State,
+		ID: operationID, Group: scope.Group, ConfigHash: scope.ConfigHash,
+		Action: action, Desired: desired, Observed: obs.State,
 		StartedAt: now.UTC().Format(time.RFC3339),
 	}
 	if err := deps.Store.BeginOperation(ctx, resourceID, op); err != nil {
@@ -415,8 +468,21 @@ func reconcileResource(ctx context.Context, deps *Deps, groupName string, res mo
 
 func pendingOperation(status model.Status) (state.PendingOperation, time.Time, error) {
 	op := state.PendingOperation{
-		ID: status.PendingOperationID, Action: status.PendingAction, Desired: status.PendingDesired,
+		ID: status.PendingOperationID, Group: status.PendingGroup, ConfigHash: status.PendingConfigHash,
+		Action: status.PendingAction, Desired: status.PendingDesired,
 		Observed: status.PendingObserved, StartedAt: status.PendingStartedAt,
+	}
+	if (op.Group == "") != (op.ConfigHash == "") {
+		return state.PendingOperation{}, time.Time{}, fmt.Errorf("pending operation %s has incomplete ownership context", op.ID)
+	}
+	if op.Group != "" {
+		if err := model.ValidGroupName(op.Group); err != nil {
+			return state.PendingOperation{}, time.Time{}, fmt.Errorf("pending operation %s has invalid group: %w", op.ID, err)
+		}
+		hash, err := hex.DecodeString(op.ConfigHash)
+		if err != nil || len(hash) != sha256.Size {
+			return state.PendingOperation{}, time.Time{}, fmt.Errorf("pending operation %s has invalid config hash %q", op.ID, op.ConfigHash)
+		}
 	}
 	startedAt, err := time.Parse(time.RFC3339, op.StartedAt)
 	if err != nil {

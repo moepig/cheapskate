@@ -132,6 +132,24 @@ func TestLeaseExpiration(t *testing.T) {
 	})
 }
 
+func TestOperationScopeHashTracksEffectiveConfiguration(t *testing.T) {
+	cfg := model.GroupConfig{
+		Name: "dev", Mode: model.ModePinned, Desired: model.DesiredStopped,
+		Selector: model.Selector{TagKey: "env", TagValue: "dev", Types: []model.ResourceType{model.TypeRdsInstance}},
+	}
+	first := newOperationScope(cfg, nil, model.DesiredStopped, "UTC")
+	second := newOperationScope(cfg, nil, model.DesiredStopped, "UTC")
+
+	assert.Equal(t, first, second)
+	assert.Equal(t, "dev", first.Group)
+	assert.Len(t, first.ConfigHash, 64)
+
+	changedSelector := cfg
+	changedSelector.Selector.TagValue = "prod"
+	assert.NotEqual(t, first.ConfigHash, newOperationScope(changedSelector, nil, model.DesiredStopped, "UTC").ConfigHash)
+	assert.NotEqual(t, first.ConfigHash, newOperationScope(cfg, &model.Override{Desired: model.DesiredRunning, ExpiresAt: now.Add(time.Hour).Unix()}, model.DesiredRunning, "UTC").ConfigHash)
+}
+
 func TestStopsRunningPinnedResource(t *testing.T) {
 	f := newFixture(t)
 	f.pinnedStoppedGroup("dev-db", rdsInstance("dev-db"))
@@ -525,6 +543,52 @@ func TestPendingOperationRecoversWithoutRepeatingAWSAction(t *testing.T) {
 	assert.Len(t, f.notifier.Published, 2, "復旧した操作の通知とは別に recovered を送信しない")
 }
 
+// 動的なタグ所属が操作中に変わっても、未完了操作は開始時のグループへ帰属させる。
+// 新しい所有者の設定は旧操作の完了を記録した次のサイクルから適用し、1 サイクルで逆向きの操作を続けて実行しない。
+func TestPendingOperationKeepsOriginalOwnerAcrossMembershipChange(t *testing.T) {
+	f := newFixture(t)
+	resource := rdsInstance("shared-db")
+	resourceID := resource.ID()
+	f.pinnedStoppedGroup("a-old", resource)
+	f.rds.Observations[resource.Ref] = model.Observation{State: model.StateRunning}
+	f.db.FailOnNth("update", "status#"+resourceID, 2, fmt.Errorf("completion interrupted"))
+
+	first := runEmpty(t, f)
+	require.Len(t, first.Errors, 1)
+	status := f.db.Item("status#" + resourceID)
+	require.NotNil(t, status)
+	assert.Equal(t, "a-old", status["pending_group"].(*types.AttributeValueMemberS).Value)
+	assert.Len(t, status["pending_config_hash"].(*types.AttributeValueMemberS).Value, 64)
+
+	f.discoverer.ByTagValue["a-old"] = nil
+	f.seedGroup("b-new", model.ModePinned, model.DesiredRunning)
+	f.discoverer.ByTagValue["b-new"] = []model.Resource{resource}
+	f.rds.Observations[resource.Ref] = model.Observation{State: model.StateStopped}
+
+	second := runEmpty(t, f)
+	require.Len(t, second.Actions, 1)
+	assert.Equal(t, "a-old", second.Actions[0].Group)
+	assert.Equal(t, model.ActionStop, second.Actions[0].Action)
+	assert.Equal(t, "operation-context-changed", second.Actions[0].Skipped)
+	assert.Empty(t, f.rds.Started, "新しい所有者の逆向き操作は次のサイクルまで待つ")
+
+	var recovered *porttest.Notification
+	for i := range f.notifier.Published {
+		n := &f.notifier.Published[i]
+		if n.Payload["operation_id"] != nil && n.Payload["action"] == model.ActionStop {
+			recovered = n
+		}
+	}
+	require.NotNil(t, recovered)
+	assert.Equal(t, "a-old", recovered.Payload["group"])
+
+	third := runEmpty(t, f)
+	require.Len(t, third.Actions, 1)
+	assert.Equal(t, "b-new", third.Actions[0].Group)
+	assert.Equal(t, model.ActionStart, third.Actions[0].Action)
+	assert.Equal(t, []string{"shared-db"}, f.rds.Started)
+}
+
 // 未完了操作の各フィールドを個別に破損させ、操作を再開できる値として解釈されないことを確かめる。
 // 不完全な監査証跡に基づく AWS 操作の再実行を防ぐため、フィールド間の不整合も拒否する。
 func TestPendingOperationRejectsInvalidStatus(t *testing.T) {
@@ -545,6 +609,10 @@ func TestPendingOperationRejectsInvalidStatus(t *testing.T) {
 		{"invalid desired", func(s *model.Status) { s.PendingDesired = model.DesiredNone }, "invalid desired state"},
 		{"invalid observed", func(s *model.Status) { s.PendingObserved = model.StateTransitioning }, "invalid observed state"},
 		{"inconsistent action", func(s *model.Status) { s.PendingAction = model.ActionStart }, "inconsistent action"},
+		{"group without config hash", func(s *model.Status) { s.PendingGroup = "dev" }, "incomplete ownership context"},
+		{"config hash without group", func(s *model.Status) { s.PendingConfigHash = strings.Repeat("a", 64) }, "incomplete ownership context"},
+		{"invalid group", func(s *model.Status) { s.PendingGroup, s.PendingConfigHash = "bad/group", strings.Repeat("a", 64) }, "invalid group"},
+		{"invalid config hash", func(s *model.Status) { s.PendingGroup, s.PendingConfigHash = "dev", "not-a-hash" }, "invalid config hash"},
 	}
 
 	for _, tc := range cases {
@@ -559,6 +627,20 @@ func TestPendingOperationRejectsInvalidStatus(t *testing.T) {
 			assert.True(t, startedAt.IsZero())
 		})
 	}
+}
+
+func TestPendingOperationAcceptsLegacyStatusWithoutOwnershipContext(t *testing.T) {
+	status := model.Status{
+		PendingOperationID: "op-a", PendingAction: model.ActionStop,
+		PendingDesired: model.DesiredStopped, PendingObserved: model.StateRunning,
+		PendingStartedAt: now.Format(time.RFC3339),
+	}
+
+	op, _, err := pendingOperation(status)
+
+	require.NoError(t, err)
+	assert.Empty(t, op.Group)
+	assert.Empty(t, op.ConfigHash)
 }
 
 // 未完了操作は 30 分未満では再実行せず、30 分に達した時点で放棄してエラーとして記録する。

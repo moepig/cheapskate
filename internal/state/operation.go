@@ -11,11 +11,13 @@ import (
 // PendingOperation は AWS の変更操作を実行する前に永続化する意図を表す。
 // CompleteOperation が同じ ID を条件に完了へ進めるため、別の実行による上書きを防ぐ。
 type PendingOperation struct {
-	ID        string
-	Action    model.Action
-	Desired   model.DesiredState
-	Observed  model.ObservedState
-	StartedAt string
+	ID         string
+	Group      string
+	ConfigHash string
+	Action     model.Action
+	Desired    model.DesiredState
+	Observed   model.ObservedState
+	StartedAt  string
 }
 
 // 未完了の変更操作がない場合だけ、操作意図を記録する。
@@ -23,6 +25,8 @@ func (s *Store) BeginOperation(ctx context.Context, resourceID string, op Pendin
 	empty := ""
 	return s.updateStatus(ctx, resourceID, StatusPatch{
 		PendingOperationID: new(op.ID),
+		PendingGroup:       new(op.Group),
+		PendingConfigHash:  new(op.ConfigHash),
 		PendingAction:      new(op.Action),
 		PendingDesired:     new(op.Desired),
 		PendingObserved:    new(op.Observed),
@@ -43,6 +47,8 @@ func (s *Store) CompleteOperation(ctx context.Context, resourceID string, op Pen
 		LastError:          new(empty),
 		LastErrorAt:        new(empty),
 		PendingOperationID: new(empty),
+		PendingGroup:       new(empty),
+		PendingConfigHash:  new(empty),
 		PendingAction:      new(model.ActionNone),
 		PendingDesired:     new(model.DesiredNone),
 		PendingObserved:    new(model.ObservedState("")),
@@ -59,6 +65,8 @@ func (s *Store) AbandonOperation(ctx context.Context, resourceID, operationID st
 	empty := ""
 	return s.updateStatus(ctx, resourceID, StatusPatch{
 		PendingOperationID: new(empty),
+		PendingGroup:       new(empty),
+		PendingConfigHash:  new(empty),
 		PendingAction:      new(model.ActionNone),
 		PendingDesired:     new(model.DesiredNone),
 		PendingObserved:    new(model.ObservedState("")),

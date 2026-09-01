@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"strings"
 	"testing"
 	"time"
 
@@ -582,12 +583,17 @@ func TestPendingOperationRequiresMatchingOperationID(t *testing.T) {
 	ctx := context.Background()
 	resourceID := "rds-instance#dev"
 	op := PendingOperation{
-		ID: "op-a", Action: model.ActionStop, Desired: model.DesiredStopped,
+		ID: "op-a", Group: "dev", ConfigHash: strings.Repeat("a", 64),
+		Action: model.ActionStop, Desired: model.DesiredStopped,
 		Observed: model.StateRunning, StartedAt: "2026-08-30T12:00:00Z",
 	}
 	require.NoError(t, st.UpdateStatus(ctx, resourceID, StatusPatch{LastError: new("previous failure"), LastErrorAt: new("2026-08-30T11:59:00Z")}))
 
 	require.NoError(t, st.BeginOperation(ctx, resourceID, op))
+	pending, err := st.GetStatus(ctx, resourceID)
+	require.NoError(t, err)
+	assert.Equal(t, "dev", pending.PendingGroup)
+	assert.Equal(t, strings.Repeat("a", 64), pending.PendingConfigHash)
 	assert.Error(t, st.BeginOperation(ctx, resourceID, PendingOperation{ID: "op-b"}),
 		"未完了の操作を別の操作で上書きしてはならない")
 	assert.Error(t, st.CompleteOperation(ctx, resourceID, PendingOperation{ID: "op-b"}),
@@ -597,6 +603,8 @@ func TestPendingOperationRequiresMatchingOperationID(t *testing.T) {
 	got, err := st.GetStatus(ctx, resourceID)
 	require.NoError(t, err)
 	assert.Empty(t, got.PendingOperationID)
+	assert.Empty(t, got.PendingGroup)
+	assert.Empty(t, got.PendingConfigHash)
 	assert.Equal(t, model.ActionStop, got.LastAction)
 	assert.Equal(t, model.DesiredStopped, got.LastDesired)
 	assert.Empty(t, got.LastError, "操作の完了と以前のエラー解除は同じ更新で確定する")

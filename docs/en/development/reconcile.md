@@ -6,12 +6,14 @@ The reconciler cannot place an AWS action and a DynamoDB write in one transactio
 
 Processing for each resource proceeds in this order.
 
-1. Record an operation intent only when `pending_operation_id` is empty.
+1. Record an operation intent, including its operation ID, owning group, and effective-configuration hash, only when `pending_operation_id` is empty.
 2. Perform the AWS action.
 3. Conditionally and atomically replace that intent with the completion record, using the same operation ID.
 4. Publish a notification containing the action time, with at most two attempts.
 
 If execution ends after a successful AWS action but before its completion record, `pending_operation_id` remains. The next cycle resolves the result from the observed AWS state and does not perform the same AWS action again.
+
+If tag membership or configuration changes while an operation is pending, the original `pending_group` and `pending_config_hash` remain attached to it. The completion notification goes to the group that started the operation, and the reconciler does not start an AWS action from the new configuration in that cycle. The current owner and configuration take effect in the next cycle. A status record from an older version that lacks both attributes is recovered in compatibility mode and attributed to the current group.
 
 ## Notification delivery boundary
 

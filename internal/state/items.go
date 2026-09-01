@@ -96,6 +96,8 @@ type statusItem struct {
 	LastErrorAt        string `dynamodbav:"last_error_at,omitempty"`
 	TransitioningSince string `dynamodbav:"transitioning_since,omitempty"`
 	PendingOperationID string `dynamodbav:"pending_operation_id,omitempty"`
+	PendingGroup       string `dynamodbav:"pending_group,omitempty"`
+	PendingConfigHash  string `dynamodbav:"pending_config_hash,omitempty"`
 	PendingAction      string `dynamodbav:"pending_action,omitempty"`
 	PendingDesired     string `dynamodbav:"pending_desired,omitempty"`
 	PendingObserved    string `dynamodbav:"pending_observed,omitempty"`
@@ -112,6 +114,8 @@ func (i statusItem) status() model.Status {
 		LastErrorAt:        i.LastErrorAt,
 		TransitioningSince: i.TransitioningSince,
 		PendingOperationID: i.PendingOperationID,
+		PendingGroup:       i.PendingGroup,
+		PendingConfigHash:  i.PendingConfigHash,
 		PendingAction:      model.Action(i.PendingAction),
 		PendingDesired:     model.DesiredState(i.PendingDesired),
 		PendingObserved:    model.ObservedState(i.PendingObserved),
@@ -135,6 +139,8 @@ func decodeStatusRecord(resourceID string, raw map[string]types.AttributeValue) 
 		{"last_error_at", func(v string) { item.LastErrorAt = v }},
 		{"transitioning_since", func(v string) { item.TransitioningSince = v }},
 		{"pending_operation_id", func(v string) { item.PendingOperationID = v }},
+		{"pending_group", func(v string) { item.PendingGroup = v }},
+		{"pending_config_hash", func(v string) { item.PendingConfigHash = v }},
 		{"pending_action", func(v string) { item.PendingAction = v }},
 		{"pending_desired", func(v string) { item.PendingDesired = v }},
 		{"pending_observed", func(v string) { item.PendingObserved = v }},
@@ -184,6 +190,8 @@ type StatusPatch struct {
 	LastErrorAt        *string
 	TransitioningSince *string
 	PendingOperationID *string
+	PendingGroup       *string
+	PendingConfigHash  *string
 	PendingAction      *model.Action
 	PendingDesired     *model.DesiredState
 	PendingObserved    *model.ObservedState
@@ -220,6 +228,12 @@ func (p StatusPatch) attributes() []statusAttr {
 	}
 	if p.PendingOperationID != nil {
 		out = append(out, statusAttr{"pending_operation_id", *p.PendingOperationID})
+	}
+	if p.PendingGroup != nil {
+		out = append(out, statusAttr{"pending_group", *p.PendingGroup})
+	}
+	if p.PendingConfigHash != nil {
+		out = append(out, statusAttr{"pending_config_hash", *p.PendingConfigHash})
 	}
 	if p.PendingAction != nil {
 		out = append(out, statusAttr{"pending_action", string(*p.PendingAction)})

@@ -75,11 +75,13 @@ The domain representation is `model.Status`. The values are a snapshot taken whe
 | `last_error_at` | S | When that happened (RFC3339) |
 | `transitioning_since` | S | When the ongoing transition started (RFC3339). Unlike the other attributes this is not a snapshot: it disappears once the transition resolves |
 | `pending_operation_id` | S | The operation ID written before an AWS action. Non-empty means completion is awaiting confirmation |
+| `pending_group` | S | The group that owned the resource when the operation started |
+| `pending_config_hash` | S | SHA-256 of the effective group configuration, override, and resolved desired state when the operation started |
 | `pending_action` / `pending_desired` / `pending_observed` | S | The pending action, its target, and the observation before it ran |
 | `pending_started_at` | S | When the pending operation started (RFC3339) |
 | `expires_at` | N | Epoch seconds at the last status update plus `STATUS_RETENTION_DAYS`. The attribute DynamoDB TTL acts on |
 
-Status is latest-only, not a history. Every update extends `expires_at`; DynamoDB TTL deletes status items that stop receiving updates after the retention period. Before an AWS action, the pending attributes are written conditionally. Afterwards, the same operation ID is required to advance the item to the last-action state. If Lambda stops between these steps, the next invocation confirms completion from the AWS observation instead of repeating the action. Notifications are not stored in status. See [Reconcile persistence boundaries](../development/reconcile.md) for the persistence and notification boundaries.
+Status is latest-only, not a history. Every update extends `expires_at`; DynamoDB TTL deletes status items that stop receiving updates after the retention period. Before an AWS action, the pending attributes are written conditionally. Afterwards, the same operation ID is required to advance the item to the last-action state. If Lambda stops between these steps, the next invocation confirms completion from the AWS observation instead of repeating the action. If tag membership or configuration changes while an operation is pending, `pending_group` remains the completion-notification destination and the current configuration takes effect in the following cycle. Notifications are not stored in status. See [Reconcile persistence boundaries](../development/reconcile.md) for the persistence and notification boundaries.
 
 Each status attribute is decoded independently. A malformed audit attribute leaves the valid attributes and its decode error available, while group and override resolution and AWS actions continue. A malformed `pending_` attribute fails that resource closed because the reconciler cannot determine whether the AWS action already ran. Decode errors are shown by `cheapskate-cli`, the web console, and `doctor`.
 

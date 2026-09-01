@@ -75,11 +75,13 @@ state を保持する DynamoDB テーブル 1 つのキー配置とアイテム�
 | `last_error_at` | S | 上記の時刻(RFC3339) |
 | `transitioning_since` | S | 継続中の遷移の開始時刻(RFC3339)。他の属性と違いスナップショットではなく、遷移が解消した時点で消える |
 | `pending_operation_id` | S | AWS 操作の前に記録する操作 ID。空でなければ完了確認待ち |
+| `pending_group` | S | 操作開始時にリソースを所有していたグループ名 |
+| `pending_config_hash` | S | 操作開始時に有効だったグループ設定、override、解決済み desired state の SHA-256 ハッシュ |
 | `pending_action` / `pending_desired` / `pending_observed` | S | 未完了操作のアクション、目的、操作前の観測値 |
 | `pending_started_at` | S | 未完了操作の開始時刻(RFC3339) |
 | `expires_at` | N | 最後の Status 更新時刻に `STATUS_RETENTION_DAYS` を加えた epoch 秒。DynamoDB TTL の対象属性 |
 
-Status は履歴ではなく最新値 1 件だけを保持する。更新のたびに `expires_at` を延長し、更新されなくなった Status は保持期間後に DynamoDB TTL が削除する。AWS 操作の前に pending 属性を条件付きで保存し、操作後は同じ操作 ID を条件に last 属性へ進める。途中で Lambda が終了した場合、次回は AWS の観測結果から完了を確定し、同じ操作を再実行しない。通知は Status に保持しない。永続化と通知の境界は、[Reconcile の永続化境界](../development/reconcile.md) を参照。
+Status は履歴ではなく最新値 1 件だけを保持する。更新のたびに `expires_at` を延長し、更新されなくなった Status は保持期間後に DynamoDB TTL が削除する。AWS 操作の前に pending 属性を条件付きで保存し、操作後は同じ操作 ID を条件に last 属性へ進める。途中で Lambda が終了した場合、次回は AWS の観測結果から完了を確定し、同じ操作を再実行しない。操作中にタグ所属や設定が変わった場合も、`pending_group` を完了通知の宛先とし、現在の設定は次のサイクルから適用する。通知は Status に保持しない。永続化と通知の境界は、[Reconcile の永続化境界](../development/reconcile.md) を参照。
 
 Status は属性ごとに復号する。監査属性の型が不正な場合も、正常な属性と復号エラーを別々に保持し、グループ設定と override の解決および AWS 操作は継続する。`pending_` で始まる属性の型が不正な場合は、AWS 操作が実行済みかを判定できないため、そのリソースの操作を停止する。復号エラーは `cheapskate-cli`、Web コンソール、および `doctor` に表示する。
 
