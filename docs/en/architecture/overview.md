@@ -27,13 +27,14 @@ For the design of `cheapskate-cli` see [cheapskate-cli.md](cheapskate-cli.md), a
 
 ## Data model
 
-The state lives in a single DynamoDB table. There are four kinds of item; their contents and writers are given below.
+The state lives in a single DynamoDB table. There are five kinds of item; their contents and writers are given below.
 
 | Item | Content | Writer |
 |---|---|---|
 | `CONFIG` / `GROUP#<name>` | How the group's desired state is decided, and its selector | `cheapskate-cli` / web console / IaC |
 | `CONFIG` / `OVERRIDE#<name>` | A time-limited override of the desired state | Same as above |
 | `STATUS#<resource_id>` / `CURRENT` | The reconciler's results (last action, last error, ongoing operation) | reconciler |
+| `STATUS#group#<name>` / `CURRENT` | Per-group configuration, discovery, and ownership errors | reconciler |
 | `LOCK` / `RECONCILE` | The lease that excludes full reconcile and orphan pruning | reconciler / `doctor --prune` |
 
 Configuration and status have disjoint writers. Because of that separation, managing group configuration with IaC does not drift against the reconciler's writes. `LOCK` / `RECONCILE` is the sole shared write target: it prevents a reconcile status update from running concurrently with `doctor --prune` deletion. For details, see the key layout, attributes, and read/write matrix in [database.md](database.md).

@@ -27,13 +27,14 @@
 
 ## データモデル
 
-state は DynamoDB テーブル 1 つに保持する。アイテムは 4 種類であり、それぞれの内容と書き手を、以下に示す。
+state は DynamoDB テーブル 1 つに保持する。アイテムは 5 種類であり、それぞれの内容と書き手を、以下に示す。
 
 | アイテム | 保持する内容 | 書き手 |
 |---|---|---|
 | `CONFIG` / `GROUP#<名前>` | グループの望ましい状態の決め方とセレクタ | `cheapskate-cli` / Web コンソール / IaC |
 | `CONFIG` / `OVERRIDE#<名前>` | 期限付きで望ましい状態を上書きする指定 | 同上 |
 | `STATUS#<resource_id>` / `CURRENT` | reconciler の実行結果(直近のアクション、直近のエラー、継続中の操作) | reconciler |
+| `STATUS#group#<名前>` / `CURRENT` | グループ単位の設定・探索・所有権エラー | reconciler |
 | `LOCK` / `RECONCILE` | reconcile 全体と孤立レコード削除の排他リース | reconciler / `doctor --prune` |
 
 設定と Status の書き手は重ならない。この分離により、グループ設定を IaC で管理しても reconciler の書き込みとドリフトしない。`LOCK` / `RECONCILE` だけは reconcile と `doctor --prune` が共有し、Status の削除と更新が同時に進まないようにする。詳細は、[database.md](database.md) のキー配置、属性、および読み書きマトリクスを参照。

@@ -25,7 +25,7 @@ Five kinds of item are stored. What each key value represents, along with its wr
 | Status (per group) | `STATUS#group#<name>` — processing results for the named group | `CURRENT` — the latest status for that group | reconciler | CLI, web console |
 | Reconcile lease | `LOCK` — the partition for reconcile exclusion state | `RECONCILE` — the global full-reconcile lease | reconciler, `doctor --prune` | Same as writer |
 
-[`itemKey`](../../../internal/state/items.go#L14) represents these key combinations. [`model.ResourceType`](../../../internal/core/model/resource.go#L10) defines the `<type>` variants in `STATUS#<type>#<ref>`; the per-resource results section below gives the corresponding `<ref>` forms. Fixed key values and prefixes are case-sensitive.
+[`itemKey`](../../../internal/state/items.go) represents these key combinations. [`model.ResourceType`](../../../internal/core/model/resource.go) defines the `<type>` variants in `STATUS#<type>#<ref>`; the per-resource results section below gives the corresponding `<ref>` forms. Fixed key values and prefixes are case-sensitive.
 
 ## `CONFIG` / `GROUP#<name>` — group configuration
 
@@ -98,7 +98,7 @@ Each status attribute is decoded independently. A malformed audit attribute leav
 
 Writes go through `UpdateItem` with `SET`. Because this is not a wholesale replacement by `PutItem`, a partial update can change some attributes and leave the rest.
 
-The attributes to update are given by `state.StatusPatch`. Every field is a pointer: `nil` means leave that attribute alone, and `state.Set("")` means clear it. `internal/state` is the only package that knows the attribute names, and no path exists by which the application layer assembles a DynamoDB attribute name as a string.
+The attributes to update are given by `state.StatusPatch`. Every field is a pointer: `nil` means leave that attribute alone, and a pointer to an empty string means clear it. `internal/state` is the only package that knows the attribute names, and no path exists by which the application layer assembles a DynamoDB attribute name as a string.
 
 ### Deletion
 

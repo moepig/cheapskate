@@ -25,7 +25,7 @@ state を保持する DynamoDB テーブル 1 つのキー配置とアイテム�
 | Status(グループ単位) | `STATUS#group#<名前>` — 指定したグループの処理結果 | `CURRENT` — そのグループの最新 Status | reconciler | CLI、Web コンソール |
 | Reconcile リース | `LOCK` — reconcile の排他制御用パーティション | `RECONCILE` — 全体 reconcile のグローバルリース | reconciler、`doctor --prune` | 同左 |
 
-キーの組み合わせは [`itemKey`](../../../internal/state/items.go#L14) が表す。`STATUS#<種別>#<ref>` の `<種別>` は [`model.ResourceType`](../../../internal/core/model/resource.go#L10) が定義し、`<ref>` の形式はリソース単位の実行結果の節に示す。キーの固定値とプレフィックスは大文字・小文字を区別する。
+キーの組み合わせは [`itemKey`](../../../internal/state/items.go) が表す。`STATUS#<種別>#<ref>` の `<種別>` は [`model.ResourceType`](../../../internal/core/model/resource.go) が定義し、`<ref>` の形式はリソース単位の実行結果の節に示す。キーの固定値とプレフィックスは大文字・小文字を区別する。
 
 ## `CONFIG` / `GROUP#<名前>` — グループ設定
 
@@ -98,7 +98,7 @@ Status は属性ごとに復号する。監査属性の型が不正な場合も�
 
 書き込みは `UpdateItem` の `SET` で行う。`PutItem` による全置換ではないため、一部の属性だけを更新して他を残す部分更新ができる。
 
-更新する属性は `state.StatusPatch` で指定する。各フィールドはポインタであり、`nil` は該当属性に触らないこと、`state.Set("")` は該当属性を空にすることを意味する。属性名を知るのは `internal/state` だけであり、アプリケーション層が DynamoDB の属性名を文字列で組み立てる経路は存在しない。
+更新する属性は `state.StatusPatch` で指定する。各フィールドはポインタであり、`nil` は該当属性に触らないこと、空文字列を指すポインタは該当属性を空にすることを意味する。属性名を知るのは `internal/state` だけであり、アプリケーション層が DynamoDB の属性名を文字列で組み立てる経路は存在しない。
 
 ### 削除
 
