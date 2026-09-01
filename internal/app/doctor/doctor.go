@@ -13,6 +13,9 @@ package doctor
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"sort"
 	"time"
@@ -25,14 +28,15 @@ import (
 // doctor が state テーブルに求める範囲
 // *state.Store が満たすが、doctor が受け取るのはこの範囲に限る
 //
-// 書き込みは削除のみであり、--prune を明示したときにのみ呼ぶ
-// グループ設定やステータスの内容を書き換えるメソッドは含めない
-// 診断が設定を変更しないことを、型として表明するためである
+// 書き込みは --prune のリースと削除だけであり、グループ設定や Status の内容を書き換えるメソッドは含めない。
+// 診断が設定と監査内容を変更しないことを、型として表明する。
 type Store interface {
+	AcquireLease(ctx context.Context, owner string, now, expiresAt time.Time) (bool, error)
+	ReleaseLease(ctx context.Context, owner string) error
 	ScanAll(ctx context.Context, now time.Time) (state.ScanResult, error)
 	DeleteOverride(ctx context.Context, name string) error
 	DeleteGroupStatus(ctx context.Context, name string) error
-	DeleteStatus(ctx context.Context, resourceID string) error
+	DeleteStatusIfNoPendingOperation(ctx context.Context, resourceID string) error
 }
 
 // 検出項目の種類
@@ -86,17 +90,44 @@ type Options struct {
 // これを大きく超えて遷移中である場合、待機では解決しない状態にある
 const DefaultStuckAfter = 30 * time.Minute
 
+const (
+	defaultPruneLeaseDuration = 15 * time.Minute
+	pruneLeaseSafetyMargin    = 15 * time.Second
+)
+
+// ErrPruneLeaseHeld は、reconcile または別の prune が進行中で削除を開始しなかったことを表す。
+var ErrPruneLeaseHeld = errors.New("doctor prune skipped because the reconcile lease is held")
+
 // 診断を 1 回実行し、opts.Prune が立っていれば削除まで行う
-func Run(ctx context.Context, s Store, d port.Discoverer, now time.Time, opts Options) (Report, error) {
+func Run(ctx context.Context, s Store, d port.Discoverer, now time.Time, opts Options) (report Report, runErr error) {
 	if opts.StuckAfter <= 0 {
 		opts.StuckAfter = DefaultStuckAfter
+	}
+	if opts.Prune {
+		owner, err := newLeaseOwner()
+		if err != nil {
+			return Report{}, fmt.Errorf("create doctor prune lease owner: %w", err)
+		}
+		acquired, err := s.AcquireLease(ctx, owner, now, pruneLeaseExpiration(ctx, now))
+		if err != nil {
+			return Report{}, err
+		}
+		if !acquired {
+			return Report{}, ErrPruneLeaseHeld
+		}
+		defer func() {
+			releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			defer cancel()
+			if err := s.ReleaseLease(releaseCtx, owner); err != nil && runErr == nil {
+				runErr = err
+			}
+		}()
 	}
 	sr, err := s.ScanAll(ctx, now)
 	if err != nil {
 		return Report{}, err
 	}
 
-	var report Report
 	// リソース ID -> そのリソースを今マッチしているグループ名(探索順、つまりグループ名順)
 	owners := map[string][]string{}
 
@@ -126,6 +157,23 @@ func Run(ctx context.Context, s Store, d port.Discoverer, now time.Time, opts Op
 	return report, nil
 }
 
+func newLeaseOwner() (string, error) {
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", err
+	}
+	return "doctor-" + hex.EncodeToString(raw[:]), nil
+}
+
+func pruneLeaseExpiration(ctx context.Context, now time.Time) time.Time {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return now.Add(defaultPruneLeaseDuration)
+	}
+	remaining := max(time.Until(deadline), 0)
+	return now.Add(remaining + pruneLeaseSafetyMargin)
+}
+
 // 種別ごとの削除方法
 // このマップへの登録が削除可否の唯一の定義であり、Finding.Prunable もここから決まる (add を参照)
 // 種別を削除対象へ加える手段は、ここへ削除方法を追加することに限られる
@@ -133,7 +181,9 @@ func Run(ctx context.Context, s Store, d port.Discoverer, now time.Time, opts Op
 var pruners = map[Kind]func(context.Context, Store, Finding) error{
 	KindOrphanOverride:    func(ctx context.Context, s Store, f Finding) error { return s.DeleteOverride(ctx, f.Group) },
 	KindOrphanGroupStatus: func(ctx context.Context, s Store, f Finding) error { return s.DeleteGroupStatus(ctx, f.Group) },
-	KindOrphanStatus:      func(ctx context.Context, s Store, f Finding) error { return s.DeleteStatus(ctx, f.Resource) },
+	KindOrphanStatus: func(ctx context.Context, s Store, f Finding) error {
+		return s.DeleteStatusIfNoPendingOperation(ctx, f.Resource)
+	},
 }
 
 func (r *Report) add(f Finding) {
@@ -218,7 +268,7 @@ func (r *Report) checkCorruptStatuses(statuses map[string]state.StatusRecord) {
 }
 
 // 同じリソースが 2 つ以上のグループのセレクタに一致する状態を報告する
-// reconciler ではグループ名順で最初のグループが所有し、以降のグループは自身の status#group# にエラーを記録する (reconcile.ReconcileGroup を参照)
+// reconciler ではグループ名順で最初のグループが所有し、以降のグループは自身の status#group# にエラーを記録する。
 // 後者の設定は反映されないため、設定の不整合として扱う
 func (r *Report) checkOverlaps(owners map[string][]string) {
 	for id, groups := range owners {
@@ -244,6 +294,10 @@ func (r *Report) checkOrphanStatuses(statuses map[string]state.StatusRecord, own
 			continue
 		}
 		if len(owners[id]) > 0 {
+			continue
+		}
+		if record.PendingOperationID != "" {
+			r.block("status %q has pending operation %q; orphan pruning was withheld", id, record.PendingOperationID)
 			continue
 		}
 		r.add(Finding{
@@ -288,7 +342,7 @@ func (r *Report) checkStuck(statuses map[string]state.StatusRecord, owners map[s
 
 // Prunable な検出項目を削除する
 // 1 件ごとに結果を記録し、失敗しても残りの削除を継続する
-// 削除は冪等であり、存在しないアイテムの DeleteItem はエラーとならないため、失敗時は doctor を再実行すればよい
+// 存在しないアイテムの DeleteItem は成功とし、診断後に pending operation が作成された Status は条件不成立として残す。
 func (r *Report) prune(ctx context.Context, s Store) {
 	for i := range r.Findings {
 		f := &r.Findings[i]

@@ -216,7 +216,7 @@ The per-resource `status#` records remain immediately after deletion, but become
 cheapskate-cli doctor --prune   # deletes orphaned records only (touching neither the configuration nor the AWS resources)
 ```
 
-Use `doctor --prune` to remove them before the retention period or to remove existing orphaned status items that have no `expires_at`.
+Use `doctor --prune` to remove them before the retention period or to remove existing orphaned status items that have no `expires_at`. It shares the reconcile lease, so if a reconcile is running it returns an error without starting deletion. Run it again between reconcile cycles.
 
 To delete a single one by hand, use the `pk` and `sk` from the `doctor` finding directly as the key.
 
@@ -232,7 +232,7 @@ The permissions needed by the principal running `cheapskate-cli` or the web cons
 
 | Permission | Purpose |
 |---|---|
-| `dynamodb:Scan` / `Query` / `BatchGetItem` / `GetItem` / `PutItem` / `UpdateItem` / `DeleteItem` on the state table | Reading and writing records. Only `doctor` uses Scan |
+| `dynamodb:Scan` / `Query` / `BatchGetItem` / `GetItem` / `PutItem` / `UpdateItem` / `DeleteItem` on the state table | Reading and writing records. Only `doctor` uses Scan. The `UpdateItem` and `DeleteItem` calls from `doctor --prune` also manage the lease at `LOCK` / `RECONCILE` |
 | `tag:GetResources` | Listing the resources matching a selector |
 | `Describe*` on RDS/ECS/EC2 | The current state in `show` and on the group page |
 

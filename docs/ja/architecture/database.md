@@ -23,7 +23,7 @@ state を保持する DynamoDB テーブル 1 つのキー配置とアイテム�
 | Override | `CONFIG` — グループに対する設定入力を集約するパーティション | `OVERRIDE#<名前>` — 指定したグループの期限付き上書き | 同上 | 同上 |
 | Status(リソース単位) | `STATUS#<種別>#<ref>` — 指定した AWS リソースの実行結果 | `CURRENT` — そのリソースの最新 Status | reconciler | CLI、Web コンソール |
 | Status(グループ単位) | `STATUS#group#<名前>` — 指定したグループの処理結果 | `CURRENT` — そのグループの最新 Status | reconciler | CLI、Web コンソール |
-| Reconcile リース | `LOCK` — reconcile の排他制御用パーティション | `RECONCILE` — 全体 reconcile のグローバルリース | reconciler | reconciler |
+| Reconcile リース | `LOCK` — reconcile の排他制御用パーティション | `RECONCILE` — 全体 reconcile のグローバルリース | reconciler、`doctor --prune` | 同左 |
 
 キーの組み合わせは [`itemKey`](../../../internal/state/items.go#L14) が表す。`STATUS#<種別>#<ref>` の `<種別>` は [`model.ResourceType`](../../../internal/core/model/resource.go#L10) が定義し、`<ref>` の形式はリソース単位の実行結果の節に示す。キーの固定値とプレフィックスは大文字・小文字を区別する。
 
@@ -102,7 +102,7 @@ Status は属性ごとに復号する。監査属性の型が不正な場合も�
 
 ### 削除
 
-セレクタに一致しなくなるなどして更新が止まったアイテムは、最後の更新から保持期間が経過すると DynamoDB TTL の削除対象になる。削除は非同期であり、期限後も最大 48 時間残る場合がある。保持期間より前に削除する場合は、[overview.md](overview.md) に示す診断経由の孤立レコード削除を用いる。
+セレクタに一致しなくなるなどして更新が止まったアイテムは、最後の更新から保持期間が経過すると DynamoDB TTL の削除対象になる。削除は非同期であり、期限後も最大 48 時間残る場合がある。保持期間より前に削除する場合は、[overview.md](overview.md) に示す診断経由の孤立レコード削除を用いる。`doctor --prune` は `pending_operation_id` が存在しないことを DeleteItem の条件とし、診断後に未完了操作が作成された Status を削除しない。
 
 `expires_at` を持たない既存の Status は TTL の対象外である。reconciler が更新すると期限が設定されるが、更新されない既存の孤立 Status は `doctor --prune` で削除する。
 
@@ -116,7 +116,7 @@ Status は属性ごとに復号する。監査属性の型が不正な場合も�
 
 ## Reconcile リース
 
-`LOCK` / `RECONCILE` は、呼び出し全体の多重実行を防ぐリースである。`owner` に呼び出し固有 ID、`expires_at` に有効期限を保持する。取得は「アイテムが無い、または期限切れ」を条件とする `UpdateItem`、解除は owner の一致を条件とする `DeleteItem` で行う。取得できない呼び出しは設定の読み取りや AWS API の呼び出しを行わず、成功として終了する。
+`LOCK` / `RECONCILE` は、reconcile の多重実行と `doctor --prune` による削除との競合を防ぐリースである。`owner` に呼び出し固有 ID、`expires_at` に有効期限を保持する。取得は「アイテムが無い、または期限切れ」を条件とする `UpdateItem`、解除は owner の一致を条件とする `DeleteItem` で行う。reconciler が取得できない場合は設定の読み取りや AWS API の呼び出しを行わず成功として終了する。`doctor --prune` が取得できない場合は削除判断に必要な Scan を開始せず、エラーを返す。
 
 ## 読み書きマトリクス
 
@@ -128,18 +128,18 @@ Status は属性ごとに復号する。監査属性の型が不正な場合も�
 | Override | 読み取りのみ | 読み書き、明示的な解除とグループ削除時に削除 |
 | リソース Status | 読み書き | 読み取りのみ、孤立レコードのみ削除 |
 | グループ Status | 読み書き | 読み取りのみ、グループ削除時と孤立レコードのみ削除 |
-| Reconcile リース | 読み書きと削除 | アクセスしない |
+| Reconcile リース | 読み書きと削除 | `doctor --prune` の実行中のみ読み書きと削除 |
 
 この分離は 3 段構えで担保する。各段の担保内容を、以下に示す。
 
 | 段 | 担保の内容 |
 |---|---|
 | 型 | `internal/state` への窓口は、利用側が必要分だけを宣言したインターフェースである。`reconcile.Store` には `PutGroup`/`PutOverride` が無く、`groups.Store` と `doctor.Store` には `UpdateStatus` が無い |
-| コード | 上記の結果として、reconciler から設定を書く経路も、CLI と Web コンソールから status を書く経路もコンパイルできない |
-| IAM | reconciler の `UpdateItem` を `STATUS#*` と `LOCK`、`DeleteItem` を `LOCK` に限定する。CLI と Web コンソールは `CONFIG` のみを書き換えられる |
+| コード | 上記の結果として、reconciler から設定を書く経路も、CLI と Web コンソールから Status の内容を書き換える経路もコンパイルできない。doctor は pending operation がない Status の条件付き削除だけを宣言する |
+| IAM | reconciler の `UpdateItem` を `STATUS#*` と `LOCK`、`DeleteItem` を `LOCK` に限定する。CLI と Web コンソールは `CONFIG` の更新、`STATUS#*` の削除、および `doctor --prune` 用の `LOCK` の更新と削除に限定する |
 
 ## アクセスパターン
 
-通常の一覧と reconcile は、`pk=CONFIG` への一貫性の強い `Query` と、必要な Status だけを 100 キー単位で読む一貫性の強い `BatchGetItem` を使う。テーブル全体の `Scan` は `doctor` に限る。グループ 1 件の表示は設定、override、グループ Status の 3 キーを 1 回の `BatchGetItem` で読む。
+通常の一覧と reconcile は、`pk=CONFIG` への一貫性の強い `Query` と、必要な Status だけを 100 キー単位で読む一貫性の強い `BatchGetItem` を使う。テーブル全体の一貫性の強い `Scan` は `doctor` に限る。`doctor --prune` はリースを取得してから Scan、探索、削除を行う。グループ 1 件の表示は設定、override、グループ Status の 3 キーを 1 回の `BatchGetItem` で読む。
 
 グループ設定は属性単位の `UpdateItem` で変更する。異なる属性への同時変更は保持され、同じ属性への同時変更は最後の書き込みが有効となる。読み取り後の全置換は行わない。

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"strings"
 	"testing"
 	"time"
 
@@ -25,6 +26,27 @@ type fixture struct {
 	db         *mocks.DynaStore
 	store      *state.Store
 	discoverer *porttest.Discoverer
+}
+
+type pendingOnDeleteStore struct {
+	*state.Store
+	resourceID string
+	started    bool
+}
+
+func (s *pendingOnDeleteStore) DeleteStatusIfNoPendingOperation(ctx context.Context, resourceID string) error {
+	if !s.started && resourceID == s.resourceID {
+		s.started = true
+		err := s.BeginOperation(ctx, resourceID, state.PendingOperation{
+			ID: "racing-operation", Group: "dev", ConfigHash: strings.Repeat("a", 64),
+			Action: model.ActionStop, Desired: model.DesiredStopped, Observed: model.StateRunning,
+			StartedAt: now.Format(time.RFC3339),
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return s.Store.DeleteStatusIfNoPendingOperation(ctx, resourceID)
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -92,6 +114,8 @@ func TestCleanTableReportsNothing(t *testing.T) {
 
 	assert.True(t, report.Clean(), "unexpected findings: %+v", report.Findings)
 	assert.Empty(t, report.Blocked)
+	assert.Zero(t, f.db.Calls("update"), "読み取り専用の doctor はリースを取得しない")
+	assert.Zero(t, f.db.Calls("delete"))
 }
 
 // グループの削除後に override# / status#group# のみが残る状態は、RemoveGroup の中断または手作業によるレコード削除で発生する
@@ -136,6 +160,62 @@ func TestOrphanResourceStatusIsFoundAndPruned(t *testing.T) {
 	assert.True(t, found[0].Pruned)
 	assert.Nil(t, f.db.Item("status#rds-instance#untagged-db"))
 	assert.NotNil(t, f.db.Item("status#rds-instance#dev-db"), "a live resource's status must survive")
+}
+
+func TestPendingResourceStatusIsNotClassifiedAsOrphan(t *testing.T) {
+	f := newFixture(t)
+	f.seedStatus("rds-instance#pending-db", map[string]string{
+		"pending_operation_id": "op-a", "pending_group": "dev", "pending_config_hash": strings.Repeat("a", 64),
+		"pending_action": "stop", "pending_desired": "stopped", "pending_observed": "running",
+		"pending_started_at": now.Format(time.RFC3339),
+	})
+
+	report := f.run(t, Options{Prune: true})
+
+	assert.Empty(t, only(report, KindOrphanStatus))
+	require.Len(t, report.Blocked, 1)
+	assert.Contains(t, report.Blocked[0], "pending operation")
+	assert.Zero(t, report.Pruned)
+	assert.NotNil(t, f.db.Item("status#rds-instance#pending-db"))
+}
+
+func TestStatusBecomingPendingAfterScanIsNotPruned(t *testing.T) {
+	f := newFixture(t)
+	f.seedStatus("rds-instance#racing-db", map[string]string{"last_action": "stop"})
+	store := &pendingOnDeleteStore{Store: f.store, resourceID: "rds-instance#racing-db"}
+
+	report, err := Run(context.Background(), store, f.discoverer, now, Options{Prune: true})
+
+	require.NoError(t, err)
+	found := only(report, KindOrphanStatus)
+	require.Len(t, found, 1)
+	assert.False(t, found[0].Pruned)
+	assert.Contains(t, found[0].PruneErr, state.ErrStatusPendingOperation.Error())
+	assert.NotNil(t, f.db.Item("status#rds-instance#racing-db"))
+}
+
+func TestPruneDoesNotScanWhenReconcileLeaseIsHeld(t *testing.T) {
+	f := newFixture(t)
+	acquired, err := f.store.AcquireLease(context.Background(), "reconciler", now, now.Add(time.Minute))
+	require.NoError(t, err)
+	require.True(t, acquired)
+
+	_, err = Run(context.Background(), f.store, f.discoverer, now, Options{Prune: true})
+
+	require.ErrorIs(t, err, ErrPruneLeaseHeld)
+	assert.Zero(t, f.db.Calls("scan"))
+	assert.Zero(t, f.discoverer.Calls())
+	assert.NotNil(t, f.db.Item("LOCK", "RECONCILE"))
+}
+
+func TestPruneReleasesLeaseWhenScanFails(t *testing.T) {
+	f := newFixture(t)
+	f.db.FailOn("scan", "", errors.New("scan unavailable"))
+
+	_, err := Run(context.Background(), f.store, f.discoverer, now, Options{Prune: true})
+
+	require.ErrorContains(t, err, "scan unavailable")
+	assert.Nil(t, f.db.Item("LOCK", "RECONCILE"))
 }
 
 // 探索が 1 つでも失敗したサイクルでは、どのグループにも属していないことを根拠とする削除を見送らなければならない

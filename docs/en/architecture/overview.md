@@ -21,7 +21,7 @@ There are three executables. Where each runs and what it does are given below.
 | `cheapskate-cli` | A local machine | Entering and inspecting group configuration, and diagnosing the state table. Nothing is deployed to AWS for it |
 | Web console | Lambda (optional) | The same operations as the CLI, from a browser. The reconcile loop is complete without it |
 
-None of the three calls another. They meet only through the state table, and the items the reconciler writes never overlap with those the configuration side writes.
+None of the three calls another. They meet only through the state table. Configuration and status have disjoint writers; only `doctor --prune` shares the reconcile lease while it runs.
 
 For the design of `cheapskate-cli` see [cheapskate-cli.md](cheapskate-cli.md), and for that of the web console see [web_console.md](web_console.md).
 
@@ -34,9 +34,9 @@ The state lives in a single DynamoDB table. There are four kinds of item; their 
 | `CONFIG` / `GROUP#<name>` | How the group's desired state is decided, and its selector | `cheapskate-cli` / web console / IaC |
 | `CONFIG` / `OVERRIDE#<name>` | A time-limited override of the desired state | Same as above |
 | `STATUS#<resource_id>` / `CURRENT` | The reconciler's results (last action, last error, ongoing operation) | reconciler |
-| `LOCK` / `RECONCILE` | The lease that excludes overlapping full reconciles | reconciler |
+| `LOCK` / `RECONCILE` | The lease that excludes full reconcile and orphan pruning | reconciler / `doctor --prune` |
 
-The items written by the configuration side and those written by the reconciler never overlap. Because of that separation, managing group configuration with IaC does not drift against the reconciler's writes. For details, see the key layout, attributes, and read/write matrix in [database.md](database.md).
+Configuration and status have disjoint writers. Because of that separation, managing group configuration with IaC does not drift against the reconciler's writes. `LOCK` / `RECONCILE` is the sole shared write target: it prevents a reconcile status update from running concurrently with `doctor --prune` deletion. For details, see the key layout, attributes, and read/write matrix in [database.md](database.md).
 
 ## Resolving the desired state
 

@@ -216,7 +216,7 @@ cheapskate-cli clear-override --group dev  # override# だけを削除
 cheapskate-cli doctor --prune   # 孤立レコードだけを削除する(設定と AWS リソースには触れない)
 ```
 
-保持期間を待たずに削除する場合や、`expires_at` を持たない既存の孤立 Status を削除する場合は `doctor --prune` を用いる。
+保持期間を待たずに削除する場合や、`expires_at` を持たない既存の孤立 Status を削除する場合は `doctor --prune` を用いる。実行中は reconcile と同じリースを使用するため、reconcile が進行中の場合は削除を開始せずエラーになる。次のサイクルとの間で再実行すること。
 
 1 件だけ手動で削除する場合、`doctor` の各 finding の `pk` と `sk` をそのまま鍵として使える。
 
@@ -232,7 +232,7 @@ aws dynamodb delete-item --table-name <state-テーブル名> --key '{"pk":{"S":
 
 | 権限 | 用途 |
 |---|---|
-| state テーブルへの `dynamodb:Scan` / `Query` / `BatchGetItem` / `GetItem` / `PutItem` / `UpdateItem` / `DeleteItem` | レコードの読み書き。Scan は `doctor` だけが使う |
+| state テーブルへの `dynamodb:Scan` / `Query` / `BatchGetItem` / `GetItem` / `PutItem` / `UpdateItem` / `DeleteItem` | レコードの読み書き。Scan は `doctor` だけが使う。`doctor --prune` の `UpdateItem` と `DeleteItem` は `LOCK` / `RECONCILE` のリースにも使用する |
 | `tag:GetResources` | セレクタに一致するリソースの一覧 |
 | RDS/ECS/EC2 の `Describe*` | `show` とグループページの現在の状態 |
 

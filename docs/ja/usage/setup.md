@@ -348,7 +348,7 @@ aws lambda add-permission --function-name cheapskate-reconciler \
 
 ### 実行ロール
 
-state テーブルへの `dynamodb:Scan/Query/BatchGetItem/GetItem/PutItem/UpdateItem/DeleteItem`、`tag:GetResources`、現在の状態を表示するための下記の読み取り専用 `Describe*`、および §4 と同じ `Logs` のみを付与する。RDS/ECS/EC2 の制御系権限は付与しない。書き込みは `dynamodb:LeadingKeys` により `CONFIG` に限定し、Status の削除は `doctor --prune` 用の `STATUS#*` に限定する。
+state テーブルへの `dynamodb:Scan/Query/BatchGetItem/GetItem/PutItem/UpdateItem/DeleteItem`、`tag:GetResources`、現在の状態を表示するための下記の読み取り専用 `Describe*`、および §4 と同じ `Logs` のみを付与する。RDS/ECS/EC2 の制御系権限は付与しない。`dynamodb:LeadingKeys` により、設定の書き込みは `CONFIG`、Status の削除は `STATUS#*`、`doctor --prune` のリース取得と解除は `LOCK` に限定する。
 
 ```json
 {

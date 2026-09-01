@@ -101,6 +101,8 @@ TTL の削除は非同期であり、期限後も最大 48 時間かかる場合
 
 `--prune` の削除対象は、そのグループやリソースが存在しないことがテーブルの読み取りと検出のみで確定するレコードに限られる。設定そのもの(`group#`)、人間の判断を要する項目、および AWS リソースには触れない。
 
+`--prune` は reconciler と同じ `LOCK` / `RECONCILE` リースを取得してから、一貫性の強い Scan、探索、削除を行う。reconcile の実行中はリースを取得できないため、Scan と削除を開始せずエラーになる。処理中のリソース Status は `orphan-status` と判定せず、`blocked` に pending operation を記載する。診断後に pending operation が作成された場合も、条件付き DeleteItem が失敗し、該当 finding の `prune_error` に理由を残す。
+
 Status の監査属性だけを復号できない場合、reconciler は読めた属性を使用して処理を継続する。pending 属性を復号できない場合は同じ AWS 操作の再送を防ぐため、そのリソースを操作しない。いずれも `corrupt-record` として報告し、`--prune` では削除しない。
 
 安全装置として、検出が 1 つでも失敗したサイクルでは `orphan-status` の判定そのものを見送る。一時的に検出できなかっただけのリソースの監査記録を削除しないためである。この場合、`blocked` に理由が入る。
@@ -116,7 +118,7 @@ $ cheapskate-cli doctor | jq '{blocked, counts}'
 > [!IMPORTANT]
 > `blocked` が空でないときの `orphan-status` 0 件は、孤立レコードが存在しないことではなく、判定を行っていないことを意味する。原因を解消したうえで再実行すること。
 
-各項目の `pk` と `sk` に生の DynamoDB キーが入っているため、`--prune` を使わず手動で削除することもできる。
+各項目の `pk` と `sk` に生の DynamoDB キーが入っているため、`--prune` を使わず手動で削除することもできる。ただし手動削除はリースと pending operation の条件を迂回するため、reconciler の停止中に限る。
 
 ```console
 aws dynamodb delete-item --table-name <state-テーブル名> \

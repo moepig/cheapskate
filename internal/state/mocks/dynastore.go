@@ -22,6 +22,7 @@ type DynaStore struct {
 	failNth                      map[string]delayedFailure
 	calls                        map[string]int
 	scanPageSize                 int
+	scanConsistentRead           bool
 	unprocessedBatchGetResponses int
 }
 
@@ -85,6 +86,13 @@ func (f *DynaStore) SetScanPageSize(n int) {
 	f.scanPageSize = n
 }
 
+// ScanConsistentRead は直近の Scan が一貫性の強い読み取りだったかを報告する。
+func (f *DynaStore) ScanConsistentRead() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.scanConsistentRead
+}
+
 // 続く n 回の BatchGetItem で、要求されたすべてのキーを UnprocessedKeys として返す。
 func (f *DynaStore) SetBatchGetUnprocessedResponses(n int) {
 	f.mu.Lock()
@@ -143,6 +151,7 @@ func (f *DynaStore) scan(_ context.Context, in *dynamodb.ScanInput, _ ...func(*d
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls["scan"]++
+	f.scanConsistentRead = in.ConsistentRead != nil && *in.ConsistentRead
 	if err := f.takeFailure("scan", ""); err != nil {
 		return nil, err
 	}
@@ -371,10 +380,14 @@ func deleteConditionMatches(item map[string]types.AttributeValue, in *dynamodb.D
 	if in.ConditionExpression == nil {
 		return true
 	}
-	if *in.ConditionExpression != "#owner = :owner" {
+	switch *in.ConditionExpression {
+	case "#owner = :owner":
+		return item != nil && equalAttributeValue(item[in.ExpressionAttributeNames["#owner"]], in.ExpressionAttributeValues[":owner"])
+	case "attribute_not_exists(#pending_operation_id) OR #pending_operation_id = :empty":
+		return attributeMissingOrEqual(item, in.ExpressionAttributeNames["#pending_operation_id"], in.ExpressionAttributeValues[":empty"])
+	default:
 		panic(fmt.Sprintf("dynastore: unsupported delete condition %q", *in.ConditionExpression))
 	}
-	return item != nil && equalAttributeValue(item[in.ExpressionAttributeNames["#owner"]], in.ExpressionAttributeValues[":owner"])
 }
 
 func equalAttributeValue(a, b types.AttributeValue) bool {

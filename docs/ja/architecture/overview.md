@@ -21,7 +21,7 @@
 | `cheapskate-cli` | 手元の端末 | グループ設定の投入・確認と state テーブルの診断。AWS へのデプロイを要しない |
 | Web コンソール | Lambda(任意) | CLI と同じ操作をブラウザから行う。デプロイしなくても reconcile ループは完結する |
 
-3 つは互いを呼び出さない。関係するのは state テーブルを介してのみであり、reconciler が書くアイテムと設定側が書くアイテムは重ならない。
+3 つは互いを呼び出さない。関係するのは state テーブルを介してのみである。設定と Status の書き手は重ならず、`doctor --prune` の間だけ reconcile と同じリースを共有する。
 
 `cheapskate-cli` の設計は [cheapskate-cli.md](cheapskate-cli.md)、Web コンソールの設計は [web_console.md](web_console.md) を参照。
 
@@ -34,9 +34,9 @@ state は DynamoDB テーブル 1 つに保持する。アイテムは 4 種類�
 | `CONFIG` / `GROUP#<名前>` | グループの望ましい状態の決め方とセレクタ | `cheapskate-cli` / Web コンソール / IaC |
 | `CONFIG` / `OVERRIDE#<名前>` | 期限付きで望ましい状態を上書きする指定 | 同上 |
 | `STATUS#<resource_id>` / `CURRENT` | reconciler の実行結果(直近のアクション、直近のエラー、継続中の操作) | reconciler |
-| `LOCK` / `RECONCILE` | reconcile 全体の排他リース | reconciler |
+| `LOCK` / `RECONCILE` | reconcile 全体と孤立レコード削除の排他リース | reconciler / `doctor --prune` |
 
-設定側が書くアイテムと reconciler が書くアイテムは重ならない。この分離により、グループ設定を IaC で管理しても reconciler の書き込みとドリフトしない。詳細は、[database.md](database.md) のキー配置、属性、および読み書きマトリクスを参照。
+設定と Status の書き手は重ならない。この分離により、グループ設定を IaC で管理しても reconciler の書き込みとドリフトしない。`LOCK` / `RECONCILE` だけは reconcile と `doctor --prune` が共有し、Status の削除と更新が同時に進まないようにする。詳細は、[database.md](database.md) のキー配置、属性、および読み書きマトリクスを参照。
 
 ## 望ましい状態の解決
 

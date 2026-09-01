@@ -33,7 +33,7 @@ There is no authentication, and access control rests entirely on the IP allowlis
 | Authentication | None. Access control is the IP allowlist in the API Gateway resource policy alone, so everyone inside an allowed CIDR can operate the console |
 | CSRF | `POST` validates the `Origin` and `Sec-Fetch-Site` headers and rejects anything other than same-origin |
 | CSP | `default-src 'none'`, `frame-ancestors 'none'`, and so on |
-| Permissions | The execution role holds only `dynamodb:Scan/Query/BatchGetItem/GetItem/PutItem/UpdateItem/DeleteItem` on the state table, the `Describe*` calls per resource type, and `tag:GetResources`. Only diagnostics uses Scan |
+| Permissions | The execution role holds only `dynamodb:Scan/Query/BatchGetItem/GetItem/PutItem/UpdateItem/DeleteItem` on the state table, the `Describe*` calls per resource type, and `tag:GetResources`. Only diagnostics uses Scan, and only `doctor --prune` updates and deletes `LOCK` for exclusion |
 
 Every error shown on screen is also written to the log. With no authentication and an IP allowlist as the only access control, the log is the only place a history of changes can be traced. For details, see the web console event list in [logging.md](logging.md).
 
@@ -49,4 +49,4 @@ The content of each page, and whether it performs discovery, is collected below.
 
 A discovery failure does not produce a 500; the error is shown within the page.
 
-Orphan pruning does not act on the screen already rendered: it re-runs the diagnosis at the moment it is invoked. That keeps a record that stopped being orphaned since the page was opened from being deleted on the strength of a stale screen.
+Orphan pruning does not act on the screen already rendered: it acquires the lease and re-runs the diagnosis at the moment it is invoked. That keeps a record that stopped being orphaned since the page was opened from being deleted on the strength of a stale screen. If a reconcile holds the lease, pruning stops before deletion and displays an error.

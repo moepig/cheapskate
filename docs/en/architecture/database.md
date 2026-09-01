@@ -23,7 +23,7 @@ Five kinds of item are stored. What each key value represents, along with its wr
 | Override | `CONFIG` — the partition containing group configuration inputs | `OVERRIDE#<name>` — a time-limited override for the named group | Same as above | Same as above |
 | Status (per resource) | `STATUS#<type>#<ref>` — reconcile results for the identified AWS resource | `CURRENT` — the latest status for that resource | reconciler | CLI, web console |
 | Status (per group) | `STATUS#group#<name>` — processing results for the named group | `CURRENT` — the latest status for that group | reconciler | CLI, web console |
-| Reconcile lease | `LOCK` — the partition for reconcile exclusion state | `RECONCILE` — the global full-reconcile lease | reconciler | reconciler |
+| Reconcile lease | `LOCK` — the partition for reconcile exclusion state | `RECONCILE` — the global full-reconcile lease | reconciler, `doctor --prune` | Same as writer |
 
 [`itemKey`](../../../internal/state/items.go#L14) represents these key combinations. [`model.ResourceType`](../../../internal/core/model/resource.go#L10) defines the `<type>` variants in `STATUS#<type>#<ref>`; the per-resource results section below gives the corresponding `<ref>` forms. Fixed key values and prefixes are case-sensitive.
 
@@ -102,7 +102,7 @@ The attributes to update are given by `state.StatusPatch`. Every field is a poin
 
 ### Deletion
 
-An item that stops receiving updates, for example because its resource no longer matches a selector, becomes eligible for DynamoDB TTL deletion after the retention period. Deletion is asynchronous and the item can remain for up to 48 hours after expiry. To remove it before the retention period elapses, use the diagnosis-driven orphan pruning described in [overview.md](overview.md).
+An item that stops receiving updates, for example because its resource no longer matches a selector, becomes eligible for DynamoDB TTL deletion after the retention period. Deletion is asynchronous and the item can remain for up to 48 hours after expiry. To remove it before the retention period elapses, use the diagnosis-driven orphan pruning described in [overview.md](overview.md). `doctor --prune` conditions DeleteItem on the absence of `pending_operation_id`, so it does not delete a status that gained a pending operation after diagnosis.
 
 An existing status item with no `expires_at` is not eligible for TTL deletion. The reconciler assigns an expiry when it updates the item; use `doctor --prune` for existing orphaned status items that receive no further updates.
 
@@ -116,7 +116,7 @@ Selector collisions are recorded here rather than on the resource side. Written 
 
 ## Reconcile lease
 
-`LOCK` / `RECONCILE` is a lease preventing two full reconciles from running at once. It holds an invocation-specific `owner` and an `expires_at` timestamp. Acquisition is an `UpdateItem` conditioned on the item being absent or expired; release is a `DeleteItem` conditioned on matching the owner. An invocation that cannot acquire it performs no configuration read or AWS call and returns success.
+`LOCK` / `RECONCILE` is a lease preventing concurrent full reconciles and excluding `doctor --prune` deletion from a reconcile. It holds an invocation-specific `owner` and an `expires_at` timestamp. Acquisition is an `UpdateItem` conditioned on the item being absent or expired; release is a `DeleteItem` conditioned on matching the owner. A reconciler invocation that cannot acquire it performs no configuration read or AWS call and returns success. `doctor --prune` that cannot acquire it returns an error before starting the Scan used for deletion decisions.
 
 ## Read/write matrix
 
@@ -128,18 +128,18 @@ Which components may read and write each kind of item is collected below.
 | Override | read only | read/write, deleted on explicit clearing and when the group is deleted |
 | Resource status | read/write | read only, deletes orphans only |
 | Group status | read/write | read only, deletes when the group is deleted and for orphans only |
-| Reconcile lease | read/write/delete | no access |
+| Reconcile lease | read/write/delete | read/write/delete only while running `doctor --prune` |
 
 Three layers hold this separation in place. What each layer guarantees is given below.
 
 | Layer | Guarantee |
 |---|---|
 | Types | The window onto `internal/state` is an interface declaring only what each consumer needs. `reconcile.Store` has no `PutGroup`/`PutOverride`, and `groups.Store` and `doctor.Store` have no `UpdateStatus` |
-| Code | As a result, neither a path from the reconciler that writes configuration nor a path from the CLI or web console that writes status will compile |
-| IAM | Reconciler `UpdateItem` is confined to `STATUS#*` and `LOCK`, and `DeleteItem` to `LOCK`. The CLI and web console can alter only `CONFIG` |
+| Code | As a result, neither a path from the reconciler that writes configuration nor a path from the CLI or web console that alters status content will compile. Doctor exposes only a conditional status deletion that requires no pending operation |
+| IAM | Reconciler `UpdateItem` is confined to `STATUS#*` and `LOCK`, and `DeleteItem` to `LOCK`. CLI and web-console writes are confined to `CONFIG` updates, `STATUS#*` deletion, and `LOCK` update/deletion for `doctor --prune` |
 
 ## Access patterns
 
-Normal lists and reconciles use a strongly consistent `Query` on `pk=CONFIG`, then strongly consistent `BatchGetItem` requests—at most 100 keys each—for only the statuses they need. A full-table `Scan` is reserved for `doctor`. Displaying one group reads its configuration, override, and group status in one `BatchGetItem`.
+Normal lists and reconciles use a strongly consistent `Query` on `pk=CONFIG`, then strongly consistent `BatchGetItem` requests—at most 100 keys each—for only the statuses they need. A strongly consistent full-table `Scan` is reserved for `doctor`. `doctor --prune` acquires the lease before scanning, discovering, and deleting. Displaying one group reads its configuration, override, and group status in one `BatchGetItem`.
 
 Group configuration changes are attribute-level `UpdateItem` requests. Concurrent changes to different attributes are retained; for the same attribute, the last write wins. No read-followed-by-wholesale-replacement is used.

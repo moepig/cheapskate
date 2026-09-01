@@ -132,14 +132,14 @@ The role of each resource in the diagram is collected below.
 | API Gateway REST API (v1) | The only entrance from a browser. v1 is used because the HTTP API (v2) has no resource policy, which is what the IP restriction needs |
 | Resource policy (IP allowlist) | The only access control |
 | Webconsole Lambda | A separate function, built from a different container image than the reconciler |
-| Lambda execution role | `dynamodb:Scan/Query/BatchGetItem/GetItem/PutItem/UpdateItem/DeleteItem` on the state table, the `Describe*` calls per resource type, `tag:GetResources`, and CloudWatch Logs. Only diagnostics uses Scan, and the role holds no RDS/ECS/EC2 control permissions |
-| DynamoDB state table | The same table as the reconcile loop. It writes configuration in `CONFIG`, and only reads or prunes orphaned `STATUS#` records |
+| Lambda execution role | `dynamodb:Scan/Query/BatchGetItem/GetItem/PutItem/UpdateItem/DeleteItem` on the state table, the `Describe*` calls per resource type, `tag:GetResources`, and CloudWatch Logs. Only diagnostics uses Scan, and only pruning updates/deletes `LOCK`; the role holds no RDS/ECS/EC2 control permissions |
+| DynamoDB state table | The same table as the reconcile loop. It writes configuration in `CONFIG`, conditionally prunes orphaned `STATUS#` records, and uses `LOCK` only to exclude pruning from reconcile |
 | Resource Groups Tagging API | Used to list the discovered resources on a group page |
 
 Deploying it is optional. Running the console locally makes the AWS resources in this section unnecessary.
 
 ## The relationship between the two
 
-The state table is the only shared resource, and the two never write to the same items. For details, see the read/write matrix in [database.md](database.md).
+The state table is the only shared resource. Configuration and status content have disjoint writers; only diagnostics pruning shares `LOCK` / `RECONCILE` to exclude deletion from reconcile. For details, see the read/write matrix in [database.md](database.md).
 
 The reconciler Lambda and the webconsole Lambda are separate images, separate functions, and separate execution roles, and can be built and deployed independently. Without the web console, `cheapskate-cli` fills the same role. Only the access route differs; the shape of the items written is the same.

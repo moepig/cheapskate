@@ -61,6 +61,7 @@ func TestScanAllPagesThroughScan(t *testing.T) {
 	res, err := st.ScanAll(context.Background(), time.Now())
 	require.NoError(t, err)
 	assert.Len(t, res.Groups, 3)
+	assert.True(t, db.ScanConsistentRead(), "doctor の削除判断に使う Scan は一貫性の強い読み取りでなければならない")
 }
 
 // 通常のグループ一覧は設定partitionのQueryと、グループstatusのBatchGetItemだけで構成する。
@@ -611,6 +612,20 @@ func TestPendingOperationRequiresMatchingOperationID(t *testing.T) {
 
 	require.NoError(t, st.BeginOperation(ctx, resourceID, PendingOperation{ID: "op-b"}),
 		"完了記録後は通知の状態と無関係に次の操作を開始できなければならない")
+}
+
+func TestDeleteStatusIfNoPendingOperation(t *testing.T) {
+	db, st := newFixture(t)
+	ctx := context.Background()
+
+	seedStatus(db, "rds-instance#idle", map[string]types.AttributeValue{"last_action": s("stop")})
+	require.NoError(t, st.DeleteStatusIfNoPendingOperation(ctx, "rds-instance#idle"))
+	assert.Nil(t, stored(db, statusKey("rds-instance#idle")))
+
+	seedStatus(db, "rds-instance#pending", map[string]types.AttributeValue{"pending_operation_id": s("op-a")})
+	err := st.DeleteStatusIfNoPendingOperation(ctx, "rds-instance#pending")
+	require.ErrorIs(t, err, ErrStatusPendingOperation)
+	assert.NotNil(t, stored(db, statusKey("rds-instance#pending")))
 }
 
 // 旧バージョンが残した notification_pending は、新しい AWS 操作の開始条件に含めない

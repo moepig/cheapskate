@@ -101,6 +101,8 @@ The `kind` values reported, and whether `--prune` acts on them, are collected be
 
 `--prune` deletes only records whose group or resource is proven absent by the table read and the discovery alone. It touches neither the configuration itself (`group#`), nor anything requiring human judgement, nor the AWS resources.
 
+`--prune` acquires the same `LOCK` / `RECONCILE` lease as the reconciler before its strongly consistent Scan, discovery, and deletion. While a reconcile is running, it cannot acquire the lease and returns an error without starting the Scan or any deletion. A resource status with an active pending operation is not classified as `orphan-status`; `blocked` names that operation instead. If a pending operation appears after diagnosis, the conditional DeleteItem fails and leaves the reason in that finding's `prune_error`.
+
 When only status audit attributes fail to decode, the reconciler continues with the attributes it could read. When a pending attribute fails to decode, it does not act on that resource, preventing a repeated AWS action. Both cases are reported as `corrupt-record` and are never removed by `--prune`.
 
 As a safeguard, a cycle in which even one discovery fails withholds the `orphan-status` verdict entirely, so that the audit record of a resource that merely could not be discovered is not deleted. In that case `blocked` carries the reason.
@@ -116,7 +118,7 @@ $ cheapskate-cli doctor | jq '{blocked, counts}'
 > [!IMPORTANT]
 > Zero `orphan-status` findings while `blocked` is non-empty does not mean there are no orphaned records; it means no verdict was reached. Fix the cause and run it again.
 
-Since each finding carries the raw DynamoDB key in `pk` and `sk`, deleting by hand without `--prune` is possible too.
+Since each finding carries the raw DynamoDB key in `pk` and `sk`, deleting by hand without `--prune` is possible too. Manual deletion bypasses both the lease and the pending-operation condition, so do it only while the reconciler is stopped.
 
 ```console
 aws dynamodb delete-item --table-name <state-table-name> \

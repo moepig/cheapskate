@@ -348,7 +348,7 @@ A separate function using the `cheapskate-webconsole` image pushed in §1. Being
 
 ### Execution role
 
-Grant only `dynamodb:Scan/Query/BatchGetItem/GetItem/PutItem/UpdateItem/DeleteItem` on the state table, `tag:GetResources`, the read-only `Describe*` calls below for displaying the current state, and the same `Logs` as in §4. Grant no RDS/ECS/EC2 control permissions. Constrain writes with `dynamodb:LeadingKeys`: `CONFIG` for configuration writes and `STATUS#*` only for deletion by `doctor --prune`.
+Grant only `dynamodb:Scan/Query/BatchGetItem/GetItem/PutItem/UpdateItem/DeleteItem` on the state table, `tag:GetResources`, the read-only `Describe*` calls below for displaying the current state, and the same `Logs` as in §4. Grant no RDS/ECS/EC2 control permissions. Constrain writes with `dynamodb:LeadingKeys`: `CONFIG` for configuration writes, `STATUS#*` for deletion by `doctor --prune`, and `LOCK` for that command's lease acquisition and release.
 
 ```json
 {

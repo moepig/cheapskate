@@ -173,7 +173,7 @@ func (s *Store) ScanAll(ctx context.Context, now time.Time) (ScanResult, error) 
 	var raws []map[string]types.AttributeValue
 	var startKey map[string]types.AttributeValue
 	for {
-		out, err := s.db.Scan(ctx, &dynamodb.ScanInput{TableName: &s.table, ExclusiveStartKey: startKey})
+		out, err := s.db.Scan(ctx, &dynamodb.ScanInput{TableName: &s.table, ExclusiveStartKey: startKey, ConsistentRead: aws.Bool(true)})
 		if err != nil {
 			return ScanResult{}, fmt.Errorf("scan all: %w", err)
 		}
@@ -551,6 +551,29 @@ func (s *Store) DeleteGroupStatus(ctx context.Context, name string) error {
 }
 func (s *Store) DeleteStatus(ctx context.Context, resourceID string) error {
 	return s.delete(ctx, statusKey(resourceID))
+}
+
+// ErrStatusPendingOperation は、完了確認待ちの AWS 操作があるため Status を削除しなかったことを表す。
+var ErrStatusPendingOperation = errors.New("status has a pending operation")
+
+// DeleteStatusIfNoPendingOperation は、AWS 操作の完了確認待ちでない Status だけを削除する。
+func (s *Store) DeleteStatusIfNoPendingOperation(ctx context.Context, resourceID string) error {
+	empty := ""
+	_, err := s.db.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+		TableName:           &s.table,
+		Key:                 marshalKey(statusKey(resourceID)),
+		ConditionExpression: aws.String("attribute_not_exists(#pending_operation_id) OR #pending_operation_id = :empty"),
+		ExpressionAttributeNames: map[string]string{
+			"#pending_operation_id": "pending_operation_id",
+		},
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":empty": &types.AttributeValueMemberS{Value: empty},
+		},
+	})
+	if isConditionalCheckFailed(err) {
+		return fmt.Errorf("%w: %s", ErrStatusPendingOperation, resourceID)
+	}
+	return err
 }
 
 func StatusPK(resourceID string) string { return statusKey(resourceID).PK }

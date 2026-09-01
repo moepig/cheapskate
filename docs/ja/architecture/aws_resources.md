@@ -132,14 +132,14 @@ flowchart LR
 | API Gateway REST API(v1) | ブラウザからの唯一の入口。IP 制限に必要なリソースポリシーが HTTP API(v2)に無いため v1 を使う |
 | リソースポリシー(IP 許可リスト) | 唯一のアクセス制御 |
 | Webconsole Lambda | reconciler とは別のコンテナイメージから作る別関数 |
-| Lambda 実行ロール | state テーブルへの `dynamodb:Scan/Query/BatchGetItem/GetItem/PutItem/UpdateItem/DeleteItem`、リソース種別ごとの `Describe*`、`tag:GetResources`、CloudWatch Logs。Scan は diagnostics だけが使い、RDS/ECS/EC2 の制御系権限は持たない |
-| DynamoDB state テーブル | reconcile ループと同一のテーブル。`CONFIG` の設定を書き、`STATUS#` は読み取りと孤立レコードの削除だけを行う |
+| Lambda 実行ロール | state テーブルへの `dynamodb:Scan/Query/BatchGetItem/GetItem/PutItem/UpdateItem/DeleteItem`、リソース種別ごとの `Describe*`、`tag:GetResources`、CloudWatch Logs。Scan は diagnostics だけ、`LOCK` の更新・削除は prune だけが使い、RDS/ECS/EC2 の制御系権限は持たない |
+| DynamoDB state テーブル | reconcile ループと同一のテーブル。`CONFIG` の設定を書き、`STATUS#` は読み取りと孤立レコードの条件付き削除、`LOCK` は prune の排他制御だけを行う |
 | Resource Groups Tagging API | グループページでの検出リソース一覧表示に使う |
 
 デプロイは任意である。ローカルで動かす場合、この節の AWS リソースは不要となる。
 
 ## 2 系統の関係
 
-共有リソースは DynamoDB state テーブルのみであり、互いの書き込み対象は重ならない。詳細は、[database.md](database.md) の読み書きマトリクスを参照。
+共有リソースは DynamoDB state テーブルのみである。設定と Status の内容は書き込み対象が重ならず、diagnostics の prune 中だけ `LOCK` / `RECONCILE` を共有して削除と reconcile を排他する。詳細は、[database.md](database.md) の読み書きマトリクスを参照。
 
 Reconciler Lambda と Webconsole Lambda は別イメージ・別関数・別実行ロールであり、ビルドからデプロイまで独立して行える。Web コンソールを構築しない場合は `cheapskate-cli` が同じ役割を担う。アクセス経路が異なるだけで、書き込むアイテムの形は同じである。

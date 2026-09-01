@@ -33,7 +33,7 @@ reconciler とは別のコンテナイメージを、別の Lambda 関数とし�
 | 認証 | 無し。アクセス制御は API Gateway リソースポリシーの IP 許可リストのみであり、許可 CIDR 内の全員が操作できる |
 | CSRF | `POST` で `Origin` / `Sec-Fetch-Site` ヘッダを検証し、same-origin 以外を拒否する |
 | CSP | `default-src 'none'`、`frame-ancestors 'none'` 等 |
-| 権限 | 実行ロールは state テーブルへの `dynamodb:Scan/Query/BatchGetItem/GetItem/PutItem/UpdateItem/DeleteItem`、リソース種別ごとの `Describe*`、`tag:GetResources` のみを持つ。Scan は diagnostics だけが使う |
+| 権限 | 実行ロールは state テーブルへの `dynamodb:Scan/Query/BatchGetItem/GetItem/PutItem/UpdateItem/DeleteItem`、リソース種別ごとの `Describe*`、`tag:GetResources` のみを持つ。Scan は diagnostics だけが使い、`LOCK` の更新と削除は `doctor --prune` の排他制御だけが使う |
 
 画面へ出すエラーは必ずログにも出力する。認証が無く、アクセス制御が IP 許可リストのみである以上、変更の履歴を後から辿れる先はログに限られるためである。詳細は、[logging.md](logging.md) の Web コンソールのイベント一覧を参照。
 
@@ -49,4 +49,4 @@ reconciler とは別のコンテナイメージを、別の Lambda 関数とし�
 
 検出の失敗時も 500 を返さず、ページ内にエラーを表示する。
 
-孤立レコードの削除は、表示済みの画面に対してではなく、実行された時点で診断をやり直してから行う。ページを開いてからの間に孤立しなくなったレコードを、古い画面を根拠に削除しないためである。
+孤立レコードの削除は、表示済みの画面に対してではなく、実行された時点でリースを取得し、診断をやり直してから行う。ページを開いてからの間に孤立しなくなったレコードを、古い画面を根拠に削除しないためである。reconcile がリースを保持している場合は、削除を開始せずエラーを表示する。
