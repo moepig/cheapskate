@@ -114,15 +114,45 @@ func Run(ctx context.Context, raw json.RawMessage, deps *Deps, now time.Time) (S
 		return Summary{}, err
 	}
 
-	claimed := newClaims()
-
-	var results []Result
+	var prepared []preparedGroup
+	ownershipBarrier := -1
 	for _, row := range rows {
 		if !row.HasGroup {
 			deps.Log.Warn("orphaned-group-data", "group", row.Name)
 			continue
 		}
-		results = append(results, ReconcileGroup(ctx, row, claimed, deps, now)...)
+		group := prepareGroup(ctx, row, deps, now)
+		if group.discoverErr && ownershipBarrier < 0 {
+			ownershipBarrier = len(prepared)
+		}
+		prepared = append(prepared, group)
+	}
+
+	claimed := newClaims()
+	claimLimit := len(prepared)
+	if ownershipBarrier >= 0 {
+		claimLimit = ownershipBarrier
+	}
+	for i := range claimLimit {
+		group := prepared[i]
+		if group.err != nil || group.desired == model.DesiredNone {
+			continue
+		}
+		for _, resource := range group.resources {
+			claimed.claim(resource.ID(), group.row.Name)
+		}
+	}
+
+	var results []Result
+	for i, group := range prepared {
+		if ownershipBarrier >= 0 && i > ownershipBarrier && group.err == nil && group.desired != model.DesiredNone {
+			barrierGroup := prepared[ownershipBarrier].row.Name
+			err := fmt.Errorf("resource ownership is unknown because discovery failed for earlier group %q", barrierGroup)
+			recordFailure(ctx, deps, group.row.Name, model.GroupStatusID(group.row.Name), group.row.Status, err, now)
+			results = append(results, Result{Group: group.row.Name, Error: err.Error()})
+			continue
+		}
+		results = append(results, reconcilePreparedGroup(ctx, group, claimed, deps, now)...)
 	}
 
 	summary := Summary{Reconciled: len(results), Actions: []Result{}, Errors: []Result{}}
@@ -173,8 +203,8 @@ func newOperationID() (string, error) {
 // これは、メンバー登録の時点で 1 リソース 1 グループを強制していた旧来の不変条件に代わるものである
 // 所属を登録ではなく探索で算出するため、書き込み時点で強制する箇所は存在しない
 //
-// map ではなく型として宣言するのは、これがドメインの規則であるためである
-// 呼び出し側の map を各グループが書き換える形とした場合、ReconcileGroup のシグネチャから出力であることを読み取れない
+// map ではなく型として宣言するのは、これがドメインの規則であるためである。
+// 探索フェーズで台帳を完成させてから、操作フェーズが読み取る。
 type claims struct {
 	owner map[string]string // リソース ID -> それを取得したグループ名
 }
@@ -192,6 +222,36 @@ func (c *claims) claim(resourceID, group string) (owner string, ok bool) {
 	return group, true
 }
 
+func (c *claims) ownerOf(resourceID string) (string, bool) {
+	owner, ok := c.owner[resourceID]
+	return owner, ok
+}
+
+type preparedGroup struct {
+	row         state.GroupRow
+	desired     model.DesiredState
+	cfg         model.GroupConfig
+	resources   []model.Resource
+	err         error
+	discoverErr bool
+}
+
+// 設定の解決と探索だけを行い、Status の更新、Describe、および AWS 操作は行わない。
+func prepareGroup(ctx context.Context, row state.GroupRow, deps *Deps, now time.Time) preparedGroup {
+	group := preparedGroup{row: row}
+	if row.StatusErr != nil {
+		deps.Log.Warn("group-status-corrupt", "group", row.Name, "error", row.StatusErr.Error())
+	}
+
+	group.desired, group.cfg, group.err = resolveGroup(row, deps, now)
+	if group.err != nil || group.desired == model.DesiredNone {
+		return group
+	}
+	group.resources, group.err = deps.Discoverer.Discover(ctx, group.cfg.Selector)
+	group.discoverErr = group.err != nil
+	return group
+}
+
 // あるグループのセレクタに現在一致するリソースをすべて収束させる
 // グループ単位の失敗は、リソース単位と同じ recordFailure 経路を通る
 // 該当するのは不正な mode/cron/timezone/override、Discover の失敗、セレクタの重複である
@@ -202,29 +262,20 @@ func (c *claims) claim(resourceID, group string) (owner string, ok bool) {
 //
 // グループ単位のエラーのクリアは、この関数の最後に 1 回だけ行う
 // Discover の直後にクリアし、リソースのループで再度グループ単位のエラーを記録した場合、クリアの通知と記録の通知を毎サイクル繰り返すためである
-func ReconcileGroup(ctx context.Context, row state.GroupRow, claimed *claims, deps *Deps, now time.Time) []Result {
+func reconcilePreparedGroup(ctx context.Context, group preparedGroup, claimed *claims, deps *Deps, now time.Time) []Result {
+	row := group.row
 	groupStatusID := model.GroupStatusID(row.Name)
-	if row.StatusErr != nil {
-		deps.Log.Warn("group-status-corrupt", "group", row.Name, "error", row.StatusErr.Error())
+	if group.err != nil {
+		recordFailure(ctx, deps, row.Name, groupStatusID, row.Status, group.err, now)
+		return []Result{{Group: row.Name, Error: group.err.Error()}}
 	}
-
-	desired, cfg, err := resolveGroup(row, deps, now)
-	if err != nil {
-		recordFailure(ctx, deps, row.Name, groupStatusID, row.Status, err, now)
-		return []Result{{Group: row.Name, Error: err.Error()}}
-	}
-	if desired == model.DesiredNone {
+	if group.desired == model.DesiredNone {
 		clearRecoveredError(ctx, deps, row.Name, groupStatusID, row.Status, now)
 		return []Result{{Group: row.Name, Skipped: "disabled"}}
 	}
 
-	resources, err := deps.Discoverer.Discover(ctx, cfg.Selector)
-	if err != nil {
-		recordFailure(ctx, deps, row.Name, groupStatusID, row.Status, err, now)
-		return []Result{{Group: row.Name, Error: err.Error()}}
-	}
-	ids := make([]string, 0, len(resources))
-	for _, resource := range resources {
+	ids := make([]string, 0, len(group.resources))
+	for _, resource := range group.resources {
 		ids = append(ids, resource.ID())
 	}
 	statuses, err := deps.Store.GetStatuses(ctx, ids)
@@ -234,13 +285,19 @@ func ReconcileGroup(ctx context.Context, row state.GroupRow, claimed *claims, de
 	}
 
 	var taken []string // 他のグループがすでに取得済みだったリソース
-	scope := newOperationScope(cfg, row.Override, desired, deps.DefaultTimezone)
-	results := make([]Result, 0, len(resources))
-	for _, res := range resources {
+	scope := newOperationScope(group.cfg, row.Override, group.desired, deps.DefaultTimezone)
+	results := make([]Result, 0, len(group.resources))
+	for _, res := range group.resources {
 		resourceID := res.ID()
 		result := Result{Group: row.Name, ResourceID: resourceID}
 
-		if owner, ok := claimed.claim(resourceID, row.Name); !ok {
+		owner, owned := claimed.ownerOf(resourceID)
+		if !owned {
+			result.Error = fmt.Sprintf("resource %s has no owner after discovery", resourceID)
+			results = append(results, result)
+			continue
+		}
+		if owner != row.Name {
 			// これはグループの設定不備であり、リソースの状態の問題ではない
 			// 記録先は共有の status#<resourceID> ではなく、報告する側のグループのステータスとする
 			// 共有アイテムへ書いた場合、そのリソースを所有するグループの clearRecoveredError と同じアイテムを毎サイクル更新し、通知の重複排除が成立しなくなる
@@ -260,7 +317,7 @@ func ReconcileGroup(ctx context.Context, row state.GroupRow, claimed *claims, de
 		if record.Err != nil {
 			deps.Log.Warn("resource-status-corrupt", "group", row.Name, "resource_id", resourceID, "error", record.Err.Error())
 		}
-		if err := reconcileResource(ctx, deps, scope, res, desired, record.Status, now, &result); err != nil {
+		if err := reconcileResource(ctx, deps, scope, res, group.desired, record.Status, now, &result); err != nil {
 			result.Error = err.Error()
 			recordFailure(ctx, deps, result.Group, resourceID, record.Status, err, now)
 		}

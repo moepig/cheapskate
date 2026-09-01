@@ -1087,10 +1087,9 @@ func TestUnknownResourceTypeIsRecordedPerResource(t *testing.T) {
 	assert.Equal(t, []string{"dev-db"}, f.rds.Stopped, "結線漏れが同じグループの他のリソースを巻き込んではならない")
 }
 
-// 探索の失敗はグループ全体の失敗である
-// どのリソースが属するか分からない以上、一部だけ操作するのではなく何もしない
-// 記録先はリソースではなくグループ単位のステータスになる
-func TestDiscoverFailureIsRecordedOnTheGroup(t *testing.T) {
+// 名前順で先のグループを探索できない場合、後続グループのリソース所有権も確定できない。
+// 後続グループが返したリソースを操作せず、両方のグループ Status に原因を記録する。
+func TestEarlierDiscoverFailureBlocksLaterGroups(t *testing.T) {
 	f := newFixture(t)
 	f.seedGroup("dev", model.ModePinned, model.DesiredStopped)
 	f.discoverer.ErrByTagValue["dev"] = fmt.Errorf("AccessDenied")
@@ -1099,12 +1098,32 @@ func TestDiscoverFailureIsRecordedOnTheGroup(t *testing.T) {
 
 	summary := runEmpty(t, f)
 
-	require.Len(t, summary.Errors, 1)
-	assert.Equal(t, "dev", summary.Errors[0].Group)
-	assert.Empty(t, summary.Errors[0].ResourceID)
-	assert.Contains(t, summary.Errors[0].Error, "AccessDenied")
+	require.Len(t, summary.Errors, 2)
+	byGroup := map[string]Result{}
+	for _, result := range summary.Errors {
+		byGroup[result.Group] = result
+	}
+	assert.Empty(t, byGroup["dev"].ResourceID)
+	assert.Contains(t, byGroup["dev"].Error, "AccessDenied")
+	assert.Contains(t, byGroup["fine"].Error, `discovery failed for earlier group "dev"`)
 	assert.NotNil(t, f.db.Item("status#group#dev"))
-	assert.Equal(t, []string{"fine-db"}, f.rds.Stopped, "探索できたグループは通常どおり収束する")
+	assert.NotNil(t, f.db.Item("status#group#fine"))
+	assert.Empty(t, f.rds.Stopped, "所有者が不明なリソースを後続グループの設定で操作してはならない")
+}
+
+// 名前順で後のグループの探索失敗は、先に所有権を得るグループの判定へ影響しない。
+func TestLaterDiscoverFailureDoesNotBlockEarlierOwner(t *testing.T) {
+	f := newFixture(t)
+	f.pinnedStoppedGroup("a-fine", rdsInstance("fine-db"))
+	f.rds.Observations["fine-db"] = model.Observation{State: model.StateRunning}
+	f.seedGroup("z-broken", model.ModePinned, model.DesiredStopped)
+	f.discoverer.ErrByTagValue["z-broken"] = fmt.Errorf("AccessDenied")
+
+	summary := runEmpty(t, f)
+
+	require.Len(t, summary.Errors, 1)
+	assert.Equal(t, "z-broken", summary.Errors[0].Group)
+	assert.Equal(t, []string{"fine-db"}, f.rds.Stopped)
 }
 
 // 復旧通知の Publish が失敗しても、last_error はすでに消えている

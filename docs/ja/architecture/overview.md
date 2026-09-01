@@ -53,18 +53,21 @@ cron 評価は、`start_cron` と `stop_cron` それぞれの直近の過去の�
 
 ## reconcile ループ
 
-呼び出し 1 回は、テーブル上のグローバルリースを取得してから、`CONFIG` パーティションの Query と必要な Status の BatchGetItem を行い、全グループを処理する。リースを別の呼び出しが保持している場合は、AWS リソースを読み書きせず正常終了する。グループ 1 つあたりの処理は次のとおりである。
+呼び出し 1 回は、テーブル上のグローバルリースを取得してから、`CONFIG` パーティションを Query し、全グループの設定解決とリソース探索を先に行う。探索結果から所有権を確定したあと、必要な Status の BatchGetItem とリソース操作を行う。リースを別の呼び出しが保持している場合は、AWS リソースを読み書きせず正常終了する。
 
 ```
-desired = 望ましい状態の解決            # disabled なら検出せずスキップ
-resources = 検出(セレクタ)             # tag:GetResources
-for resource in resources:
-    actual = Describe()
-    if actual が遷移中:
-        skip                            # 次サイクルで再試行
-    elif desired != actual:
-        Stop() / Start()
-        status# の更新 + 通知
+for group in 名前順の全グループ:
+    desired = 望ましい状態の解決        # disabled なら検出せずスキップ
+    resources = 検出(セレクタ)         # tag:GetResources
+所有権 = 全探索結果から名前順に確定
+for group in 所有権を確定できたグループ:
+    for resource in resources:
+        actual = Describe()
+        if actual が遷移中:
+            skip                        # 次サイクルで再試行
+        elif desired != actual:
+            Stop() / Start()
+            status# の更新 + 通知
 ```
 
 ループの起点となる呼び出しには、定期実行、RDS 自動起動イベント、手動呼び出しの 3 経路がある。いずれもペイロードによって処理範囲が変わらない。詳細は、[trigger.md](trigger.md) の呼び出し経路を参照。
@@ -80,6 +83,7 @@ for resource in resources:
 | 検出直後の not-found はエラーではなくスキップとする | Tagging API は結果整合であり、タグ変更の反映に遅延がある |
 | 遷移中のリソースはスキップし、遷移を初めて観測したサイクルで `transitioning_since` を 1 回だけ書く | スキップはエラーにも通知にもならず、これがないと終わらない遷移を収束済みと区別できない |
 | 複数グループのセレクタが同一リソースに一致した場合、グループ名昇順で先のグループが管理する | 所有者を一意に決める |
+| あるグループの探索が失敗した場合、そのグループより後のグループはリソースを操作しない | 名前順で先のグループと重複する可能性を否定できず、後続グループを所有者と確定できない |
 | 無視される側のグループは、そのサイクル分の重複を 1 件にまとめて自身の `status#group#<名前>` に記録する | 所有グループが書くリソース側の `status#` と、記録先を分離する |
 | グループレベルの障害(不正な cron・timezone、検出の失敗、セレクタの重複)は `status#group#<名前>` に記録して通知し、クリアはそのグループの処理をすべて終えたあとに 1 回だけ行う | 記録とクリアが同一サイクル内で交互に起きる通知の発振を避ける |
 | リソース単位の失敗があっても、ループを完走して Lambda は成功を返す | EventBridge によるサイクル全体の再実行を避け、失敗したリソースは Status、ログ、SNS、任意のカスタムメトリクスで報告する |

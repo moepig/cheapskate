@@ -53,18 +53,21 @@ Cron evaluation compares the most recent past firing time of `start_cron` and of
 
 ## The reconcile loop
 
-One invocation acquires a global lease in the table, queries the `CONFIG` partition, batch-gets the required status records, and processes every group. If another invocation owns the lease, it returns successfully without reading or mutating AWS resources. The work for one group is as follows.
+One invocation acquires a global lease in the table, queries the `CONFIG` partition, and resolves and discovers every group first. It determines ownership from all discovery results before batch-getting the required status records and operating on resources. If another invocation owns the lease, it returns successfully without reading or mutating AWS resources.
 
 ```
-desired = resolve desired state       # if disabled, skip without discovering
-resources = discover(selector)        # tag:GetResources
-for resource in resources:
-    actual = Describe()
-    if actual is transitioning:
-        skip                          # retried on the next cycle
-    elif desired != actual:
-        Stop() / Start()
-        update status# + notify
+for group in all groups by name:
+    desired = resolve desired state   # if disabled, skip without discovering
+    resources = discover(selector)    # tag:GetResources
+ownership = decide by name from all discovery results
+for group whose ownership is known:
+    for resource in resources:
+        actual = Describe()
+        if actual is transitioning:
+            skip                      # retried on the next cycle
+        elif desired != actual:
+            Stop() / Start()
+            update status# + notify
 ```
 
 Three paths invoke the loop: the scheduled run, RDS auto-start events, and manual invocation. None of them changes the scope of the work through its payload. For details, see the invocation paths in [trigger.md](trigger.md).
@@ -80,6 +83,7 @@ The rules the loop follows, and the reasoning behind each, are collected below.
 | A not-found seen immediately after discovery is a skip, not an error | The Tagging API is eventually consistent, so tag changes take time to appear |
 | A transitioning resource is skipped, and `transitioning_since` is written exactly once, on the cycle that first observes the transition | A skip is neither an error nor a notification, and without this there is no way to tell a transition that never ends from a converged resource |
 | When several groups' selectors match the same resource, the group that sorts first by name manages it | The owner has to be decided unambiguously |
+| If discovery fails for a group, groups that sort after it do not operate on resources | They might overlap the earlier group, so their ownership cannot be established |
 | The groups that lose the tie record the whole cycle's duplicates as a single entry on their own `status#group#<name>` | It keeps that record separate from the resource-side `status#` that the owning group writes |
 | Group-level failures (an invalid cron or timezone, a discovery failure, a selector collision) are recorded on `status#group#<name>` and notified, and are cleared exactly once, after all of that group's work is finished | It avoids the notification flapping that comes from recording and clearing within the same cycle |
 | Even with per-resource failures, the loop runs to completion and Lambda returns success | This avoids an EventBridge retry of the entire cycle; status, logs, SNS, and optional custom metrics report the failed resources |
