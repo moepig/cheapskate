@@ -253,3 +253,14 @@ func TestEcsDefaultConfiguration(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, ecsConfig{desired: 1, minimum: 1, maximum: 1}, config)
 }
+
+func TestEcsConfigurationAcceptsInt32LimitAndRejectsOverflow(t *testing.T) {
+	config, err := ecsConfigFromTags(map[string]string{
+		model.EcsDesiredCountTagKey: "2147483647", model.EcsScalingMinTagKey: "2147483647", model.EcsScalingMaxTagKey: "2147483647",
+	})
+	require.NoError(t, err)
+	assert.EqualValues(t, 2147483647, config.desired)
+
+	_, err = ecsConfigFromTags(map[string]string{model.EcsDesiredCountTagKey: "2147483648"})
+	assert.ErrorContains(t, err, "not an integer")
+}
