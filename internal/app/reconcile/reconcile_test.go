@@ -181,6 +181,21 @@ func TestRunningResourceWithStartRepairIsStarted(t *testing.T) {
 	assert.Equal(t, model.ActionStart, summary.Actions[0].Action)
 }
 
+func TestStoppedResourceWithStopRepairIsStopped(t *testing.T) {
+	store := &memoryStore{rows: []state.GroupRow{{Name: "dev", Group: model.GroupSpec{Name: "dev", Override: model.OverrideStopped}}}}
+	discoverer := porttest.NewDiscoverer()
+	discoverer.Resources = map[string]model.Resource{"service": taggedResource("service", "service", "dev")}
+	target := porttest.NewTarget(model.TypeRdsInstance)
+	target.Observations["service"] = model.Observation{State: model.StateStopped, NeedsStop: true}
+
+	summary, err := Run(context.Background(), nil, testDeps(store, discoverer, target), time.Now())
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"service"}, target.Stopped)
+	require.Len(t, summary.Actions, 1)
+	assert.Equal(t, model.ActionStop, summary.Actions[0].Action)
+}
+
 func TestSuccessfulActionNotificationHasSlimPayload(t *testing.T) {
 	store := &memoryStore{rows: []state.GroupRow{{Name: "dev", Group: model.GroupSpec{Name: "dev", Override: model.OverrideRunning}}}}
 	discoverer := porttest.NewDiscoverer()

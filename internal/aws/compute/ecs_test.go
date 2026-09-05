@@ -62,6 +62,24 @@ func TestEcsDescribeMarksRunningServiceForStartWhenScalableBoundsDiffer(t *testi
 	assert.True(t, observation.NeedsStart)
 }
 
+func TestEcsDescribeMarksStoppedServiceForStopWhenScalableBoundsDiffer(t *testing.T) {
+	controller := gomock.NewController(t)
+	ecsClient := mocks.NewMockEcsAPI(controller)
+	autoScaling := mocks.NewMockAutoScalingAPI(controller)
+	ecsClient.EXPECT().DescribeServices(gomock.Any(), gomock.Any()).Return(&ecs.DescribeServicesOutput{Services: []ecstypes.Service{{
+		Status: aws.String("ACTIVE"), SchedulingStrategy: ecstypes.SchedulingStrategyReplica,
+	}}}, nil)
+	autoScaling.EXPECT().DescribeScalableTargets(gomock.Any(), gomock.Any()).Return(&aas.DescribeScalableTargetsOutput{
+		ScalableTargets: []aastypes.ScalableTarget{{MinCapacity: aws.Int32(0), MaxCapacity: aws.Int32(3)}},
+	}, nil)
+
+	observation, err := (&EcsServiceTarget{Ecs: ecsClient, AutoScaling: autoScaling}).Describe(context.Background(), model.Resource{Ref: "dev/api"})
+
+	require.NoError(t, err)
+	assert.Equal(t, model.StateStopped, observation.State)
+	assert.True(t, observation.NeedsStop)
+}
+
 func TestEcsServiceStateAllowsStopBeforeTaskCountConverges(t *testing.T) {
 	assert.Equal(t, model.StateRunning, ecsServiceState(2, 1, 0))
 	assert.Equal(t, model.StateRunning, ecsServiceState(2, 0, 1))

@@ -27,6 +27,7 @@ type Observation struct {
 	State      ObservedState `json:"state"`
 	Detail     string        `json:"detail,omitempty"`
 	NeedsStart bool          `json:"needs_start,omitempty"`
+	NeedsStop  bool          `json:"needs_stop,omitempty"`
 }
 
 // desired と observed の食い違いを解消するために reconciler が取る操作

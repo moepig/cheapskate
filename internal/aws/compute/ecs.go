@@ -70,6 +70,9 @@ func (t *EcsServiceTarget) Describe(ctx context.Context, res model.Resource) (mo
 			if observation.State == model.StateRunning && scalable != nil && (aws.ToInt32(scalable.MinCapacity) != config.minimum || aws.ToInt32(scalable.MaxCapacity) != config.maximum) {
 				observation.NeedsStart = true
 			}
+			if observation.State == model.StateStopped && scalable != nil && (aws.ToInt32(scalable.MinCapacity) != 0 || aws.ToInt32(scalable.MaxCapacity) != 0) {
+				observation.NeedsStop = true
+			}
 			return observation, nil
 		}
 	}

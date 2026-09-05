@@ -141,6 +141,9 @@ func Run(ctx context.Context, _ json.RawMessage, deps *Deps, now time.Time) (Sum
 		if action == model.ActionNone && group.desired == model.DesiredRunning && observation.NeedsStart {
 			action = model.ActionStart
 		}
+		if action == model.ActionNone && group.desired == model.DesiredStopped && observation.NeedsStop {
+			action = model.ActionStop
+		}
 		if action == model.ActionNone {
 			if observation.State == model.StateTransitioning || observation.State == model.StateNotFound {
 				result.Skipped = string(observation.State)
