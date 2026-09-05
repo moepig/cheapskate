@@ -83,3 +83,21 @@ func TestDiscoverFailsClosed(t *testing.T) {
 	assert.Nil(t, resources)
 	assert.ErrorContains(t, err, "access denied")
 }
+
+func TestDiscoverDiscardsEarlierPagesWhenLaterPageFails(t *testing.T) {
+	controller := gomock.NewController(t)
+	client := mocks.NewMockAPI(controller)
+	arn := "arn:aws:rds:ap-northeast-1:123456789012:db:dev-db"
+	gomock.InOrder(
+		client.EXPECT().GetResources(gomock.Any(), gomock.Any()).Return(&resourcegroupstaggingapi.GetResourcesOutput{
+			ResourceTagMappingList: []types.ResourceTagMapping{{ResourceARN: aws.String(arn)}},
+			PaginationToken:        aws.String("next"),
+		}, nil),
+		client.EXPECT().GetResources(gomock.Any(), gomock.Any()).Return(nil, errors.New("second page failed")),
+	)
+
+	resources, err := (&Discoverer{Client: client}).Discover(context.Background())
+
+	assert.Nil(t, resources)
+	assert.ErrorContains(t, err, "second page failed")
+}

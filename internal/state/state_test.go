@@ -109,6 +109,8 @@ func TestStaleUpdatesDoNotRecreateDeletedGroup(t *testing.T) {
 	assert.ErrorIs(t, err, ErrConflict)
 	err = store.ClearOverride(ctx, "dev")
 	assert.ErrorIs(t, err, ErrConflict)
+	err = store.SetOverride(ctx, "dev", model.OverrideStopped, 0)
+	assert.ErrorIs(t, err, ErrConflict)
 	assert.Nil(t, db.Item(configPK, groupSKPrefix+"dev"))
 }
 
