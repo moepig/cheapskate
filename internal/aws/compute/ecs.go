@@ -76,16 +76,13 @@ func (t *EcsServiceTarget) Describe(ctx context.Context, res model.Resource) (mo
 	return model.Observation{State: model.StateNotFound}, nil
 }
 
-// ECS サービスの稼働状態をタスク数だけから判定する。
-// desiredCount の変更がタスクへ反映される途中では、追加の start/stop を送らない。
+// ECS サービスの停止完了だけを stopped として判定する。
+// desiredCount とタスク数の差異は、停止操作を妨げない。
 func ecsServiceState(desired, running, pending int32) model.ObservedState {
 	if desired == 0 && running == 0 && pending == 0 {
 		return model.StateStopped
 	}
-	if desired > 0 && running == desired && pending == 0 {
-		return model.StateRunning
-	}
-	return model.StateTransitioning
+	return model.StateRunning
 }
 
 func (t *EcsServiceTarget) Stop(ctx context.Context, res model.Resource) error {

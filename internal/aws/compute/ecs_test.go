@@ -62,6 +62,13 @@ func TestEcsDescribeMarksRunningServiceForStartWhenScalableBoundsDiffer(t *testi
 	assert.True(t, observation.NeedsStart)
 }
 
+func TestEcsServiceStateAllowsStopBeforeTaskCountConverges(t *testing.T) {
+	assert.Equal(t, model.StateRunning, ecsServiceState(2, 1, 0))
+	assert.Equal(t, model.StateRunning, ecsServiceState(2, 0, 1))
+	assert.Equal(t, model.ActionStop, model.DecideAction(model.DesiredStopped, ecsServiceState(2, 1, 0)))
+	assert.Equal(t, model.StateStopped, ecsServiceState(0, 0, 0))
+}
+
 func TestEcsStopWithScalableTargetOnlyClampsTarget(t *testing.T) {
 	controller := gomock.NewController(t)
 	ecsClient := mocks.NewMockEcsAPI(controller)
