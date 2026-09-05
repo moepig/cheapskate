@@ -94,6 +94,33 @@ func TestCrossOriginMutationIsRejected(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, response.Code)
 }
 
+func TestSecFetchSiteMutationIsRejected(t *testing.T) {
+	_, _, server := webFixture(t)
+	request := httptest.NewRequest(http.MethodPost, "/op", strings.NewReader("action=remove&group=dev"))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.Header.Set("Sec-Fetch-Site", "cross-site")
+	request.Header.Set("Origin", "http://example.com")
+	request.Host = "example.com"
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	assert.Equal(t, http.StatusForbidden, response.Code)
+}
+
+func TestClearOverrideAndRemoveForms(t *testing.T) {
+	db, _, server := webFixture(t)
+	postForm(t, server, url.Values{"action": {"schedule"}, "group": {"dev"}, "start": {"0 9 * * *"}, "stop": {"0 20 * * *"}}, http.StatusSeeOther)
+	postForm(t, server, url.Values{"action": {"override"}, "group": {"dev"}, "override": {"stopped"}}, http.StatusSeeOther)
+	postForm(t, server, url.Values{"action": {"clear-override"}, "group": {"dev"}}, http.StatusSeeOther)
+	assert.Nil(t, db.Item("CONFIG", "GROUP#dev")["override"])
+	postForm(t, server, url.Values{"action": {"remove"}, "group": {"dev"}}, http.StatusSeeOther)
+	assert.Nil(t, db.Item("CONFIG", "GROUP#dev"))
+}
+
+func TestRenderedValuesAreEscaped(t *testing.T) {
+	assert.NotContains(t, string(describeGroup(model.GroupSpec{StartCron: `<script>`, StopCron: `</script>`})), "<script>")
+	assert.NotContains(t, string(describeResourceConfig(model.Resource{Type: model.TypeEcsService, Tags: map[string]string{model.EcsDesiredCountTagKey: `<img>`}})), "<img>")
+}
+
 func TestSourceIP(t *testing.T) {
 	assert.Equal(t, "192.0.2.10", sourceIP(`{"identity":{"sourceIp":"192.0.2.10"}}`))
 	assert.Equal(t, "192.0.2.20", sourceIP(`{"http":{"sourceIp":"192.0.2.20"}}`))
