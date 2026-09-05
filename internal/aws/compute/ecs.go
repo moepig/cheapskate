@@ -119,11 +119,16 @@ func (t *EcsServiceTarget) Start(ctx context.Context, res model.Resource) error 
 	if err != nil {
 		return err
 	}
+	boundsChanged := false
+	var previousMinimum, previousMaximum int32
 	if scalable != nil {
 		if aws.ToInt32(scalable.MinCapacity) != config.minimum || aws.ToInt32(scalable.MaxCapacity) != config.maximum {
 			if err := t.register(ctx, cluster, service, config.minimum, config.maximum); err != nil {
 				return err
 			}
+			boundsChanged = true
+			previousMinimum = aws.ToInt32(scalable.MinCapacity)
+			previousMaximum = aws.ToInt32(scalable.MaxCapacity)
 		}
 	}
 	currentDesired, err := t.desiredCount(ctx, cluster, service)
@@ -134,6 +139,12 @@ func (t *EcsServiceTarget) Start(ctx context.Context, res model.Resource) error 
 		return nil
 	}
 	_, err = t.Ecs.UpdateService(ctx, &ecs.UpdateServiceInput{Cluster: &cluster, Service: &service, DesiredCount: &config.desired})
+	if err == nil || !boundsChanged {
+		return err
+	}
+	if restoreErr := t.register(ctx, cluster, service, previousMinimum, previousMaximum); restoreErr != nil {
+		return fmt.Errorf("update ECS desired count: %w; restore scalable target: %v", err, restoreErr)
+	}
 	return err
 }
 

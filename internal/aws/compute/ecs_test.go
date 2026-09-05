@@ -152,6 +152,67 @@ func TestEcsStartRepairsBoundsWithoutUpdatingDesiredCount(t *testing.T) {
 	require.NoError(t, (&EcsServiceTarget{Ecs: ecsClient, AutoScaling: autoScaling}).Start(context.Background(), resource))
 }
 
+func TestEcsStartRetriesAfterTemporaryDesiredCountFailure(t *testing.T) {
+	controller := gomock.NewController(t)
+	ecsClient := mocks.NewMockEcsAPI(controller)
+	autoScaling := mocks.NewMockAutoScalingAPI(controller)
+	resource := model.Resource{Ref: "dev/api", Tags: map[string]string{
+		model.EcsDesiredCountTagKey: "2", model.EcsScalingMinTagKey: "1", model.EcsScalingMaxTagKey: "3",
+	}}
+	updateErr := assert.AnError
+	gomock.InOrder(
+		// 第 1 サイクルは min/max の復元後に desired count の設定が失敗する。
+		autoScaling.EXPECT().DescribeScalableTargets(gomock.Any(), gomock.Any()).Return(&aas.DescribeScalableTargetsOutput{
+			ScalableTargets: []aastypes.ScalableTarget{{MinCapacity: aws.Int32(0), MaxCapacity: aws.Int32(0)}},
+		}, nil),
+		autoScaling.EXPECT().RegisterScalableTarget(gomock.Any(), gomock.Any()).DoAndReturn(assertScalableBounds(t, 1, 3)),
+		ecsClient.EXPECT().DescribeServices(gomock.Any(), gomock.Any()).Return(&ecs.DescribeServicesOutput{Services: []ecstypes.Service{{
+			Status: aws.String("ACTIVE"), SchedulingStrategy: ecstypes.SchedulingStrategyReplica,
+		}}}, nil),
+		ecsClient.EXPECT().UpdateService(gomock.Any(), gomock.Any()).Return(nil, updateErr),
+		autoScaling.EXPECT().RegisterScalableTarget(gomock.Any(), gomock.Any()).DoAndReturn(assertScalableBounds(t, 0, 0)),
+		// 第 2 サイクルは rollback 後の min/max から再試行し、desired count を復元する。
+		autoScaling.EXPECT().DescribeScalableTargets(gomock.Any(), gomock.Any()).Return(&aas.DescribeScalableTargetsOutput{
+			ScalableTargets: []aastypes.ScalableTarget{{MinCapacity: aws.Int32(0), MaxCapacity: aws.Int32(0)}},
+		}, nil),
+		autoScaling.EXPECT().RegisterScalableTarget(gomock.Any(), gomock.Any()).DoAndReturn(assertScalableBounds(t, 1, 3)),
+		ecsClient.EXPECT().DescribeServices(gomock.Any(), gomock.Any()).Return(&ecs.DescribeServicesOutput{Services: []ecstypes.Service{{
+			Status: aws.String("ACTIVE"), SchedulingStrategy: ecstypes.SchedulingStrategyReplica, DesiredCount: 1, RunningCount: 1,
+		}}}, nil),
+		ecsClient.EXPECT().UpdateService(gomock.Any(), gomock.Any()).DoAndReturn(
+			func(_ context.Context, input *ecs.UpdateServiceInput, _ ...func(*ecs.Options)) (*ecs.UpdateServiceOutput, error) {
+				assert.EqualValues(t, 2, aws.ToInt32(input.DesiredCount))
+				return &ecs.UpdateServiceOutput{}, nil
+			}),
+		// 第 3 サイクルは desired count と min/max の一致を収束済みとして確認する。
+		ecsClient.EXPECT().DescribeServices(gomock.Any(), gomock.Any()).Return(&ecs.DescribeServicesOutput{Services: []ecstypes.Service{{
+			Status: aws.String("ACTIVE"), SchedulingStrategy: ecstypes.SchedulingStrategyReplica, DesiredCount: 2, RunningCount: 2,
+		}}}, nil),
+		autoScaling.EXPECT().DescribeScalableTargets(gomock.Any(), gomock.Any()).Return(&aas.DescribeScalableTargetsOutput{
+			ScalableTargets: []aastypes.ScalableTarget{{MinCapacity: aws.Int32(1), MaxCapacity: aws.Int32(3)}},
+		}, nil),
+	)
+
+	target := &EcsServiceTarget{Ecs: ecsClient, AutoScaling: autoScaling}
+	err := target.Start(context.Background(), resource)
+
+	assert.ErrorIs(t, err, updateErr)
+	require.NoError(t, target.Start(context.Background(), resource))
+	observation, err := target.Describe(context.Background(), resource)
+	require.NoError(t, err)
+	assert.Equal(t, model.StateRunning, observation.State)
+	assert.False(t, observation.NeedsStart)
+}
+
+func assertScalableBounds(t *testing.T, minimum, maximum int32) func(context.Context, *aas.RegisterScalableTargetInput, ...func(*aas.Options)) (*aas.RegisterScalableTargetOutput, error) {
+	t.Helper()
+	return func(_ context.Context, input *aas.RegisterScalableTargetInput, _ ...func(*aas.Options)) (*aas.RegisterScalableTargetOutput, error) {
+		assert.Equal(t, minimum, aws.ToInt32(input.MinCapacity))
+		assert.Equal(t, maximum, aws.ToInt32(input.MaxCapacity))
+		return &aas.RegisterScalableTargetOutput{}, nil
+	}
+}
+
 func TestEcsRejectsInvalidTagsBeforeModification(t *testing.T) {
 	for name, tags := range map[string]map[string]string{
 		"zero desired":  {model.EcsDesiredCountTagKey: "0"},
