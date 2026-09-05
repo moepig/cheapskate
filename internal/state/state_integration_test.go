@@ -5,7 +5,6 @@ package state_test
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/stretchr/testify/assert"
@@ -16,96 +15,26 @@ import (
 	"cheapskate/internal/state"
 )
 
-func newStore(t *testing.T) *state.Store {
+func TestGroupOperationsAgainstDynamoDB(t *testing.T) {
 	cfg := emutest.Config(t)
 	table := emutest.CreateStateTable(t, cfg)
-	return state.New(dynamodb.NewFromConfig(cfg), table)
-}
-
-func TestGroupRoundtrip(t *testing.T) {
-	s := newStore(t)
+	store := state.New(dynamodb.NewFromConfig(cfg), table)
 	ctx := context.Background()
 
-	got, err := s.GetGroup(ctx, "dev")
-	require.NoError(t, err)
-	assert.Nil(t, got)
+	group := model.GroupSpec{Name: "dev", StartCron: "0 9 * * *", StopCron: "0 20 * * *"}
+	require.NoError(t, store.CreateGroup(ctx, group))
+	require.NoError(t, store.SetOverride(ctx, "dev", model.OverrideRunning, 0))
+	require.NoError(t, store.SetSchedule(ctx, "dev", model.ScheduleSpec{StartCron: "0 8 * * *", StopCron: "0 19 * * *"}))
 
-	item := model.GroupSpec{
-		Name: "dev", Mode: model.ModeSchedule, StartCron: "0 9 * * 1-5", StopCron: "0 21 * * 1-5",
-		TagKey: "cheapskate:group", TagValue: "dev", Types: []model.ResourceType{model.TypeRdsInstance, model.TypeEcsService},
-	}
-	require.NoError(t, s.PutGroup(ctx, item))
-
-	got, err = s.GetGroup(ctx, "dev")
+	got, err := store.GetGroup(ctx, "dev")
 	require.NoError(t, err)
 	require.NotNil(t, got)
-	assert.Equal(t, model.ModeSchedule, got.Mode)
-	assert.ElementsMatch(t, []model.ResourceType{model.TypeRdsInstance, model.TypeEcsService}, got.Types)
-}
+	assert.Equal(t, model.OverrideRunning, got.Override)
+	assert.Equal(t, "0 8 * * *", got.StartCron)
 
-func TestOverrideExpiryEnforcedInCode(t *testing.T) {
-	s := newStore(t)
-	ctx := context.Background()
-	now := time.Now()
-
-	require.NoError(t, s.PutOverride(ctx, "dev", model.Override{Desired: model.DesiredRunning, ExpiresAt: now.Add(time.Hour).Unix()}))
-	o, err := s.GetOverride(ctx, "dev", now)
+	require.NoError(t, store.ClearOverride(ctx, "dev"))
+	require.NoError(t, store.DeleteGroup(ctx, "dev"))
+	got, err = store.GetGroup(ctx, "dev")
 	require.NoError(t, err)
-	require.NotNil(t, o)
-	assert.Equal(t, model.DesiredRunning, o.Desired)
-
-	// TTL による削除は遅延するため、store は過去の expires_at を持つ override を存在しないものとして扱わなければならない
-	o, err = s.GetOverride(ctx, "dev", now.Add(2*time.Hour))
-	require.NoError(t, err)
-	assert.Nil(t, o, "expired override must be nil")
-}
-
-func TestStatusRoundtrip(t *testing.T) {
-	s := newStore(t)
-	ctx := context.Background()
-
-	err := s.UpdateStatus(ctx, "ecs-service#dev/api", state.StatusPatch{
-		LastAction:    new(model.ActionStop),
-		ObservedState: new(model.StateRunning),
-		// nil のフィールドは、対応する属性を変更してはならない
-	})
-	require.NoError(t, err)
-	// 2 回目の部分更新は、置き換えではなく統合でなければならない
-	require.NoError(t, s.UpdateStatus(ctx, "ecs-service#dev/api", state.StatusPatch{LastAction: new(model.ActionStart)}))
-
-	status, err := s.GetStatus(ctx, "ecs-service#dev/api")
-	require.NoError(t, err)
-	assert.Equal(t, model.ActionStart, status.LastAction)
-	assert.Equal(t, model.StateRunning, status.ObservedState, "the earlier partial update's field must survive the merge")
-}
-
-// グループ単位の失敗である設定エラーと Discover の失敗は、合成 resource_id である "group#<name>" の下に記録する
-// これにより、実リソースと同じ status アイテムの形状と API を共有する
-func TestGroupStatusRoundtrip(t *testing.T) {
-	s := newStore(t)
-	ctx := context.Background()
-
-	require.NoError(t, s.UpdateStatus(ctx, model.GroupStatusID("dev"), state.StatusPatch{LastError: new("discover: access denied")}))
-	status, err := s.GetStatus(ctx, model.GroupStatusID("dev"))
-	require.NoError(t, err)
-	assert.Equal(t, "discover: access denied", status.LastError)
-}
-
-func TestScanAllJoinsGroupAndOverrideAgainstRealDynamoDB(t *testing.T) {
-	s := newStore(t)
-	ctx := context.Background()
-	now := time.Now()
-
-	require.NoError(t, s.PutGroup(ctx, model.GroupSpec{Name: "dev", Mode: model.ModePinned, Desired: model.DesiredStopped}))
-	require.NoError(t, s.PutOverride(ctx, "dev", model.Override{Desired: model.DesiredRunning, ExpiresAt: now.Add(time.Hour).Unix()}))
-	require.NoError(t, s.UpdateStatus(ctx, "rds-instance#a", state.StatusPatch{LastAction: new(model.ActionStop)}))
-
-	res, err := s.ScanAll(ctx, now)
-	require.NoError(t, err)
-	require.Len(t, res.Groups, 1)
-	assert.True(t, res.Groups[0].HasGroup)
-	require.NotNil(t, res.Groups[0].Override)
-	assert.Equal(t, model.DesiredRunning, res.Groups[0].Override.Desired)
-	require.Contains(t, res.Statuses, "rds-instance#a")
-	assert.Equal(t, model.ActionStop, res.Statuses["rds-instance#a"].LastAction)
+	assert.Nil(t, got)
 }

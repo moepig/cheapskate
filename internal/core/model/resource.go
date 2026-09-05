@@ -9,6 +9,8 @@ import (
 // cheapskate が管理できる AWS リソースの種別
 type ResourceType string
 
+const GroupTagKey = "cheapskate:group"
+
 // リソース自身のタグ 1 つで与える、種別固有の設定項目の宣言
 // Key は AWS リソースへ付与するタグキー、Name は JSON 出力のキー、Label は表示名である
 // Name と Label を分けるのは、機械が読む名前を固定したまま表示名を変更できるようにするためである
@@ -95,10 +97,6 @@ func InfoByARN(service, resource string) (TypeInfo, bool) {
 
 // 全リソース種別をソートして並べたもの
 // 既知かどうかの判定 (Valid) と、CLI/UI での列挙は、いずれも typeInfos からこれを通じて導出する
-//
-// "group" はこの集合へ含めない
-// グループ自身のステータスは、合成リソース ID である GroupNamespace+name で記録する (GroupStatusID を参照)
-// この名前空間がリソースの "<type>#<ref>" 形式の ID と衝突しないのは、種別定数が "group" とならないためである
 var KnownTypes = knownTypes()
 
 func knownTypes() []ResourceType {
@@ -116,36 +114,15 @@ func (t ResourceType) Valid() bool {
 	return ok
 }
 
-// types を文字列のスライスへ変換する
-func TypeNames(types []ResourceType) []string {
-	out := make([]string, len(types))
-	for i, t := range types {
-		out[i] = string(t)
-	}
-	return out
-}
-
-// 文字列を ResourceType へ変換する
-// 検証は行わない
-// 未知の種別の拒否は Selector.Validate が行う。既知の種別の一覧をまとめて示せるためである
-func ResourceTypes(names []string) []ResourceType {
-	out := make([]ResourceType, len(names))
-	for i, n := range names {
-		out[i] = ResourceType(n)
-	}
-	return out
-}
-
-// グループのセレクタによって発見された AWS リソース 1 件
+// 固定タグによって検出された AWS リソース 1 件
 type Resource struct {
 	Type ResourceType
 	Ref  string // ターゲット固有の識別子: "db1", "dev-cluster/api", "i-0abc123"
 	ARN  string
-	Tags map[string]string // セレクタの tag_key/tag_value に限らない、リソースに付いた全タグ
+	Tags map[string]string // 固定の所属タグを含む、リソースに付いた全タグ
 }
 
-// ステータスレコードと通知におけるリソースの識別子を返す
-// 形式は "<type>#<ref>" である
+// ログと通知で使うリソース識別子を返す。
 func (r Resource) ID() string { return string(r.Type) + "#" + r.Ref }
 
 // 種別と Ref の形式の対応を、その種別の宣言 (TypeInfo.RefPattern) に照らして検査する
@@ -173,10 +150,10 @@ func (r Resource) Validate() error {
 }
 
 // r のタグのうち、この種別が設定として扱うものを宣言の順に返す
-// 未設定のタグは除外するため、設定が存在しない場合は空を返す
+// 存在しないタグは除外し、空の値は設定エラーの調査に必要なため維持する
 //
 // 表示専用であり、解釈できない値も検証せずそのまま返す
-// 妥当性の強制は各ターゲットの Start が行う
+// 妥当性の強制は各ターゲットの Start/Stop が行う
 // タグを列挙せず TypeInfo.ConfigTags を経由するのは、cheapskate が意味を定義したタグのみを設定として扱うためである
 func (r Resource) Config() []ConfigValue {
 	info, ok := Info(r.Type)
@@ -185,7 +162,7 @@ func (r Resource) Config() []ConfigValue {
 	}
 	var out []ConfigValue
 	for _, c := range info.ConfigTags {
-		if v := r.Tags[c.Key]; v != "" {
+		if v, ok := r.Tags[c.Key]; ok {
 			out = append(out, ConfigValue{Name: c.Name, Label: c.Label, Value: v})
 		}
 	}

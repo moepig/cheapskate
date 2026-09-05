@@ -1,54 +1,37 @@
-# Terms and the overall picture
+# Concepts
 
-cheapskate is a tool for registering the state AWS resources ought to be in and keeping their actual state in line with it. This document shows the overall flow and defines the terms used across the usage documents.
+cheapskate periodically converges tagged AWS resources to the state selected for their group. Configuration consists only of a schedule and an optional override.
 
-## The overall flow
+## Groups and membership
 
-Drawing the flow from entering the configuration to the actual state changing gives the following diagram.
+A resource belongs to the group named by its `cheapskate:group` tag. An empty tag, an invalid group name, or the name of an unconfigured group is a resource error. A group name contains 1–64 ASCII letters, digits, periods, underscores, or hyphens.
 
-```mermaid
-flowchart LR
-    user(["operator"])
+The reconciler loads every group and every tagged resource before it makes any Describe, Start, or Stop call. A global read failure aborts the cycle. An invalid group or resource is isolated so other resources continue.
 
-    subgraph cs["cheapskate"]
-        tbl[("state table
-        configuration and results")]
-        rec["reconciler
-        runs every 5 minutes"]
-    end
+## Desired-state resolution
 
-    tags["tags on the AWS resources"]
-    res["RDS / ECS / EC2"]
+An active override takes precedence:
 
-    user -- "writes the group configuration" --> tbl
-    user -- "tags resources to match the selector" --> tags
-    tbl -- "reads the configuration" --> rec
-    tags -- "discovery" --> rec
-    rec -- "inspects the actual state" --> res
-    rec -- "starts / stops" --> res
-    rec -- "writes the results" --> tbl
-    tbl -- "check the state" --> user
-```
+1. `disabled` omits the group from reconciliation.
+2. `running` selects the running state.
+3. `stopped` selects the stopped state.
+4. Without an active override, the later of the most recent start and stop cron ticks wins. A tie selects stopped.
 
-Both a configuration change and adding or removing a tag take effect from the next reconcile cycle. When the desired state and the actual state already agree, no operation is performed on the resource.
+An override with `override_expires_at <= now` is inactive. Its stored attributes may remain in DynamoDB; the schedule takes over automatically.
 
-## Terms
+A schedule is a pair of five-field cron expressions interpreted in `DEFAULT_TIMEZONE`. Both expressions must exist and must have reachable ticks. A group must have a schedule, an override, or both. A timed override additionally requires a schedule.
 
-The terms used from here on are given below.
+## Convergence and concurrency
 
-| Term | Meaning |
-| --- | --- |
-| Target group (group) | The unit of configuration. It holds how the desired state is decided and the selector that picks the resources |
-| Selector | The condition that picks what is managed: an AWS tag key/value plus the target resource types |
-| Discovery | Finding the resources matching a selector from the AWS tags. Individual resources are never registered |
-| Desired state | The state a group's resources ought to be in: `running` or `stopped` |
-| Reconcile (convergence) | Comparing the desired state with the actual state and starting or stopping to bring them together |
-| Reconcile cycle | One pass of reconcile over every group. Every 5 minutes by default |
-| Reconciler | The Lambda function that runs the reconcile cycle. The only component that starts or stops AWS resources |
-| Pin | Fixing the desired state to one value without using a schedule |
-| Disable | Excluding a group from reconcile |
-| Override | A time-limited replacement of the desired state |
-| State table | The DynamoDB table holding the configuration and the results |
-| Status record | The results the reconciler writes: the last action, the last error, and any ongoing transition |
-| Transitioning | Being partway through a start or stop. The reconciler leaves the resource alone and waits for the next cycle |
-| Orphaned record | A record in the state table whose group or resource no longer exists |
+Only stable resources whose observed state differs from the desired state receive an action. Transitional resources are skipped until a later cycle.
+
+Invocations may overlap. A Start or Stop may therefore be delivered more than once, and invocations holding different configuration snapshots may briefly issue opposing actions. After older invocations finish, a successful later cycle converges to the latest configuration.
+
+## Supported resources
+
+- RDS DB instances that are not cluster members and do not use a `custom-*` engine
+- RDS DB clusters whose engine starts with `aurora`
+- ECS services using the `REPLICA` scheduling strategy
+- EC2 instances
+
+See [Resource tags](resource_tag.md) for ECS restoration settings.

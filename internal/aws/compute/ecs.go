@@ -6,10 +6,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
 	aas "github.com/aws/aws-sdk-go-v2/service/applicationautoscaling"
 	aastypes "github.com/aws/aws-sdk-go-v2/service/applicationautoscaling/types"
 	"github.com/aws/aws-sdk-go-v2/service/ecs"
+	ecstypes "github.com/aws/aws-sdk-go-v2/service/ecs/types"
 
 	"cheapskate/internal/core/model"
 )
@@ -51,6 +51,9 @@ func (t *EcsServiceTarget) Describe(ctx context.Context, ref string) (model.Obse
 	}
 	for _, s := range out.Services {
 		if s.Status != nil && *s.Status == "ACTIVE" {
+			if s.SchedulingStrategy != ecstypes.SchedulingStrategyReplica {
+				return model.Observation{}, fmt.Errorf("ecs service %s uses unsupported scheduling strategy %q", ref, s.SchedulingStrategy)
+			}
 			return model.Observation{
 				State:  ecsServiceState(s.DesiredCount, s.RunningCount, s.PendingCount),
 				Detail: fmt.Sprintf("desiredCount=%d runningCount=%d pendingCount=%d", s.DesiredCount, s.RunningCount, s.PendingCount),
@@ -72,12 +75,11 @@ func ecsServiceState(desired, running, pending int32) model.ObservedState {
 	return model.StateTransitioning
 }
 
-// stop はスケーラブルターゲットの 0/0 化と desiredCount の 0 化の 2 段階からなり、原子的ではない
-// 後段のみが失敗した場合、サービスは起動したまま Auto Scaling が 0/0 に固定された状態で残る
-// この状態はスケールアウトが不可能であり、かつ停止の失敗を示すエラーからは判別できない
-// したがって、後段が失敗した場合は前段を巻き戻す
-func (t *EcsServiceTarget) Stop(ctx context.Context, ref string) error {
-	cluster, service, err := splitEcsRef(ref)
+func (t *EcsServiceTarget) Stop(ctx context.Context, res model.Resource) error {
+	if _, err := ecsConfigFromTags(res.Tags); err != nil {
+		return err
+	}
+	cluster, service, err := splitEcsRef(res.Ref)
 	if err != nil {
 		return err
 	}
@@ -86,33 +88,11 @@ func (t *EcsServiceTarget) Stop(ctx context.Context, ref string) error {
 		return err
 	}
 	if scalable != nil {
-		if err := t.register(ctx, cluster, service, 0, 0); err != nil {
-			return err
-		}
+		return t.register(ctx, cluster, service, 0, 0)
 	}
 	var zero int32
-	if _, err := t.Ecs.UpdateService(ctx, &ecs.UpdateServiceInput{Cluster: &cluster, Service: &service, DesiredCount: &zero}); err != nil {
-		if scalable == nil {
-			return err // 0/0 とした対象が存在しないため、巻き戻す対象も存在しない
-		}
-		return t.rollbackFailedStop(ctx, cluster, service, scalable, err)
-	}
-	return nil
-}
-
-// 0/0 としたスケーラブルターゲットを、DescribeScalableTargets が返した元の min/max へ戻す
-// 元の値は scalableTarget が返す ScalableTarget から取得できるため、追加の API 呼び出しと IAM 権限を必要としない
-// この関数は必ずエラーを返す
-// 巻き戻しの成否によらず停止自体は失敗しており、呼び出し側へその事実を伝える必要があるためである
-// 巻き戻しも失敗した場合は、0/0 のまま手作業による復旧が必要であることをエラー本文へ含める
-// この本文が status# の last_error と SNS 通知に現れる
-func (t *EcsServiceTarget) rollbackFailedStop(ctx context.Context, cluster, service string, prev *aastypes.ScalableTarget, cause error) error {
-	minimum, maximum := aws.ToInt32(prev.MinCapacity), aws.ToInt32(prev.MaxCapacity)
-	if rerr := t.register(ctx, cluster, service, minimum, maximum); rerr != nil {
-		return fmt.Errorf("stop failed: %w; scalable target is left clamped at 0/0 and must be restored to %d/%d by hand (rollback failed: %v)",
-			cause, minimum, maximum, rerr)
-	}
-	return fmt.Errorf("stop failed: %w; scalable target rolled back to %d/%d", cause, minimum, maximum)
+	_, err = t.Ecs.UpdateService(ctx, &ecs.UpdateServiceInput{Cluster: &cluster, Service: &service, DesiredCount: &zero})
+	return err
 }
 
 // start も 2 段階からなるが、Stop と異なり巻き戻しを行わない
@@ -123,7 +103,7 @@ func (t *EcsServiceTarget) Start(ctx context.Context, res model.Resource) error 
 	if err != nil {
 		return err
 	}
-	count, err := desiredCountFromTags(res.Tags)
+	config, err := ecsConfigFromTags(res.Tags)
 	if err != nil {
 		return err
 	}
@@ -132,16 +112,30 @@ func (t *EcsServiceTarget) Start(ctx context.Context, res model.Resource) error 
 		return err
 	}
 	if scalable != nil {
-		minimum, maximum, err := scalingBoundsFromTags(res.Tags, count)
-		if err != nil {
-			return err
-		}
-		if err := t.register(ctx, cluster, service, minimum, maximum); err != nil {
+		if err := t.register(ctx, cluster, service, config.minimum, config.maximum); err != nil {
 			return err
 		}
 	}
-	_, err = t.Ecs.UpdateService(ctx, &ecs.UpdateServiceInput{Cluster: &cluster, Service: &service, DesiredCount: &count})
+	_, err = t.Ecs.UpdateService(ctx, &ecs.UpdateServiceInput{Cluster: &cluster, Service: &service, DesiredCount: &config.desired})
 	return err
+}
+
+type ecsConfig struct {
+	desired int32
+	minimum int32
+	maximum int32
+}
+
+func ecsConfigFromTags(tags map[string]string) (ecsConfig, error) {
+	desired, err := desiredCountFromTags(tags)
+	if err != nil {
+		return ecsConfig{}, err
+	}
+	minimum, maximum, err := scalingBoundsFromTags(tags, desired)
+	if err != nil {
+		return ecsConfig{}, err
+	}
+	return ecsConfig{desired: desired, minimum: minimum, maximum: maximum}, nil
 }
 
 // ecs-service の Ref を、ECS API が個別の引数として要求する cluster と service へ分解する
@@ -204,8 +198,11 @@ func scalingBoundsFromTags(tags map[string]string, desiredCount int32) (minimum,
 // この場合は不正な値と区別する。不正な値は既定値へ倒さず、エラーとする
 func tagInt32(tags map[string]string, key string) (n int32, ok bool, err error) {
 	v, present := tags[key]
-	if !present || v == "" {
+	if !present {
 		return 0, false, nil
+	}
+	if v == "" {
+		return 0, false, fmt.Errorf("tag %s must not be empty", key)
 	}
 	parsed, err := strconv.ParseInt(v, 10, 32)
 	if err != nil {

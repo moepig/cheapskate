@@ -1,42 +1,37 @@
 {{define "content"}}
+<p class="muted">All schedules and dates use {{.TZName}}.</p>
 <div class="table-wrap">
 <table>
-  <tr><th>Group</th><th>Mode</th><th>Config</th><th>Selector</th><th>Override</th><th>Last error</th></tr>
+  <tr><th>Group</th><th>Schedule</th><th>Override</th></tr>
   {{range .Rows}}
   <tr>
-    <td><a href="{{$.Base}}/group?name={{.Name}}"><strong>{{.Name}}</strong></a></td>
-    {{if .ConfigErr}}
-    <td colspan="5" class="danger">config error: {{.ConfigErr}}</td>
-    {{else if .OverrideErr}}
-    <td colspan="5" class="danger">override error: {{.OverrideErr}}</td>
-    {{else}}
-    <td>{{.Group.Mode}}</td>
+    <td>{{if .ConfigErr}}<strong>{{.Name}}</strong>{{else}}<a href="{{$.Base}}/group?name={{.Name}}"><strong>{{.Name}}</strong></a>{{end}}</td>
+    {{if .ConfigErr}}<td colspan="2" class="danger">config error: {{.ConfigErr}}</td>{{else}}
     <td>{{groupDesc .Group}}</td>
-    <td>{{selDesc .Group}}</td>
-    <td>{{with ovDesc .Override}}{{.}}{{else}}<span class="muted">-</span>{{end}}</td>
-    <td>{{if .StatusErr}}<span class="danger">status error: {{.StatusErr}}</span>{{else}}{{with .Status.LastError}}<span class="danger">{{.}}</span>{{else}}<span class="muted">-</span>{{end}}{{end}}</td>
-    {{end}}
+    <td>{{with ovDesc .Group}}{{.}}{{else}}<span class="muted">-</span>{{end}}</td>{{end}}
   </tr>
-  {{else}}
-  <tr><td colspan="6" class="muted">No groups yet. Create one below.</td></tr>
-  {{end}}
+  {{else}}<tr><td colspan="3" class="muted">No groups yet.</td></tr>{{end}}
 </table>
 </div>
 
 <fieldset>
-  <legend>Create group</legend>
-  <p class="muted">Register a new group by defining its tag-based selector and resource types.</p>
+  <legend>Create or replace schedule</legend>
   <form method="post" action="{{.Base}}/op">
-    <input type="hidden" name="action" value="set-selector">
-    <p><label>Group <input name="group" placeholder="dev" required></label></p>
-    <p><label>Tag key <input name="tag_key" placeholder="cheapskate:group"></label>
-       <label>Tag value <input name="tag_value" placeholder="dev"></label></p>
-    <p>
-      {{range .Types}}
-      <label class="check"><input type="checkbox" name="types" value="{{.}}"> {{.}}</label>
-      {{end}}
-    </p>
-    <button class="primary">Create</button>
+    <input type="hidden" name="action" value="schedule">
+    <p><label>Group <input name="group" required></label>
+       <label>Start cron <input name="start" placeholder="0 9 * * MON-FRI" required></label>
+       <label>Stop cron <input name="stop" placeholder="0 20 * * MON-FRI" required></label></p>
+    <button>Save schedule</button>
+  </form>
+</fieldset>
+
+<fieldset>
+  <legend>Create indefinite override</legend>
+  <form method="post" action="{{.Base}}/op">
+    <input type="hidden" name="action" value="override">
+    <p><label>Group <input name="group" required></label>
+       <label>Override <select name="override"><option>running</option><option>stopped</option><option>disabled</option></select></label></p>
+    <button>Save override</button>
   </form>
 </fieldset>
 {{end}}

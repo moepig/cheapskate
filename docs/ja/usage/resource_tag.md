@@ -1,59 +1,27 @@
-# AWS リソースタグによる設定
+# リソースタグ
 
-本ドキュメントは、管理対象の AWS リソース自身に付与するタグを規定する。タグには、管理対象を決めるセレクタのタグと、動作のパラメータを与えるパラメータのタグの 2 種類がある。それぞれの役割を、以下に示す。
+## グループへの所属
 
-| 種類 | キー | 役割 |
-|---|---|---|
-| セレクタのタグ | グループ側で任意に決める | 付与したリソースがそのグループの管理対象になる |
-| パラメータのタグ | `cheapskate/` 始まりの固定 | 動作のパラメータを与える。未設定でも既定値で動作する |
+管理する各リソースに、次の固定タグを 1 個設定する。
 
-いずれもリソース側の操作はタグの付与と削除のみであり、DynamoDB 側の操作を伴わない。反映は次の reconcile サイクルからとなる。
-
-## セレクタのタグ
-
-グループのセレクタはタグのキー/値と対象リソースタイプの組であり、その両方に一致するリソースが管理対象となる。
-
-```console
-cheapskate-cli set-selector --group dev --tag-key cheapskate:group --tag-value dev --types rds-cluster,ecs-service
+```text
+cheapskate:group=<グループ名>
 ```
 
-この設定に対してリソース側に付与するタグは `cheapskate:group=dev` である。キーと値は任意であり、`cheapskate` 由来である必要はない。既存の `Env=dev` などをそのまま利用してもよい。
+reconciler は、値を指定しない `cheapskate:group` tag filter で Resource Groups Tagging API の `GetResources` を呼び出す。1 ページあたり最大 100 リソースを要求し、全ページを読み込む。所属先は、各 ARN とともに返されたタグ値だけで決定する。
 
-## パラメータのタグ
+## ECS の復元設定
 
-認識するタグキーと、その効果を、以下に示す。
+ECS には停止状態がないため、cheapskate は service を 0 まで scale in し、起動時に service 自身のタグから値を復元する。使用するタグを次の表に示す。
 
-| タグキー | 対象 | 効果 |
+| タグ | 必須 | 意味 |
 | --- | --- | --- |
-| `cheapskate/desired-count` | ecs-service | 起動時に設定する desiredCount。未設定なら 1 |
-| `cheapskate/scaling-min` | ecs-service | Application Auto Scaling 使用時、起動時に設定する最小容量。未設定なら desiredCount と同値 |
-| `cheapskate/scaling-max` | ecs-service | Application Auto Scaling 使用時、起動時に設定する最大容量。未設定なら desiredCount と同値 |
+| `cheapskate/desired-count` | いいえ。既定値 `1` | Start 後の desired task 数。正の int32 |
+| `cheapskate/scaling-min` | いいえ。既定値は desired count | 復元する minimum capacity。0 以上の int32 |
+| `cheapskate/scaling-max` | いいえ。既定値は desired count | 復元する maximum capacity。0 以上の int32 |
 
-これらをグループ側の属性ではなくリソース側のタグとしているのは、1 つのセレクタが複数の ECS サービスに一致しうるためである。
+scalable target がある場合は、3 個すべての値が `0 <= min <= desired <= max` を満たす必要がある。Stop は scalable target の上下限だけを `0/0` に変更する。Start は min/max を復元してから desired count を復元する。
 
-### 値の規則
+scalable target がない場合、Stop は desired count を 0 にし、Start は設定値または既定値へ戻す。scalable target がなくても、3 個のタグ値をすべて検証する。
 
-値が満たすべき規則を、以下に示す。
-
-| 項目 | 規則 |
-|---|---|
-| 型 | 非負の整数。空文字列は未設定として扱う |
-| `cheapskate/desired-count` | 0 以下は不可 |
-| 3 つの関係 | `scaling-min <= desired-count <= scaling-max` を満たすこと |
-
-規則を満たさない値は起動時のエラーとなり、AWS API は呼ばれない。エラーは `status#` の `last_error` に記録される。範囲外の desiredCount を許容すると、指定した台数へ変更した直後に Auto Scaling が上下限まで引き戻し、指定が実現しないためである。
-
-現在の設定値は、`cheapskate-cli show --group <名前>` の `resources[].config` および Web コンソールのグループページで確認できる。
-
-### 付与のタイミング
-
-> [!IMPORTANT]
-> タグは初めて停止させる前に付与すること。ECS の起動は、停止時に保存した値の復元ではなく、上記タグの値からの復元である。未設定のまま停止した場合、起動時の desiredCount は 1(min/max も同値)となり、元の値は復元できない。
-
-```console
-aws ecs tag-resource --resource-arn <サービス ARN> --tags \
-  key=cheapskate:group,value=dev \
-  key=cheapskate/desired-count,value=2 \
-  key=cheapskate/scaling-min,value=1 \
-  key=cheapskate/scaling-max,value=4
-```
+ECS または Application Auto Scaling の変更 API を呼び出す前に、タグ一式を検証する。`REPLICA` 以外の scheduling strategy を使用する service はエラーになる。

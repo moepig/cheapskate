@@ -47,7 +47,7 @@ type ecsService struct {
 }
 
 // グループ所属の有無と、web console および CLI における ECS スケーリングタグの表示の双方を検証するため、次の構成とする:
-//   - "api" と "worker" は cheapskate:group=dev を持ち、サンプルの "dev" グループのセレクタ (scripts/dev.sh) に一致する
+//   - "api" と "worker" は cheapskate:group=dev を持ち、サンプルの "dev" グループに所属する
 //     "worker" はさらに ECS スケーリングタグ一式を持つ
 //     (model.EcsDesiredCountTagKey、EcsScalingMinTagKey、EcsScalingMaxTagKey)
 //   - "batch" はそのタグを持たないため、Floci には存在するが "dev" グループの Resources には現れない

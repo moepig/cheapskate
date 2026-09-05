@@ -1,6 +1,6 @@
 //go:build image
 
-// ビルド済みの reconciler イメージへ、本番で EventBridge が送信するものと同じペイロードを投入する
+// ビルド済みの reconciler イメージへ、定期呼び出しと任意の JSON ペイロードを投入する
 //
 // 検証の対象はイメージの振る舞いであり、RIE と testcontainers は実行の手段である
 // パッケージの位置づけとハーネスの前提は、doc.go と harness_test.go を参照
@@ -10,9 +10,6 @@ package image
 
 import (
 	"encoding/json"
-	"os"
-	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -21,16 +18,6 @@ import (
 	"cheapskate/internal/app/reconcile"
 	"cheapskate/internal/devtools/emutest"
 )
-
-// イベントフィクスチャの位置 (リポジトリルートからの相対)
-// フィクスチャは単体テストと共用であり、EventBridge ルールパターンの参照ペイロードを兼ねる
-const fixtureDir = repoRoot + "/internal/app/reconcile/testdata"
-
-// ハンドラが error を返した場合に Lambda ランタイムが返すペイロード
-type lambdaError struct {
-	ErrorMessage string `json:"errorMessage"`
-	ErrorType    string `json:"errorType"`
-}
 
 func TestReconcilerImageHandlesEventPayloads(t *testing.T) {
 	cfg := emutest.Config(t)
@@ -49,37 +36,17 @@ func TestReconcilerImageHandlesEventPayloads(t *testing.T) {
 		assert.Empty(t, summary.Errors)
 	})
 
-	// EventBridge が送信するイベント本体をそのまま投入する
-	// glob により取得するため、フィクスチャの追加は自動で対象となる
-	fixtures, err := filepath.Glob(filepath.Join(fixtureDir, "rds-event-*.json"))
-	require.NoError(t, err)
-	require.NotEmpty(t, fixtures, "no RDS event fixtures found in "+fixtureDir)
-
-	for _, fixture := range fixtures {
-		t.Run(filepath.Base(fixture), func(t *testing.T) {
-			payload, err := os.ReadFile(fixture)
-			require.NoError(t, err)
-
-			// RDS イベントもフル reconcile を実行する (イベントが指定するリソースのみを対象とはしない)
-			var summary reconcile.Summary
-			require.NoError(t, json.Unmarshal(reconciler.invoke(t, payload), &summary))
-			assert.Equal(t, 0, summary.Reconciled)
-			assert.Empty(t, summary.Errors)
-		})
-	}
-
-	// 応答から判定できるのは、呼び出しの受理までである
-	// aws.rds のイベントとして解釈したことは、ハンドラが出力するログでのみ確認できる
-	t.Run("rds events were recognised", func(t *testing.T) {
-		assert.Equal(t, len(fixtures),
-			strings.Count(reconciler.logs(t), `"msg":"event-received","source":"aws.rds"`),
-			"expected one event-received log line per RDS fixture")
+	// payload の内容は解釈せず、どの呼び出しでも full reconcile を実行する。
+	t.Run("arbitrary payload", func(t *testing.T) {
+		var summary reconcile.Summary
+		require.NoError(t, json.Unmarshal(reconciler.invoke(t, []byte("[]")), &summary))
+		assert.Equal(t, 0, summary.Reconciled)
+		assert.Empty(t, summary.Errors)
 	})
+}
 
-	// JSON オブジェクトでないペイロードは、空のイベントとして reconcile を継続せず、失敗とする
-	t.Run("malformed payload", func(t *testing.T) {
-		var failure lambdaError
-		require.NoError(t, json.Unmarshal(reconciler.invoke(t, []byte("[]")), &failure))
-		assert.Contains(t, failure.ErrorMessage, "unmarshal event")
-	})
+func TestReconcilerImageRejectsInvalidTimezone(t *testing.T) {
+	cfg := emutest.Config(t)
+	table := emutest.CreateStateTable(t, cfg)
+	assertRejectsInvalidTimezone(t, buildImage(t, "reconciler"), emulatorEnv(t, table))
 }

@@ -45,8 +45,8 @@ func (t *Ec2InstanceTarget) Describe(ctx context.Context, ref string) (model.Obs
 	return model.Observation{State: model.StateNotFound}, nil
 }
 
-func (t *Ec2InstanceTarget) Stop(ctx context.Context, ref string) error {
-	_, err := t.Client.StopInstances(ctx, &ec2.StopInstancesInput{InstanceIds: []string{ref}})
+func (t *Ec2InstanceTarget) Stop(ctx context.Context, res model.Resource) error {
+	_, err := t.Client.StopInstances(ctx, &ec2.StopInstancesInput{InstanceIds: []string{res.Ref}})
 	return err
 }
 

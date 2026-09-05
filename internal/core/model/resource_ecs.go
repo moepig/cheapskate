@@ -7,8 +7,7 @@ const TypeEcsService ResourceType = "ecs-service"
 
 // EcsServiceTarget.Start がサービスを元の規模へ戻すために読む、ECS 専用のリソースタグ
 // グループ単位の属性とはしない
-// グループのセレクタは複数の ECS サービスへ同時に一致しうるためである
-// それらを同じ desired count へ揃えることは誤りであるため、AWS リソース側に置く
+// 1 グループには異なる規模の ECS サービスが所属しうるため、AWS リソース側に置く
 //
 // この 3 つが設定として意味を持つタグであることは ConfigTags が宣言し、表示側はそちらを参照する (Resource.Config を参照)
 const (

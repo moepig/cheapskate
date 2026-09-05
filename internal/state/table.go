@@ -11,9 +11,9 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
 
-// stateテーブルが存在しない場合に作成する。pkとskを複合キー、expires_atをTTLとする。
+// state テーブルが存在しない場合に作成する。pk と sk を複合キーとする。
 // 冪等であり、`make dev` の再実行に対応する
-// 作成後はテーブルが active となるまで待機し、expires_at の TTL を有効化する
+// 作成後はテーブルが active となるまで待機する。
 func CreateTable(ctx context.Context, db *dynamodb.Client, name string) error {
 	_, err := db.CreateTable(ctx, &dynamodb.CreateTableInput{
 		TableName: &name,
@@ -36,14 +36,5 @@ func CreateTable(ctx context.Context, db *dynamodb.Client, name string) error {
 		return fmt.Errorf("table %s not active: %w", name, err)
 	}
 
-	// DynamoDB Local など TTL API を実装しない開発環境でも初期化を続けるため、ベストエフォートで実行する。
-	// 本番環境ではデプロイ手順で TTL を有効化する。
-	_, _ = db.UpdateTimeToLive(ctx, &dynamodb.UpdateTimeToLiveInput{
-		TableName: &name,
-		TimeToLiveSpecification: &types.TimeToLiveSpecification{
-			AttributeName: aws.String("expires_at"),
-			Enabled:       aws.Bool(true),
-		},
-	})
 	return nil
 }

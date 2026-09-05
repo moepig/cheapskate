@@ -45,8 +45,6 @@ func Targets(cfg aws.Config) map[model.ResourceType]port.Target {
 // 値は Targets が用いるのと同じ compute の型であり、Stop/Start も実装する
 // ただし、受け渡しは常により狭い port.Describer を通じて行う
 // したがって cheapskate-cli と web console は、コントロールプレーンを変更する経路を持たない
-// EcsServiceTarget の AutoScaling クライアントは未設定とする
-// これを参照するのは Start/Stop のみであり、このマップはそのいずれにも用いないためである
 func Describers(cfg aws.Config) map[model.ResourceType]port.Describer {
 	targets := Targets(cfg)
 	m := make(map[model.ResourceType]port.Describer, len(targets))

@@ -88,9 +88,9 @@ floci-down:
 	-docker ps -aq --filter name=floci- | xargs -r docker rm -f
 
 # Black-box tests of the container images (hence tests/, not internal/): both images are built and
-# run as Lambdas through the Runtime Interface Emulator. The reconciler is fed the real EventBridge
-# payloads from internal/app/reconcile/testdata; the web console gets an API Gateway proxy event,
-# which exercises the Lambda Web Adapter extension that only exists inside the image. On its own
+# run as Lambdas through the Runtime Interface Emulator. The reconciler receives periodic and
+# arbitrary JSON payloads; the web console gets an API Gateway proxy event, which exercises the
+# Lambda Web Adapter extension that only exists inside the image. On its own
 # build tag rather than `integration` because it builds the images first (~90s from cold). Needs
 # only Docker; the emulator and the state table come up with the test.
 image-test:

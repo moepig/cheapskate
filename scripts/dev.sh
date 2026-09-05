@@ -10,6 +10,8 @@ export AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-test}"
 export AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-test}"
 export AWS_REGION="${AWS_REGION:-ap-northeast-1}"
 export CHEAPSKATE_TABLE="${CHEAPSKATE_TABLE:-cheapskate-dev}"
+export STATE_TABLE_NAME="${STATE_TABLE_NAME:-$CHEAPSKATE_TABLE}"
+export DEFAULT_TIMEZONE="${DEFAULT_TIMEZONE:-Asia/Tokyo}"
 
 docker compose up -d
 until curl -sf "$AWS_ENDPOINT_URL/_localstack/health" > /dev/null; do sleep 1; done
@@ -18,10 +20,8 @@ echo "dev: floci ready at $AWS_ENDPOINT_URL"
 go run ./cmd/dev-bootstrap
 
 echo "dev: seeding sample group \"dev\" (idempotent)"
-go run ./cmd/cheapskate-cli set-selector --group dev \
-  --tag-key cheapskate:group --tag-value dev --types rds-instance,ecs-service,ec2-instance
 go run ./cmd/cheapskate-cli schedule --group dev \
-  -start '0 9 * * 1-5' -stop '0 21 * * 1-5' -timezone Asia/Tokyo
+  -start '0 9 * * 1-5' -stop '0 21 * * 1-5'
 
 echo "dev: web console on http://127.0.0.1:8080/  (Ctrl-C to stop; \`make dev-down\` to stop floci)"
 echo "dev: the \"dev\" group's Resources now shows two dummy ECS services (dev-cluster/api,"

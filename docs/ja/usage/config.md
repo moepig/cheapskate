@@ -1,42 +1,19 @@
-# 環境変数リファレンス
+# 実行時設定
 
-本ドキュメントは、reconciler、Web コンソール、`cheapskate-cli` が読む環境変数を規定する。
+各実行ファイルで使用する環境変数を次の表に示す。
 
-## Reconciler
+| 変数 | 必須 | 既定値 | 用途 |
+| --- | --- | --- | --- |
+| `STATE_TABLE_NAME` | reconciler と Web コンソール | なし | DynamoDB table 名 |
+| `DEFAULT_TIMEZONE` | いいえ | `UTC` | 全 schedule と Web の日時に適用する IANA time zone |
+| `NOTIFICATION_TOPIC_ARN` | いいえ | 空 | 成功したアクションの通知先 |
+| `METRICS_ENABLED` | いいえ | `false` | `true` の場合にカスタムメトリクスを出力する |
+| `METRICS_NAMESPACE` | いいえ | `cheapskate` | カスタムメトリクスの namespace |
+| `PORT` | Web console image だけ | `8000` | Lambda Web Adapter と接続する HTTP listen port |
+| `BASE_PATH` | Web コンソールだけ | 空 | URL path prefix |
 
-読む環境変数を、以下に示す。これ以外の環境変数は読まない。
+reconciler と Web コンソールは、起動時に Go の time zone database で `DEFAULT_TIMEZONE` を検証する。不正な値では起動に失敗する。CLI も同じ変数を読み取り、未設定時は UTC を使用する。
 
-| 変数 | 必須 | 意味 |
-| --- | --- | --- |
-| `STATE_TABLE_NAME` | はい | DynamoDB テーブル名 |
-| `NOTIFICATION_TOPIC_ARN` | いいえ | SNS トピック ARN。空または未設定で通知を無効にする |
-| `DEFAULT_TIMEZONE` | いいえ | cron 評価に使う IANA タイムゾーン(既定 `UTC`) |
-| `STATUS_RETENTION_DAYS` | いいえ | Status の最後の更新から DynamoDB TTL による削除までの日数(既定 `30`)。正の整数で指定する |
-| `METRICS_ENABLED` | いいえ | CloudWatch カスタムメトリクスを発行するか(既定 `false`)。真偽値(`true`/`false`、`1`/`0`) |
-| `METRICS_NAMESPACE` | いいえ | CloudWatch メトリクスの名前空間(既定 `cheapskate`) |
+CLI の table 名は `-table` で指定できる。省略した場合は `CHEAPSKATE_TABLE`、次に `STATE_TABLE_NAME` を参照する。
 
-`STATUS_RETENTION_DAYS` または `METRICS_ENABLED` が解釈できない場合、既定値へ倒さず起動を失敗させる。`METRICS_NAMESPACE` は未設定でも空文字列でも既定の `cheapskate` となるため、メトリクスの無効化には `METRICS_ENABLED` を用いる。
-
-メトリクスを無効にすると、失敗件数とアクション件数の推移が観測できなくなる。リソース単位・グループ単位の失敗は Lambda 組み込みの `Errors` には現れないため、SNS または Status／ログの監視を別途用意する。無効時は、コールドスタートごとに `metrics-disabled` のログを 1 行出力する。
-
-## Web コンソール
-
-読む環境変数を、以下に示す。
-
-| 変数 | 必須 | 意味 |
-| --- | --- | --- |
-| `STATE_TABLE_NAME` | はい | DynamoDB テーブル名(`CHEAPSKATE_TABLE` でも可) |
-| `DEFAULT_TIMEZONE` | いいえ | cron 表示に使う IANA タイムゾーン(既定はサーバーのローカル時刻) |
-| `BASE_PATH` | いいえ | API Gateway のステージ名を含むベースパス(例 `/console`)。未設定ならルート直下 |
-| `PORT` | いいえ | 待ち受けポート(`127.0.0.1` に固定)。未設定なら `-addr` フラグの値(既定 `127.0.0.1:8080`) |
-
-> [!NOTE]
-> `PORT` はコンテナイメージ側で設定済みであり、Lambda へのデプロイ時に指定する対象ではない。
-
-## cheapskate-cli
-
-読む環境変数を、以下に示す。
-
-| 変数 | 必須 | 意味 |
-| --- | --- | --- |
-| `CHEAPSKATE_TABLE` | いいえ | DynamoDB テーブル名(`-table` フラグでも指定可) |
+`METRICS_ENABLED` を解釈できない場合は reconciler の起動に失敗する。空の `METRICS_NAMESPACE` には `cheapskate` を使用する。

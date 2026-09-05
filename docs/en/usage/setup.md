@@ -1,404 +1,76 @@
-# Hosting in an AWS account
+# Setup
 
-No IaC template is distributed. This document states the full specification of every AWS resource to create. The tool used (Terraform, CDK, CloudFormation, the Management Console, the CLI) and the naming are free choices. The examples use the AWS CLI, with account `123456789012` and region `ap-northeast-1` as placeholders.
+## 1. Create the DynamoDB table
 
-The resources to create are as follows.
-
-| Section | Resource | Required |
-|---|---|---|
-| §1 | Container images (ECR) | Required |
-| §2 | DynamoDB state table | Required |
-| §3 | SNS topic and monitoring | Optional |
-| §4 | Lambda execution role | Required |
-| §5 | Reconciler Lambda function | Required |
-| §6 | Periodic reconcile trigger | Required |
-| §7 | EventBridge rule (RDS auto-start) | Required |
-| §9 | Web console | Optional |
-
-## 1. Placing the container images in ECR
-
-The reconciler and the optional web console are separate images, each carrying one binary. Lambda can pull from ECR only, so whichever route is taken below, the image ends up in ECR.
+Create a table with String partition key `pk` and String sort key `sk`. Use on-demand or provisioned capacity as appropriate. Do not enable TTL and do not create secondary indexes.
 
 ```console
-aws ecr create-repository --repository-name cheapskate-reconciler   # first time only
-aws ecr create-repository --repository-name cheapskate-webconsole   # first time only (if §9 is used)
-```
-
-### Copying a released image
-
-Every release publishes both images to GHCR for `linux/amd64` and `linux/arm64`. `--platform` picks the single architecture the function runs on, so what lands in ECR is a single-architecture image.
-
-```console
-aws ecr get-login-password | docker login --username AWS --password-stdin 123456789012.dkr.ecr.ap-northeast-1.amazonaws.com
-docker pull --platform linux/arm64 ghcr.io/moepig/cheapskate-reconciler:v0.1.0
-docker tag ghcr.io/moepig/cheapskate-reconciler:v0.1.0 123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/cheapskate-reconciler:v0.1.0
-docker push 123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/cheapskate-reconciler:v0.1.0
-```
-
-### Building from source
-
-`make push` goes from building both images to pushing them to ECR.
-
-```console
-make push \
-  ECR_REPO_RECONCILER=123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/cheapskate-reconciler \
-  ECR_REPO_WEBCONSOLE=123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/cheapskate-webconsole \
-  TAG=v0.1.0
-```
-
-Without the web console, `make push-reconciler ECR_REPO_RECONCILER=... TAG=v0.1.0` is enough. Do not deploy `latest`: use a version tag, or the digest returned by ECR where reproducibility matters. `latest` remains a moving tag for trial and discovery.
-
-The default platform is `linux/arm64`. For x86, use `make push PLATFORM=linux/amd64 ...` and set the Lambda architecture to `x86_64`.
-
-## 2. DynamoDB state table
-
-What the table is required to provide is given below.
-
-| Item | Value |
-|---|---|
-| Partition key | `pk` (String) |
-| Sort key | `sk` (String) |
-| GSI / LSI | none |
-| TTL | enabled on the `expires_at` attribute |
-| Billing mode | any (on-demand recommended) |
-
-```console
-aws dynamodb create-table --table-name cheapskate-state \
+aws dynamodb create-table \
+  --table-name cheapskate \
+  --billing-mode PAY_PER_REQUEST \
   --attribute-definitions AttributeName=pk,AttributeType=S AttributeName=sk,AttributeType=S \
-  --key-schema AttributeName=pk,KeyType=HASH AttributeName=sk,KeyType=RANGE \
-  --billing-mode PAY_PER_REQUEST
-aws dynamodb update-time-to-live --table-name cheapskate-state \
-  --time-to-live-specification "Enabled=true,AttributeName=expires_at"
+  --key-schema AttributeName=pk,KeyType=HASH AttributeName=sk,KeyType=RANGE
 ```
 
-This composite key is the breaking v2 storage format. There is no reader or migration for the old table with only `pk`; do not point the function at one. Create a new empty table and enter the group configuration again.
+## 2. Deploy the reconciler
 
-## 3. SNS topic and monitoring (optional)
+Deploy the reconciler container image as a Lambda function. Set `STATE_TABLE_NAME` and optionally the other variables from [Configuration](config.md). Choose a timeout after testing a full cycle with the maximum expected tagged-resource count; Lambda permits at most 900 seconds.
 
-### SNS topic
+Create one EventBridge Scheduler or EventBridge rule that invokes it every five minutes. Any payload is acceptable because every invocation performs a full reconcile.
 
-Where notifications go when an action is performed and when one fails. The only API the function calls is `sns:Publish`. Omitting the topic and the `NOTIFICATION_TOPIC_ARN` environment variable disables notifications.
-
-```console
-aws sns create-topic --name cheapskate-notifications
-aws sns subscribe --topic-arn arn:aws:sns:ap-northeast-1:123456789012:cheapskate-notifications \
-  --protocol email --notification-endpoint ops@example.com
-```
-
-There are three kinds of notification. The subject is `[cheapskate] <kind>: <group name>/<resource ID>`, and the body is a single JSON object. The kinds and what prompts them are given below.
-
-| Kind | Sent when |
-| --- | --- |
-| `start` / `stop` | A resource was started or stopped |
-| `error` | A failure was recorded. It is not resent while the same error persists |
-| `recovered` | A recorded error cleared |
-
-The body carries the time of the reported action, error, or recovery in the RFC3339 `at` field. Each notification gets at most two Publish attempts and is abandoned if both fail. Notification failure does not stop later AWS actions.
-
-### Metrics
-
-When `METRICS_ENABLED=true` is explicitly set, the reconciler emits four metrics every cycle. They are disabled by default. The namespace is `METRICS_NAMESPACE` (default `cheapskate`), there are no dimensions, and the unit is Count. They are produced through CloudWatch Logs rather than `PutMetricData`, so they need no extra IAM permission. The metrics emitted are given below.
-
-| Metric | Meaning |
-| --- | --- |
-| `ReconciledResources` | Unique resources entering their owning group's processing path in the cycle |
-| `ReconcileActions` | Starts and stops performed |
-| `ReconcileErrors` | Per-resource and per-group failures |
-| `ReconcileAborted` | 1 when the cycle never got going, 0 normally |
-
-These four are billed as custom metrics (a little over a dollar a month in total). Set `METRICS_ENABLED=true` only where they are needed.
-
-### An alarm for detecting failures
-
-Lambda `Errors` catches only a cycle-wide abort such as a malformed payload or an initial read failure. Per-resource failures are reported in the successful Lambda response's `errors`, status, logs, and SNS; with custom metrics enabled they also appear in `ReconcileErrors`. For concrete alarms, see the failure detection section in [troubleshooting.md](troubleshooting.md).
-
-> [!WARNING]
-> With none of SNS, status/log monitoring, or an enabled `ReconcileErrors` alarm, per-resource failures are not detected proactively. Configure at least one.
-
-## 4. Lambda execution role
-
-The trust policy is `lambda.amazonaws.com`. The policy to attach is as follows, and no API beyond it is called.
+The reconciler DynamoDB policy needs only a strongly consistent Query restricted to the `CONFIG` partition:
 
 ```json
 {
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Sid": "Logs",
-      "Effect": "Allow",
-      "Action": [
-        "logs:CreateLogGroup",
-        "logs:CreateLogStream",
-        "logs:PutLogEvents"
-      ],
-      "Resource": "arn:aws:logs:ap-northeast-1:123456789012:log-group:/aws/lambda/*"
-    },
-    {
-      "Sid": "StateRead",
-      "Effect": "Allow",
-      "Action": ["dynamodb:Query", "dynamodb:BatchGetItem"],
-      "Resource": "arn:aws:dynamodb:ap-northeast-1:123456789012:table/cheapskate-state",
-      "Condition": {
-        "ForAllValues:StringLike": {"dynamodb:LeadingKeys": ["CONFIG", "STATUS#*"]}
-      }
-    },
-    {
-      "Sid": "StateWriteStatusOnly",
-      "Effect": "Allow",
-      "Action": ["dynamodb:UpdateItem"],
-      "Resource": "arn:aws:dynamodb:ap-northeast-1:123456789012:table/cheapskate-state",
-      "Condition": {
-        "ForAllValues:StringLike": {"dynamodb:LeadingKeys": ["STATUS#*", "LOCK"]}
-      }
-    },
-    {
-      "Sid": "StateReleaseLeaseOnly",
-      "Effect": "Allow",
-      "Action": ["dynamodb:DeleteItem"],
-      "Resource": "arn:aws:dynamodb:ap-northeast-1:123456789012:table/cheapskate-state",
-      "Condition": {
-        "ForAllValues:StringEquals": {"dynamodb:LeadingKeys": ["LOCK"]}
-      }
-    },
-    {
-      "Sid": "TagDiscovery",
-      "Effect": "Allow",
-      "Action": ["tag:GetResources"],
-      "Resource": "*"
-    },
-    {
-      "Sid": "RdsRead",
-      "Effect": "Allow",
-      "Action": ["rds:DescribeDBInstances", "rds:DescribeDBClusters"],
-      "Resource": "*"
-    },
-    {
-      "Sid": "EcsRead",
-      "Effect": "Allow",
-      "Action": ["ecs:DescribeServices"],
-      "Resource": "*"
-    },
-    {
-      "Sid": "Ec2Read",
-      "Effect": "Allow",
-      "Action": ["ec2:DescribeInstances"],
-      "Resource": "*"
-    },
-    {
-      "Sid": "Autoscaling",
-      "Effect": "Allow",
-      "Action": [
-        "application-autoscaling:DescribeScalableTargets",
-        "application-autoscaling:RegisterScalableTarget"
-      ],
-      "Resource": "*"
-    },
-    {
-      "Sid": "Write",
-      "Effect": "Allow",
-      "Action": [
-        "rds:StopDBInstance",
-        "rds:StartDBInstance",
-        "rds:StopDBCluster",
-        "rds:StartDBCluster",
-        "ecs:UpdateService",
-        "ec2:StartInstances",
-        "ec2:StopInstances"
-      ],
-      "Resource": "*"
-    },
-    {
-      "Sid": "Notify",
-      "Effect": "Allow",
-      "Action": ["sns:Publish"],
-      "Resource": "arn:aws:sns:ap-northeast-1:123456789012:cheapskate-notifications"
+  "Effect": "Allow",
+  "Action": "dynamodb:Query",
+  "Resource": "arn:aws:dynamodb:REGION:ACCOUNT:table/TABLE",
+  "Condition": {
+    "ForAllValues:StringEquals": {
+      "dynamodb:LeadingKeys": ["CONFIG"]
     }
-  ]
-}
-```
-
-Applying this policy to the role is shown below.
-
-```console
-aws iam create-role --role-name cheapskate-reconciler \
-  --assume-role-policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"lambda.amazonaws.com"},"Action":"sts:AssumeRole"}]}'
-aws iam put-role-policy --role-name cheapskate-reconciler \
-  --policy-name cheapskate --policy-document file://policy.json
-```
-
-What may be removed is the Actions for the resource types not managed, and `Notify` when no SNS topic is used.
-
-### Why the DynamoDB permissions are split
-
-The reconciler updates only `STATUS#*` and the `LOCK` used to prevent concurrent runs. `dynamodb:LeadingKeys` confines `UpdateItem` to those two kinds and `DeleteItem` to `LOCK`; no `PutItem` is granted. Normal reads are limited to `CONFIG` and `STATUS#*`. Only `doctor` uses a full-table `Scan`.
-
-Removing the conditions and merging permissions works, but loses the guarantee that the function cannot rewrite group configuration.
-
-### Why Resource is a wildcard
-
-`tag:GetResources`, the `Describe*` calls, and the Application Auto Scaling APIs all lack support for resource-level restrictions.
-
-### Narrowing what may be stopped and started
-
-Add the following condition to the `Write` statement and apply the same tag to the managed resources. The tag key and value are arbitrary.
-
-```json
-"Condition": {"StringEquals": {"aws:ResourceTag/cheapskate:managed": "true"}}
-```
-
-Making the value an array turns it into an OR. An OR across several tags is expressed by duplicating the statement. Several keys within one `Condition` are ANDed.
-
-## 5. Reconciler Lambda function
-
-What the function is required to be configured with is given below.
-
-| Setting | Value |
-| --- | --- |
-| Package type | `Image` (the URI from §1) |
-| Architecture | `arm64` (or `x86_64` — match the image's platform) |
-| Memory / timeout | 256 MB / 120 seconds |
-| Reserved concurrency | 1 (reduces the cost of duplicate invocations; a DynamoDB lease also enforces exclusion) |
-
-The environment variables to set on the function, with their defaults, are listed in [config.md](config.md).
-
-```console
-aws lambda create-function --function-name cheapskate-reconciler \
-  --package-type Image \
-  --code ImageUri=123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/cheapskate-reconciler:v0.1.0 \
-  --architectures arm64 --memory-size 256 --timeout 120 \
-  --role arn:aws:iam::123456789012:role/cheapskate-reconciler \
-  --environment "Variables={STATE_TABLE_NAME=cheapskate-state,NOTIFICATION_TOPIC_ARN=arn:aws:sns:ap-northeast-1:123456789012:cheapskate-notifications,DEFAULT_TIMEZONE=Asia/Tokyo}"
-aws lambda put-function-concurrency --function-name cheapskate-reconciler \
-  --reserved-concurrent-executions 1
-```
-
-> [!NOTE]
-> Pulling from ECR in the same account needs no repository policy. The principal creating the function does, however, need `ecr:BatchGetImage` and `ecr:GetDownloadUrlForLayer`.
-
-Creating the log group in advance and setting a retention period is recommended; the Lambda default is to keep logs forever.
-
-```console
-aws logs create-log-group --log-group-name /aws/lambda/cheapskate-reconciler
-aws logs put-retention-policy --log-group-name /aws/lambda/cheapskate-reconciler --retention-in-days 30
-```
-
-## 6. Periodic reconcile trigger
-
-Invoke the function every N minutes with the payload `{}` (5 minutes recommended). Using EventBridge Scheduler, the settings are given below.
-
-| Item | Value |
-| --- | --- |
-| Execution role trust policy | `scheduler.amazonaws.com` |
-| Execution role permissions | `lambda:InvokeFunction` on the function ARN (and on `<arn>:*` when a qualifier is used) |
-| Schedule expression | `rate(5 minutes)` |
-| `FlexibleTimeWindow` | `OFF` |
-| Target | The function, with `Input: {}` |
-
-As a guard against the confused deputy problem, adding `"Condition": {"StringEquals": {"aws:SourceAccount": "123456789012"}}` to the trust policy is recommended.
-
-```console
-aws scheduler create-schedule --name cheapskate-reconcile \
-  --schedule-expression "rate(5 minutes)" \
-  --flexible-time-window Mode=OFF \
-  --target '{"Arn":"arn:aws:lambda:ap-northeast-1:123456789012:function:cheapskate-reconciler","RoleArn":"arn:aws:iam::123456789012:role/cheapskate-scheduler","Input":"{}"}'
-```
-
-A `rate()` expression on an EventBridge rule works too. In that case, a Lambda resource-based policy as in §7 takes the place of the role.
-
-## 7. EventBridge rule (RDS auto-start)
-
-When AWS automatically starts a stopped RDS resource, this triggers a reconcile without waiting for the next periodic cycle. Only the start-completed events are subscribed to: at `RDS-EVENT-0153` / `RDS-EVENT-0154`, which announce that an auto-start has begun, the resource is still `starting` and the stop API cannot be called, so an invocation at that point would always come to nothing.
-
-```json
-{
-  "source": ["aws.rds"],
-  "detail-type": ["RDS DB Instance Event", "RDS DB Cluster Event"],
-  "detail": {
-    "EventID": ["RDS-EVENT-0088", "RDS-EVENT-0151"]
   }
 }
 ```
 
-The target is the function, and the event is passed through unmodified. Invocation is permitted through the Lambda's resource-based policy; no IAM role is used on the rule's target.
+Also grant `tag:GetResources`, the required read and change calls for enabled RDS, ECS, Application Auto Scaling, and EC2 adapters, CloudWatch Logs delivery, and optional `sns:Publish` to the configured topic. See [AWS resources and IAM](../architecture/aws_resources.md).
 
-```console
-aws events put-rule --name cheapskate-rds-events --event-pattern file://pattern.json
-aws events put-targets --rule cheapskate-rds-events \
-  --targets '[{"Id":"reconciler","Arn":"arn:aws:lambda:ap-northeast-1:123456789012:function:cheapskate-reconciler"}]'
-aws lambda add-permission --function-name cheapskate-reconciler \
-  --statement-id cheapskate-rds-events --action lambda:InvokeFunction \
-  --principal events.amazonaws.com \
-  --source-arn arn:aws:events:ap-northeast-1:123456789012:rule/cheapskate-rds-events
-```
+## 3. Install an administration interface
 
-## 8. Invocation payloads
+Run `cheapskate-cli` from a trusted operator environment, or deploy the optional web-console image behind Lambda Web Adapter and an authenticated API Gateway or equivalent ingress.
 
-Any JSON object triggers a full reconcile, the `{}` of the scheduled run and the RDS events alike. The content of the payload never changes the scope of the work.
-
-## 9. Web console (optional)
-
-A component for performing the same operations as `cheapskate-cli` from a browser. It can also be run locally instead of deployed.
-
-> [!WARNING]
-> Access control is the IP allowlist alone; there is no login. Everyone inside an allowed CIDR can operate it. If that is unacceptable, do not build this section.
-
-### Lambda function
-
-A separate function using the `cheapskate-webconsole` image pushed in §1. Being a dedicated image, it needs no `ImageConfig.EntryPoint` override. Memory and timeout are 128 MB / 29 seconds. The environment variables are listed in [config.md](config.md); set `BASE_PATH` to the stage name below as `/<stage>`. The Lambda Web Adapter that converts events into HTTP is bundled in the image and needs neither a layer nor any configuration.
-
-### Execution role
-
-Grant only `dynamodb:Scan/Query/BatchGetItem/GetItem/PutItem/UpdateItem/DeleteItem` on the state table, `tag:GetResources`, the read-only `Describe*` calls below for displaying the current state, and the same `Logs` as in §4. Grant no RDS/ECS/EC2 control permissions. Constrain writes with `dynamodb:LeadingKeys`: `CONFIG` for configuration writes, `STATUS#*` for deletion by `doctor --prune`, and `LOCK` for that command's lease acquisition and release.
+The CLI and web console require these DynamoDB actions on the table:
 
 ```json
 {
-  "Sid": "LiveStateRead",
   "Effect": "Allow",
   "Action": [
-    "rds:DescribeDBInstances",
-    "rds:DescribeDBClusters",
-    "ecs:DescribeServices",
-    "ec2:DescribeInstances"
+    "dynamodb:Query",
+    "dynamodb:GetItem",
+    "dynamodb:PutItem",
+    "dynamodb:UpdateItem",
+    "dynamodb:DeleteItem"
   ],
-  "Resource": "*"
-}
-```
-
-If the console should query AWS not at all, this statement is unnecessary. The current-state column then shows access-denied on each row and the rest of the page still works. The Actions for unmanaged resource types may likewise be removed individually.
-
-Without `tag:GetResources`, the group page shows a discovery error. The console itself still works.
-
-### API Gateway REST API (v1)
-
-Attach an `ANY` proxy integration to the Lambda on both the root resource and `{proxy+}`, and grant a Lambda permission to `apigateway.amazonaws.com`. Access control is the resource policy below.
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Principal": "*",
-      "Action": "execute-api:Invoke",
-      "Resource": "execute-api:/*"
-    },
-    {
-      "Effect": "Deny",
-      "Principal": "*",
-      "Action": "execute-api:Invoke",
-      "Resource": "execute-api:/*",
-      "Condition": {
-        "NotIpAddress": {
-          "aws:SourceIp": ["203.0.113.0/24", "198.51.100.7/32"]
-        }
-      }
+  "Resource": "arn:aws:dynamodb:REGION:ACCOUNT:table/TABLE",
+  "Condition": {
+    "ForAllValues:StringEquals": {
+      "dynamodb:LeadingKeys": ["CONFIG"]
     }
-  ]
+  }
 }
 ```
 
-Deploy to a stage of the same name as `BASE_PATH` (stage `console` with `BASE_PATH=/console`, for example). The URL is then `https://<api-id>.execute-api.<region>.amazonaws.com/console/`.
+For `show` and detail pages, also grant `tag:GetResources` and the supported services' read-only Describe calls. Do not manage group items directly through infrastructure as code; use the CLI or web console so full validation and conditional writes are applied.
 
-## 10. Entering the configuration
+## 4. Tag resources and create a group
 
-That completes the resources. At this point the state table is empty and the reconciler does nothing on every cycle. To decide what is managed, add a group configuration record and apply the selector tag to the AWS resources. For details, see the adding section in [operations.md](operations.md) and the selector tags in [resource_tag.md](resource_tag.md).
+Apply `cheapskate:group=<group>` to every resource, add the required ECS restoration tags where applicable, and create a schedule or override:
+
+```console
+cheapskate-cli -table cheapskate schedule --group dev \
+  -start '0 8 * * 1-5' -stop '0 20 * * 1-5'
+```
+
+Invoke the reconciler once, inspect logs and the live observations in `show`, and then enable the five-minute schedule.
+
+cheapskate itself does not create CloudWatch log groups, alarms, dashboards, SNS topics, or notification subscriptions.

@@ -1,59 +1,27 @@
-# Configuration through AWS resource tags
+# Resource tags
 
-This document specifies the tags applied to the managed AWS resources themselves. There are two kinds: selector tags, which decide what is managed, and parameter tags, which supply operating parameters. Their roles are given below.
+## Group membership
 
-| Kind | Key | Role |
-|---|---|---|
-| Selector tag | Chosen freely on the group side | A resource carrying it becomes managed by that group |
-| Parameter tag | Fixed, starting with `cheapskate/` | Supplies an operating parameter. Everything works on defaults when unset |
+Attach exactly one fixed membership tag to each managed resource:
 
-For both, the only operation on the resource side is adding or removing a tag; nothing on the DynamoDB side is involved. The change takes effect from the next reconcile cycle.
-
-## Selector tags
-
-A group's selector is a tag key/value plus a set of resource types, and a resource matching both becomes managed.
-
-```console
-cheapskate-cli set-selector --group dev --tag-key cheapskate:group --tag-value dev --types rds-cluster,ecs-service
+```text
+cheapskate:group=<group-name>
 ```
 
-The tag to apply on the resource side for that configuration is `cheapskate:group=dev`. The key and value are arbitrary and need not come from `cheapskate`; an existing `Env=dev` and the like will do.
+The reconciler calls Resource Groups Tagging API `GetResources` with `cheapskate:group` and no value filter, requests up to 100 resources per page, and follows every page. Membership is determined only by the tag value returned for each ARN.
 
-## Parameter tags
+## ECS restoration settings
 
-The tag keys recognized and their effects are given below.
+ECS has no stopped state, so cheapskate scales a service to zero and later restores values from tags on that service.
 
-| Tag key | Applies to | Effect |
+| Tag | Required | Meaning |
 | --- | --- | --- |
-| `cheapskate/desired-count` | ecs-service | The desiredCount set at start. Unset means 1 |
-| `cheapskate/scaling-min` | ecs-service | With Application Auto Scaling in use, the minimum capacity set at start. Unset means the same as desiredCount |
-| `cheapskate/scaling-max` | ecs-service | With Application Auto Scaling in use, the maximum capacity set at start. Unset means the same as desiredCount |
+| `cheapskate/desired-count` | no; defaults to `1` | Desired task count after Start; positive int32 |
+| `cheapskate/scaling-min` | no; defaults to desired count | Restored minimum capacity; non-negative int32 |
+| `cheapskate/scaling-max` | no; defaults to desired count | Restored maximum capacity; non-negative int32 |
 
-These are tags on the resource rather than attributes on the group because one selector can match several ECS services.
+For a scalable target, all three values must satisfy `0 <= min <= desired <= max`. Stop changes only its bounds to `0/0`. Start restores min/max first and then desired count.
 
-### Rules for the values
+Without a scalable target, Stop sets desired count to zero, and Start restores the configured or default desired count. All three tag values are validated even when no scalable target exists.
 
-The rules a value must satisfy are given below.
-
-| Item | Rule |
-|---|---|
-| Type | A non-negative integer. An empty string counts as unset |
-| `cheapskate/desired-count` | Must be greater than 0 |
-| Relationship between the three | `scaling-min <= desired-count <= scaling-max` must hold |
-
-A value breaking the rules becomes an error at start, and no AWS API is called. The error is recorded in `last_error` on `status#`. Allowing a desiredCount outside the range would let Auto Scaling pull the count straight back to the bound right after it was set, so the requested count would never hold.
-
-The current values can be read from `resources[].config` in `cheapskate-cli show --group <name>` and on the group page of the web console.
-
-### When to apply the tags
-
-> [!IMPORTANT]
-> Apply the tags before stopping the resource for the first time. Starting an ECS service restores from the tag values above, not from anything saved at stop. Stopping it with the tags unset makes the desiredCount at start 1 (with min/max the same), and the original values cannot be recovered.
-
-```console
-aws ecs tag-resource --resource-arn <service ARN> --tags \
-  key=cheapskate:group,value=dev \
-  key=cheapskate/desired-count,value=2 \
-  key=cheapskate/scaling-min,value=1 \
-  key=cheapskate/scaling-max,value=4
-```
+The complete tag set is validated before any modifying ECS or Application Auto Scaling call. A service using any scheduling strategy other than `REPLICA` is rejected.

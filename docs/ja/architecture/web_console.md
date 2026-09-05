@@ -1,52 +1,7 @@
-# Web コンソールのアーキテクチャ
+# Web コンソール
 
-Web コンソールは、`cheapskate-cli` と同じ操作をブラウザから行うためのフロントエンドである。デプロイは任意であり、これを構築しなくても reconcile ループは完結する。
+任意で導入できる Web コンソールは、グループ一覧、グループ詳細、schedule form、および override form を提供する。グループ詳細には、固定の所属タグ、リソース設定タグ、および読み取り専用の Describe で得た現在の状態を表示する。
 
-## 技術スタック
+server は `DEFAULT_TIMEZONE` を override 失効時刻の表示と解釈に使用する。未設定時は UTC であり、不正な値では起動に失敗する。
 
-Go の `net/http` と `html/template` のみで構成する。テンプレートは `embed` でバイナリに同梱する。JavaScript・外部アセット・フロントエンドビルドを持たず、全ページがサーバーレンダリングの HTML とフォーム POST である。
-
-実行形態によらず HTTP サーバ 1 つであり、Lambda 固有のコードを持たない。実行環境の判別も分岐も無く、ローカルで起動するサーバと Lambda 上のサーバが同一である。
-
-公開するルートを、以下に示す。
-
-| ルート | 用途 |
-|---|---|
-| `GET /` | 一覧ページ |
-| `GET /group` | グループページ |
-| `GET /doctor` | diagnostics ページ |
-| `POST /op` | 設定操作 |
-| `POST /doctor` | 孤立レコードの削除 |
-
-## ホスティング
-
-reconciler とは別のコンテナイメージを、別の Lambda 関数としてデプロイする。呼び出しイベントと HTTP の変換は、イメージに同梱した Lambda Web Adapter が行う。本体は Lambda のライブラリをリンクせず、待ち受けポートと接続元 IP の取得の 2 点でのみアダプタを前提とする。詳細は、[on_lambda.md](on_lambda.md) のアダプタの外形的な振る舞いと webconsole への組み込みを参照。
-
-前段は API Gateway REST API(v1)である。IP 制限に必要なリソースポリシーが HTTP API(v2)に無いためである。環境変数 `BASE_PATH` はブラウザから見えるパスプレフィックス(API Gateway のステージ名)であり、リンクとリダイレクトの生成に使う。プロキシイベントのパスにはステージが含まれない。
-
-## アクセス制御
-
-認証は行わず、アクセス制御は前段の IP 許可リストのみに依る。各項目の扱いを、以下に示す。
-
-| 項目 | 内容 |
-|---|---|
-| 認証 | 無し。アクセス制御は API Gateway リソースポリシーの IP 許可リストのみであり、許可 CIDR 内の全員が操作できる |
-| CSRF | `POST` で `Origin` / `Sec-Fetch-Site` ヘッダを検証し、same-origin 以外を拒否する |
-| CSP | `default-src 'none'`、`frame-ancestors 'none'` 等 |
-| 権限 | 実行ロールは state テーブルへの `dynamodb:Scan/Query/BatchGetItem/GetItem/PutItem/UpdateItem/DeleteItem`、リソース種別ごとの `Describe*`、`tag:GetResources` のみを持つ。Scan は diagnostics だけが使い、`LOCK` の更新と削除は `doctor --prune` の排他制御だけが使う |
-
-画面へ出すエラーは必ずログにも出力する。認証が無く、アクセス制御が IP 許可リストのみである以上、変更の履歴を後から辿れる先はログに限られるためである。詳細は、[logging.md](logging.md) の Web コンソールのイベント一覧を参照。
-
-## 画面
-
-各ページの内容と、検出を行うかどうかを、以下にまとめる。
-
-| ページ | 内容 | 検出 |
-|---|---|---|
-| 一覧 | 全グループを 1 行ずつ表示する(設定 + セレクタ + override + 直近のエラー) | 行わない。`CONFIG` の Query と対応する Status の BatchGetItem で描画する |
-| グループ | 設定 + override + 検出したリソース(種別/名前/直近のアクション/観測状態/遷移の開始時刻/直近のエラー/現在の状態)と、設定操作のフォーム | 行う |
-| diagnostics | `cheapskate-cli doctor` と同じ診断の表示と、同じ条件での孤立レコードの削除 | 行う |
-
-検出の失敗時も 500 を返さず、ページ内にエラーを表示する。
-
-孤立レコードの削除は、表示済みの画面に対してではなく、実行された時点でリースを取得し、診断をやり直してから行う。ページを開いてからの間に孤立しなくなったレコードを、古い画面を根拠に削除しないためである。reconcile がリースを保持している場合は、削除を開始せずエラーを表示する。
+変更 form は same-origin request を要求する。条件付き書き込みの競合には HTTP 409 を返す。security header によって content、frame、referrer、および form の送信先を制限する。

@@ -37,7 +37,7 @@ func TestTypeInfoDeclarations(t *testing.T) {
 		}
 	}
 
-	// KnownTypes は宣言から導出する (Selector.Types の正規化がソート順に依存する)
+	// KnownTypes は宣言から導出し、安定したソート順で返す
 	assert.Equal(t, len(typeInfos), len(KnownTypes))
 	assert.True(t, slices.IsSorted(KnownTypes), "KnownTypes must be sorted")
 	for _, typ := range KnownTypes {
@@ -119,6 +119,9 @@ func TestResourceConfigReadsDeclaredTagsOnly(t *testing.T) {
 	}, r.Config(), "宣言の順に、宣言されたタグだけを返す")
 
 	assert.Empty(t, Resource{Type: TypeEcsService}.Config(), "no scaling tags set")
+	assert.Equal(t, []ConfigValue{{Name: "desired_count", Label: "desired", Value: ""}},
+		Resource{Type: TypeEcsService, Tags: map[string]string{EcsDesiredCountTagKey: ""}}.Config(),
+		"an empty value must remain visible for troubleshooting")
 
 	// スケーリングタグが付与されている場合も、ecs-service 以外はこれを設定として扱わない
 	other := Resource{Type: TypeRdsInstance, Tags: r.Tags}

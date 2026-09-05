@@ -1,15 +1,10 @@
-// cheapskate-cli と web console が共有する設定操作を実装する
-// 操作対象は DynamoDB のアイテムと読み取り専用の tag:GetResources API に限る
-// RDS/ECS/EC2 のコントロール API は呼ばない
-//
-// 設定の変更規則そのものは持たない
-// 各モードへの遷移は model.GroupSpec のメソッドが実装し、本パッケージはその前後の読み書きを担う
-// 遷移側が結果を検証してから返すため、本層が model.ParseGroup に拒否される設定を保存することはない
 package groups
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"cheapskate/internal/app/port"
@@ -17,302 +12,204 @@ import (
 	"cheapskate/internal/state"
 )
 
-// 設定フロントエンドが state テーブルに求める範囲
-// *state.Store が満たすが、設定操作が受け取るのはこの範囲に限る
-//
-// UpdateStatus は含めない
-// status# アイテムを所有するのは reconciler であり、CLI と web console にとっては読み取り専用である
-// 型で限定することにより、設定操作から監査証跡を書き換える経路が存在しなくなる
 type Store interface {
-	ListGroups(ctx context.Context, now time.Time) ([]state.GroupRow, error)
-	GetGroupRow(ctx context.Context, name string, now time.Time) (state.GroupRow, error)
-	GetStatuses(ctx context.Context, resourceIDs []string) (map[string]state.StatusRecord, error)
+	ListGroups(ctx context.Context) ([]state.GroupRow, error)
 	GetGroup(ctx context.Context, name string) (*model.GroupSpec, error)
-	CreateGroup(ctx context.Context, spec model.GroupSpec) error
-	UpdateGroup(ctx context.Context, name string, patch state.GroupPatch) error
-	PutOverride(ctx context.Context, group string, o model.Override) error
+	CreateGroup(ctx context.Context, group model.GroupSpec) error
+	SetSchedule(ctx context.Context, name string, schedule model.ScheduleSpec) error
+	SetOverride(ctx context.Context, name string, override model.Override, expiresAt int64) error
+	ClearOverride(ctx context.Context, name string) error
 	DeleteGroup(ctx context.Context, name string) error
-	DeleteOverride(ctx context.Context, name string) error
-	DeleteGroupStatus(ctx context.Context, name string) error
 }
 
-// ターゲットグループ1件と、そのoverrideおよびグループ単位のstatus。
-// 設定、override、Status の復号エラーを個別に保持する。
-// 復号エラーがある場合も行自体は返し、一覧全体を失敗させない。
+var ErrInvalidConfig = errors.New("invalid group configuration")
+
+type Service struct {
+	store      Store
+	discoverer port.Discoverer
+	describers map[model.ResourceType]port.Describer
+	location   *time.Location
+}
+
+func New(store Store, discoverer port.Discoverer, describers map[model.ResourceType]port.Describer, location *time.Location) *Service {
+	return &Service{store: store, discoverer: discoverer, describers: describers, location: location}
+}
+
 type GroupRow struct {
-	Name        string
-	Group       model.GroupSpec
-	Override    *model.Override
-	Status      model.Status
-	ConfigErr   error
-	OverrideErr error
-	StatusErr   error
+	Name      string
+	Group     model.GroupSpec
+	ConfigErr error
 }
 
-// 登録済みの全グループを、override とグループ単位のステータスを解決した状態で返す
-// CONFIG パーティションの Query と、対応する status の BatchGetItem で取得する
-// override やステータスが存在し group# アイテムが存在しない名前は孤立データとみなし、結果に含めない
-func List(ctx context.Context, s Store, now time.Time) ([]GroupRow, error) {
-	stored, err := s.ListGroups(ctx, now)
+func (s *Service) List(ctx context.Context, now time.Time) ([]GroupRow, error) {
+	stored, err := s.store.ListGroups(ctx)
 	if err != nil {
 		return nil, err
 	}
 	rows := make([]GroupRow, 0, len(stored))
-	for _, gr := range stored {
-		if !gr.HasGroup {
-			continue
+	for _, row := range stored {
+		configErr := row.Err
+		if configErr == nil {
+			configErr = model.ValidateGroup(row.Group, now, s.location)
 		}
-		rows = append(rows, toGroupRow(gr))
+		rows = append(rows, GroupRow{Name: row.Name, Group: row.Group, ConfigErr: configErr})
 	}
 	return rows, nil
 }
 
-func toGroupRow(gr state.GroupRow) GroupRow {
-	return GroupRow{
-		Name: gr.Name, Group: gr.Group, Override: gr.Override, Status: gr.Status,
-		ConfigErr: gr.GroupErr, OverrideErr: gr.OverrideErr, StatusErr: gr.StatusErr,
-	}
-}
-
-// グループのセレクタに現在一致するリソース 1 件と、そのステータス
-// 種別に対応する port.Describer が結線されている場合は、現在の状態のスナップショットを併せ持つ
-// 種別に対応する Describer が存在しない場合、および Describe の呼び出しが失敗した場合、Live は nil となる (LiveErr を参照)
-// いずれの場合も状態を不明として扱い、行全体のエラーとはしない
 type ResourceRow struct {
-	Resource  model.Resource
-	Status    model.Status
-	StatusErr error
-	Live      *model.Observation
-	LiveErr   error
+	Resource model.Resource
+	Live     *model.Observation
+	LiveErr  error
 }
 
-// グループの詳細であり、設定、override、グループ単位のステータスを含む
-// セレクタが設定されている場合は、現在一致する全リソースを動的に探索し、リソース単位のステータスと結合する
-// Discover の失敗はエラーではなくデータとして DiscoverErr へ格納する
-// これにより tag:GetResources の権限不足は、ページやコマンド全体の失敗とならない
 type GroupDetail struct {
-	Name        string
-	Group       model.GroupSpec
-	Override    *model.Override
-	Status      model.Status
-	ConfigErr   error
-	OverrideErr error
-	StatusErr   error
-	Resources   []ResourceRow
-	DiscoverErr error
+	Group     model.GroupSpec
+	Resources []ResourceRow
 }
 
-// グループ 1 件の詳細を解決する
-// セレクタが存在する場合はメンバーを動的に探索し、describers[member.Type] が存在するメンバーについて現在の状態を問い合わせる
-// マップが nil または空の場合、各行の Live は nil のままとなる
-func GetDetail(ctx context.Context, s Store, d port.Discoverer, describers map[model.ResourceType]port.Describer, group string, now time.Time) (GroupDetail, error) {
-	if err := model.ValidGroupName(group); err != nil {
-		return GroupDetail{}, err
-	}
-	row, err := s.GetGroupRow(ctx, group, now)
+func (s *Service) Show(ctx context.Context, name string, now time.Time) (GroupDetail, error) {
+	group, err := s.validGroup(ctx, name, now)
 	if err != nil {
 		return GroupDetail{}, err
 	}
-	if !row.HasGroup {
-		return GroupDetail{}, fmt.Errorf("group %q is not registered", group)
+	resources, err := s.discoverer.Discover(ctx)
+	if err != nil {
+		return GroupDetail{}, fmt.Errorf("discover resources: %w", err)
 	}
-	detail := GroupDetail{
-		Name: row.Name, Group: row.Group, Override: row.Override, Status: row.Status,
-		ConfigErr: row.GroupErr, OverrideErr: row.OverrideErr, StatusErr: row.StatusErr,
-	}
-
-	cfg, perr := model.ParseGroup(row.Group)
-	if perr != nil || cfg.Selector.Empty() {
-		return detail, nil
-	}
-	resources, derr := d.Discover(ctx, cfg.Selector)
-	if derr != nil {
-		detail.DiscoverErr = derr
-		return detail, nil
-	}
-	ids := make([]string, 0, len(resources))
+	rows := make([]ResourceRow, 0)
 	for _, resource := range resources {
-		ids = append(ids, resource.ID())
-	}
-	statuses, err := s.GetStatuses(ctx, ids)
-	if err != nil {
-		return GroupDetail{}, err
-	}
-	rows := make([]ResourceRow, 0, len(resources))
-	for _, r := range resources {
-		record := statuses[r.ID()]
-		row := ResourceRow{Resource: r, Status: record.Status, StatusErr: record.Err}
-		if describer, ok := describers[r.Type]; ok {
-			if obs, err := describer.Describe(ctx, r.Ref); err != nil {
-				row.LiveErr = err
+		if resource.Tags[model.GroupTagKey] != name {
+			continue
+		}
+		row := ResourceRow{Resource: resource}
+		if describer, ok := s.describers[resource.Type]; ok {
+			observation, describeErr := describer.Describe(ctx, resource.Ref)
+			if describeErr != nil {
+				row.LiveErr = describeErr
 			} else {
-				row.Live = &obs
+				row.Live = &observation
 			}
 		}
 		rows = append(rows, row)
 	}
-	detail.Resources = rows
-	return detail, nil
+	sort.Slice(rows, func(i, j int) bool { return rows[i].Resource.ARN < rows[j].Resource.ARN })
+	return GroupDetail{Group: *group, Resources: rows}, nil
 }
 
-// sel をグループのセレクタとして書き込む
-// グループが存在しない場合は mode=disabled で作成する
-// 既存グループの Mode、Desired、cron 各種、Timezone は read-modify-write により保持し、変更はセレクタに限る
-func SetSelector(ctx context.Context, s Store, group string, sel model.Selector) (created bool, err error) {
-	if err := model.ValidGroupName(group); err != nil {
-		return false, err
+func (s *Service) Schedule(ctx context.Context, name string, schedule model.ScheduleSpec, now time.Time) (model.GroupSpec, error) {
+	if err := model.ValidGroupName(name); err != nil {
+		return model.GroupSpec{}, err
 	}
-	existing, err := s.GetGroup(ctx, group)
+	existing, err := s.store.GetGroup(ctx, name)
 	if err != nil {
-		return false, err
+		return model.GroupSpec{}, err
 	}
-	spec := model.NewGroupSpec(group)
+	next := model.GroupSpec{Name: name, StartCron: schedule.StartCron, StopCron: schedule.StopCron}
 	if existing != nil {
-		spec = *existing
+		next.Override = existing.Override
+		next.OverrideExpiresAt = existing.OverrideExpiresAt
 	}
-	next, err := spec.WithSelector(sel)
-	if err != nil {
-		return false, err
+	if err := model.ValidateGroupForWrite(next, now, s.location); err != nil {
+		return model.GroupSpec{}, err
 	}
 	if existing == nil {
-		if err := s.CreateGroup(ctx, next); err != nil {
-			return false, err
+		if err := s.store.CreateGroup(ctx, next); err != nil {
+			return model.GroupSpec{}, err
 		}
-		return true, nil
-	}
-	patch := state.GroupPatch{TagKey: new(next.TagKey), TagValue: new(next.TagValue), Types: new(next.Types)}
-	if err := s.UpdateGroup(ctx, group, patch); err != nil {
-		return false, err
-	}
-	return false, nil
-}
-
-// グループを削除する
-// 削除順は override、グループ単位のステータス、グループアイテム本体である
-// この順序では、途中で失敗してもグループアイテムが残り、再試行のためにグループへ到達できる
-// セレクタが一致していたリソースのステータスアイテムは残す
-// 削除には動的な Discover が必要であり、かつ孤立した監査記録は他の動作に影響しないためである
-// 手作業による削除手順は operations.md に記載がある
-//
-// 呼び出し側でグループ名を検証済みの場合も、本層のすべての入口が同じ検証を行う
-// 検証を行う関数と行わない関数が混在すると、検証済みという前提が呼び出し側の実装に依存する
-func RemoveGroup(ctx context.Context, s Store, group string) error {
-	if err := model.ValidGroupName(group); err != nil {
-		return err
-	}
-	if err := s.DeleteOverride(ctx, group); err != nil {
-		return err
-	}
-	if err := s.DeleteGroupStatus(ctx, group); err != nil {
-		return err
-	}
-	return s.DeleteGroup(ctx, group)
-}
-
-// 既存グループに対し、指定の desired state で mode=pinned を設定する
-func Pin(ctx context.Context, s Store, group string, desired model.DesiredState) error {
-	existing, err := requireGroup(ctx, s, group)
-	if err != nil {
-		return err
-	}
-	next, err := existing.Pin(desired)
-	if err != nil {
-		return err
-	}
-	return s.UpdateGroup(ctx, group, state.GroupPatch{Mode: new(next.Mode), Desired: new(next.Desired)})
-}
-
-// mode=pinned を解除し、書き込んだアイテムを返す
-func Unpin(ctx context.Context, s Store, group string) (model.GroupSpec, error) {
-	existing, err := requireGroup(ctx, s, group)
-	if err != nil {
-		return model.GroupSpec{}, err
-	}
-	next, err := existing.Unpin()
-	if err != nil {
-		return model.GroupSpec{}, err
-	}
-	if err := s.UpdateGroup(ctx, group, state.GroupPatch{Mode: new(next.Mode)}); err != nil {
+	} else if err := s.store.SetSchedule(ctx, name, schedule); err != nil {
 		return model.GroupSpec{}, err
 	}
 	return next, nil
 }
 
-// 既存グループに指定の cron で mode=schedule を設定し、書き込んだアイテムを返す
-func Schedule(ctx context.Context, s Store, group string, spec model.ScheduleSpec) (model.GroupSpec, error) {
-	existing, err := requireGroup(ctx, s, group)
+func (s *Service) Override(ctx context.Context, name string, override model.Override, duration time.Duration, now time.Time) (model.GroupSpec, error) {
+	if err := model.ValidGroupName(name); err != nil {
+		return model.GroupSpec{}, err
+	}
+	if err := override.Validate(); err != nil {
+		return model.GroupSpec{}, err
+	}
+	if duration < 0 {
+		return model.GroupSpec{}, fmt.Errorf("override duration must not be negative")
+	}
+	existing, err := s.store.GetGroup(ctx, name)
 	if err != nil {
 		return model.GroupSpec{}, err
 	}
-	next, err := existing.WithSchedule(spec)
-	if err != nil {
+	next := model.GroupSpec{Name: name, Override: override}
+	if existing != nil {
+		next = *existing
+		next.Override = override
+		next.OverrideExpiresAt = 0
+	}
+	if duration > 0 {
+		if existing == nil {
+			return model.GroupSpec{}, fmt.Errorf("%w: %s", state.ErrGroupNotFound, name)
+		}
+		next.OverrideExpiresAt = now.Add(duration).Unix()
+	}
+	if err := model.ValidateGroupForWrite(next, now, s.location); err != nil {
 		return model.GroupSpec{}, err
-	}
-	if err := s.UpdateGroup(ctx, group, state.GroupPatch{
-		Mode: new(next.Mode), Desired: new(next.Desired), StartCron: new(next.StartCron),
-		StopCron: new(next.StopCron), Timezone: new(next.Timezone),
-	}); err != nil {
-		return model.GroupSpec{}, err
-	}
-	return next, nil
-}
-
-// 他のグループ設定はそのままに mode=disabled を設定する
-func Disable(ctx context.Context, s Store, group string) error {
-	existing, err := requireGroup(ctx, s, group)
-	if err != nil {
-		return err
-	}
-	next := existing.Disabled()
-	return s.UpdateGroup(ctx, group, state.GroupPatch{Mode: new(next.Mode)})
-}
-
-// グループに期限付きの override を書き込み、その失効時刻を返す
-func SetOverride(ctx context.Context, s Store, group string, desired model.DesiredState, d time.Duration, now time.Time) (time.Time, error) {
-	if err := desired.Validate(); err != nil {
-		return time.Time{}, err
-	}
-	if d <= 0 {
-		return time.Time{}, fmt.Errorf("override duration must be positive")
-	}
-	existing, err := requireGroup(ctx, s, group)
-	if err != nil {
-		return time.Time{}, err
-	}
-	// disabled は override より優先度の高い停止である
-	// reconciler は override の評価前に disabled のグループをスキップするため、ここで受け付けても効果を持たない
-	if existing.EffectiveMode() == model.ModeDisabled {
-		return time.Time{}, fmt.Errorf("group %q is disabled; disabled overrides mode=schedule/pinned but is itself not overridable (schedule or pin it first)", group)
-	}
-	expiresAt := now.Add(d)
-	if err := s.PutOverride(ctx, group, model.Override{Desired: desired, ExpiresAt: expiresAt.Unix()}); err != nil {
-		return time.Time{}, err
-	}
-	return expiresAt, nil
-}
-
-// TTL の失効を待たずに override アイテムを削除する
-// RemoveGroup と同じ理由により、ここでも名前を検証する
-func ClearOverride(ctx context.Context, s Store, group string) error {
-	if err := model.ValidGroupName(group); err != nil {
-		return err
-	}
-	return s.DeleteOverride(ctx, group)
-}
-
-// 既存グループを取得して検証する
-// Pin/Schedule/Disable/SetOverride が、名前の誤りによりグループを新規作成してはならないためである
-// 初回利用時の作成を意図する SetSelector とは、この点で異なる
-func requireGroup(ctx context.Context, s Store, group string) (*model.GroupSpec, error) {
-	if err := model.ValidGroupName(group); err != nil {
-		return nil, err
-	}
-	existing, err := s.GetGroup(ctx, group)
-	if err != nil {
-		return nil, err
 	}
 	if existing == nil {
-		return nil, fmt.Errorf("group %q not found (create it with: cheapskate-cli set-selector --group %s ...)", group, group)
+		if err := s.store.CreateGroup(ctx, next); err != nil {
+			return model.GroupSpec{}, err
+		}
+	} else if err := s.store.SetOverride(ctx, name, override, next.OverrideExpiresAt); err != nil {
+		return model.GroupSpec{}, err
 	}
-	return existing, nil
+	return next, nil
+}
+
+func (s *Service) ClearOverride(ctx context.Context, name string, now time.Time) (model.GroupSpec, error) {
+	group, err := s.requireGroup(ctx, name)
+	if err != nil {
+		return model.GroupSpec{}, err
+	}
+	next := *group
+	next.Override = ""
+	next.OverrideExpiresAt = 0
+	if err := model.ValidateGroupForWrite(next, now, s.location); err != nil {
+		return model.GroupSpec{}, err
+	}
+	if err := s.store.ClearOverride(ctx, name); err != nil {
+		return model.GroupSpec{}, err
+	}
+	return next, nil
+}
+
+func (s *Service) Remove(ctx context.Context, name string) error {
+	if _, err := s.requireGroup(ctx, name); err != nil {
+		return err
+	}
+	return s.store.DeleteGroup(ctx, name)
+}
+
+func (s *Service) validGroup(ctx context.Context, name string, now time.Time) (*model.GroupSpec, error) {
+	group, err := s.requireGroup(ctx, name)
+	if err != nil {
+		if errors.Is(err, state.ErrInvalidGroup) {
+			return nil, fmt.Errorf("%w: %v", ErrInvalidConfig, err)
+		}
+		return nil, err
+	}
+	if err := model.ValidateGroup(*group, now, s.location); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalidConfig, err)
+	}
+	return group, nil
+}
+
+func (s *Service) requireGroup(ctx context.Context, name string) (*model.GroupSpec, error) {
+	if err := model.ValidGroupName(name); err != nil {
+		return nil, err
+	}
+	group, err := s.store.GetGroup(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	if group == nil {
+		return nil, fmt.Errorf("%w: %s", state.ErrGroupNotFound, name)
+	}
+	return group, nil
 }

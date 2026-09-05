@@ -9,8 +9,8 @@
 //
 // ただし、差し替えないことと、呼び出し範囲を限定しないことは独立している
 // state への参照は、利用側の各パッケージが必要な範囲のみのインターフェースとして宣言する
-// (reconcile.Store、groups.Store、doctor.Store)
-// これにより、reconciler は設定アイテムを書けず、設定フロントエンドはステータスを書けない
+// (reconcile.Store、groups.Store)
+// これにより、各アプリケーションは必要な操作だけを呼び出せる
 // Target から Describer を絞り込む理由と同じである (下の Describer を参照)
 package port
 
@@ -20,10 +20,8 @@ import (
 	"cheapskate/internal/core/model"
 )
 
-// セレクタに現在マッチするリソースをすべて見つける
-// Resource Groups Tagging API を用いて internal/aws/tagging が実装する
 type Discoverer interface {
-	Discover(ctx context.Context, sel model.Selector) ([]model.Resource, error)
+	Discover(ctx context.Context) (map[string]model.Resource, error)
 }
 
 // リソース種別 1 つ分の describe/stop/start 操作を抽象化する
@@ -31,7 +29,7 @@ type Discoverer interface {
 type Target interface {
 	Type() model.ResourceType
 	Describe(ctx context.Context, ref string) (model.Observation, error)
-	Stop(ctx context.Context, ref string) error
+	Stop(ctx context.Context, res model.Resource) error
 	// res を再び起動する
 	// res.Tags は、AWS リソース自身のタグから読んだ種別固有の起動設定を保持する
 	// cheapskate は停止時に状態を記録しないため、復元元となる保存済みの状態は存在しない

@@ -33,17 +33,15 @@ func main() {
 
 	table := os.Getenv("STATE_TABLE_NAME")
 	if table == "" {
-		table = os.Getenv("CHEAPSKATE_TABLE")
+		fatal(logger, "STATE_TABLE_NAME is required")
 	}
-	if table == "" {
-		fatal(logger, "STATE_TABLE_NAME (or CHEAPSKATE_TABLE) is required")
+	timezone := os.Getenv("DEFAULT_TIMEZONE")
+	if timezone == "" {
+		timezone = "UTC"
 	}
-	loc := time.Local
-	if tz := os.Getenv("DEFAULT_TIMEZONE"); tz != "" {
-		var err error
-		if loc, err = time.LoadLocation(tz); err != nil {
-			fatal(logger, "invalid DEFAULT_TIMEZONE", "timezone", tz, "error", err.Error())
-		}
+	loc, err := time.LoadLocation(timezone)
+	if err != nil {
+		fatal(logger, "invalid DEFAULT_TIMEZONE", "timezone", timezone, "error", err.Error())
 	}
 
 	cfg, err := config.LoadDefaultConfig(context.Background())

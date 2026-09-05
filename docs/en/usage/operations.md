@@ -1,239 +1,49 @@
-# Operating the configuration records
+# Operations
 
-cheapskate's configuration is nothing but the records held in the DynamoDB state table. This document covers how to add, change, inspect, and delete those records, and what can be configured in them.
+`cheapskate-cli` and the web console use the same validation and conditional-write service.
 
-Drawing the ways of writing, the records themselves, and their relationship with the reconciler gives the following diagram.
+## CLI
 
-```mermaid
-flowchart LR
-    cli["cheapskate-cli"]
-    web["web console"]
-    iac["IaC"]
-    raw["aws dynamodb"]
-
-    subgraph tbl["state table"]
-        grp["CONFIG / GROUP#&lt;name&gt;
-        group configuration"]
-        ovr["CONFIG / OVERRIDE#&lt;name&gt;
-        time-limited override"]
-        st["STATUS#... / CURRENT
-        results"]
-    end
-
-    rec["reconciler"]
-    aws["RDS / ECS / EC2"]
-
-    cli --> grp
-    cli --> ovr
-    web --> grp
-    web --> ovr
-    iac --> grp
-    raw --> grp
-    raw --> ovr
-
-    grp -- reads --> rec
-    ovr -- reads --> rec
-    rec -- writes --> st
-    st -- reads --> cli
-    st -- reads --> web
-    rec -- "start / stop" --> aws
-```
-
-There are four ways to write: `cheapskate-cli`, the web console, IaC, and `aws dynamodb`. All of them read and write the same records, and none is more capable than or exclusive of another.
-
-There is no record-side operation for making a resource a member of a group. Apply a tag matching the group's selector to the AWS resource. For details, see the selector tags in [resource_tag.md](resource_tag.md).
-
-## What the records configure
-
-### `group#<name>` — group configuration
-
-The attributes that can be set are given below.
-
-| Attribute | Value | Meaning |
-| --- | --- | --- |
-| `mode` | `pinned` \| `schedule` \| `disabled` | How the desired state is decided. Unset is treated as `disabled` |
-| `desired` | `running` \| `stopped` | The desired state under `mode=pinned`. Required for `pinned` |
-| `start_cron` | A five-field cron (for example `0 9 * * MON-FRI`) | The start time under `mode=schedule` |
-| `stop_cron` | A five-field cron | The stop time under `mode=schedule` |
-| `timezone` | An IANA name (for example `Asia/Tokyo`) | Used to evaluate the crons. Unset falls back to the reconciler's `DEFAULT_TIMEZONE` |
-| `tag_key` / `tag_value` | Any string | The selector's tag. Both are required (an empty value is rejected), and a key starting with `aws:` is rejected |
-| `types` | A string set of `rds-instance` `rds-cluster` `ecs-service` `ec2-instance` | The resource types the selector targets. One or more |
-
-- A group name matches `[A-Za-z0-9][A-Za-z0-9._-]{0,63}` (`#` and `/` are not allowed)
-- `start_cron` and `stop_cron` may be given on their own (a start-only or stop-only schedule)
-- A group with `mode` set to `pinned` or `schedule` must have a selector
-
-Setting `pinned` or `schedule` while the selector is missing is recorded as a configuration error on `status#group#<name>`.
-
-#### Timezones with daylight saving
-
-In a `timezone` that observes daylight saving (DST), place the crons at times outside the changeover band (01:00–03:00 in most regions). Crons are evaluated against the local wall clock, so one placed at a time that the spring-forward removes does not fire that day. A `start_cron` that does not fire leaves the group stopped for the day; a `stop_cron` that does not fire leaves it running until the next stop.
-
-> [!NOTE]
-> A time that occurs twice under the autumn fall-back may fire twice, but the desired state is the same on both firings, so nothing is affected.
-
-### `override#<name>` — a time-limited override
-
-The attributes that can be set are given below.
-
-| Attribute | Value | Meaning |
-| --- | --- | --- |
-| `desired` | `running` \| `stopped` | This state takes precedence until the expiry |
-| `expires_at` | epoch seconds | When it expires. It is also the table's TTL attribute |
-
-An override applies to every resource matching the group's selector. An expired override is ignored.
-
-### Precedence
-
-When several settings hold at once, the order of precedence is given below. Earlier rows win.
-
-| Precedence | Condition | Desired state |
-| --- | --- | --- |
-| 1 | `mode=disabled` | Undecided. The whole group leaves the managed set |
-| 2 | An unexpired override exists | The override's `desired` |
-| 3 | `mode=pinned` | The group's `desired` |
-| 4 | `mode=schedule` | Whichever of `start_cron` / `stop_cron` fired later in the past. On a tie, stop |
-
-`mode=disabled` is stronger than an override, so registering an override on a disabled group is rejected.
-
-When the desired state and the actual state agree, no record is written and nothing is notified. A resource that is transitioning (starting/stopping) is left until the next cycle.
-
-## Adding
-
-A group's record is created by `set-selector`. It starts out as `mode=disabled`, so the order is to write the configuration and then enable it.
+The global options are `-table <name>` and `-output text|json`.
 
 ```console
-export CHEAPSKATE_TABLE=<state-table-name>
-cheapskate-cli set-selector --group dev --tag-key cheapskate:group --tag-value dev --types rds-cluster,ecs-service,ec2-instance
-```
-
-On an existing group, only the selector is replaced; `mode`, `desired`, the crons, and `timezone` are kept. The web console offers the same operation as a form on the list page.
-
-Writing the raw record directly looks as follows.
-
-```console
-aws dynamodb put-item --table-name <state-table-name> --item '{
-  "pk":        {"S": "CONFIG"},
-  "sk":        {"S": "GROUP#dev"},
-  "mode":      {"S": "pinned"},
-  "desired":   {"S": "stopped"},
-  "tag_key":   {"S": "cheapskate:group"},
-  "tag_value": {"S": "dev"},
-  "types":     {"SS": ["rds-cluster"]}
-}'
-```
-
-In Terraform, `CONFIG` / `GROUP#<name>` can be managed with `aws_dynamodb_table_item`. The reconciler never writes that item, so no drift occurs.
-
-## Changing
-
-The attributes each command rewrites and those it keeps are collected below. All of them apply to an existing group only; no command creates a new group.
-
-| Command | Attributes rewritten | Attributes kept |
-| --- | --- | --- |
-| `set-selector --group G --tag-key K --tag-value V --types T` | `tag_key` / `tag_value` / `types` | `mode`, `desired`, the crons, `timezone` |
-| `pin --group G stopped\|running` | `mode=pinned` + `desired` | The crons, `timezone`, the selector |
-| `unpin --group G` | `mode=schedule` if crons exist, otherwise `disabled` | Everything else |
-| `schedule --group G -start C1 -stop C2 -timezone TZ` | `mode=schedule` + the crons + `timezone` | The selector (`desired` is dropped) |
-| `disable --group G` | `mode=disabled` | Everything else |
-| `override --group G running -for 2h` | Creates `override#` (`desired` + `expires_at`) | `group#` is left untouched |
-| `clear-override --group G` | Deletes `override#` immediately | `group#` is left untouched |
-
-```console
-cheapskate-cli pin --group dev stopped                                              # always stopped (RDS 7-day auto-starts are stopped again)
-cheapskate-cli schedule --group dev -start "0 9 * * MON-FRI" -stop "0 20 * * MON-FRI" -timezone Asia/Tokyo
-cheapskate-cli override --group dev running -for 2h                                 # temporary start (expires through the TTL)
+cheapskate-cli list
+cheapskate-cli show --group dev
+cheapskate-cli schedule --group dev -start '0 8 * * 1-5' -stop '0 20 * * 1-5'
+cheapskate-cli override --group dev running
+cheapskate-cli override --group dev stopped -for 2h
+cheapskate-cli override --group dev disabled
 cheapskate-cli clear-override --group dev
-cheapskate-cli disable --group dev                                                  # stop managing without losing the configuration
+cheapskate-cli remove --group dev
 ```
 
-Invalid values (a cron, a timezone, `desired`, a resource type, a `-for` of zero or less) are rejected before anything is written. The web console offers the same operations as forms on the group page.
+`schedule` creates a group when absent or changes only its two cron attributes. An indefinite `override` can also create a group and changes only override attributes. A timed override requires an existing schedule. `clear-override` also requires a schedule. `remove` conditionally deletes the complete group item.
 
-An override disappears through the TTL and is therefore not suited to IaC management.
+Every change first performs a strongly consistent read and validates the full item. A conditional-write conflict is returned without an automatic retry. Changes to schedule and override attributes preserve each other; two writes to the same attribute use DynamoDB's last-applied value.
 
-## Inspecting
+Exit codes are:
 
-Three commands read out the current configuration and actual state. None of them writes.
-
-```console
-cheapskate-cli list                 # group# + override# + status#group# for every group
-cheapskate-cli show --group dev     # the same for one group + the resources matching the selector (with status and current state)
-cheapskate-cli doctor               # diagnoses table inconsistencies and leftover records (read-only)
-```
-
-Every command writes exactly one JSON object to stdout. Nothing has to be parsed line by line; it can go straight into `jq`. On failure it writes `{"error": "..."}` to stderr and exits 1. The only non-JSON output is the usage text (`cheapskate-cli -h`).
-
-Some output, and an example of shaping it with `jq`, are given below.
-
-```console
-$ cheapskate-cli pin --group dev stopped
-{
-  "command": "pin",
-  "group": "dev",
-  "mode": "pinned",
-  "desired": "stopped"
-}
-
-$ cheapskate-cli list | jq -r '.groups[] | select(.mode == "schedule") | .name'
-dev
-
-$ cheapskate-cli show --group dev | jq -c '.resources[] | {ref, live: .live.state}'
-{"ref":"dev-cluster/api","live":"running"}
-```
-
-The output of each command is given below.
-
-| Command | Output |
+| Code | Meaning |
 | --- | --- |
-| `list` | `{"command": "list", "groups": [...]}`. Each group carries `name`, its configuration (`mode`, `desired`, the crons, `timezone`, `selector`), `override` (with `expires_at` as RFC3339 UTC), and `status`. Decode failures appear as `config_error`, `override_error`, or `status_error` for the affected data, and the other groups are printed as usual |
-| `show` | `{"command": "show", "group": {...}, "resources": [...]}`. `group` has the same shape as in `list`. `resources` is always an array, each element carrying `type`, `ref`, `arn`, `status`, `live` (the current state), and `config` (the settings from the resource's tags). A status decode failure adds `status_error`, a current-state failure adds `live_error`, and a discovery failure adds `discover_error`; each still exits 0 |
-| Mutating commands | Return `command`, `group`, and only what the command wrote. The group is not read back in full |
-| `doctor` | `{"command": "doctor", "findings": [...], "pruned": 0, "counts": {...}}`. For the meaning of each finding, see the `doctor` diagnosis in [troubleshooting.md](troubleshooting.md) |
+| `0` | Success |
+| `1` | Arguments, AWS, DynamoDB, or internal failure |
+| `2` | Invalid stored group or conditional-write conflict |
 
-`status#` is not a history but one latest-only value collecting the last action, last error, and pending operation. It is not live state; use `live` from `show` or the group page of the web console for that. `transitioning_since` holds when an ongoing transition started and disappears once the transition resolves.
+Text `list` writes valid groups to stdout and invalid rows to stderr. JSON `list` always writes one complete object containing `groups` and `errors` to stdout. Either form exits with code 2 when an invalid row exists. JSON `show` emits a structured error object for invalid stored data and returns code 2.
 
-A resource's last error is recorded in `last_error` on `status#`, and group-level problems (an invalid cron, a discovery failure, a selector collision) on `status#group#<name>`. Removing the cause clears them on the next cycle.
+## Web console
 
-In the web console, the list page shows every group on one row, and the group page lists the matching resources.
+The web console provides group list and detail pages plus schedule and override forms. Detail pages show `cheapskate:group=<group>`, ECS configuration tags, and current read-only observations. Dates are displayed and parsed in `DEFAULT_TIMEZONE`. A write conflict returns HTTP 409.
 
-## Deleting
+## Safely ending management
 
-Two commands delete a group's configuration. They differ in scope.
+To leave resources in a known state:
 
-```console
-cheapskate-cli remove --group dev          # deletes override# → status#group# → group#, in that order
-cheapskate-cli clear-override --group dev  # deletes override# only
-```
+1. Set an indefinite `running` or `stopped` override.
+2. Wait at least one configured reconciler Lambda timeout after the write completes.
+3. Invoke the reconciler manually or wait for the next periodic invocation.
+4. Use `show` to confirm that every resource is stable in the selected state.
+5. Remove the membership tags from the resources.
+6. Remove the group.
 
-Deletion never touches an AWS resource. Afterwards the resources are no longer managed by cheapskate and stay exactly as cheapskate last left them.
-
-> [!CAUTION]
-> Unless leaving them stopped and unmanaged is the intent, start them with `override running` before `remove` and wait one cycle. An ECS service unmanaged while stopped is left at desiredCount 0 with Auto Scaling 0-0, and there is no way to put it back from cheapskate. For the recovery procedure, see the ECS-specific notes in [troubleshooting.md](troubleshooting.md).
-
-The per-resource `status#` records remain immediately after deletion, but become eligible for DynamoDB TTL deletion `STATUS_RETENTION_DAYS` after their last status update. Deletion is asynchronous and can take up to 48 hours after expiry. They have no effect on behaviour while they remain.
-
-```console
-cheapskate-cli doctor --prune   # deletes orphaned records only (touching neither the configuration nor the AWS resources)
-```
-
-Use `doctor --prune` to remove them before the retention period or to remove existing orphaned status items that have no `expires_at`. It shares the reconcile lease, so if a reconcile is running it returns an error without starting deletion. Run it again between reconcile cycles.
-
-To delete a single one by hand, use the `pk` and `sk` from the `doctor` finding directly as the key.
-
-```console
-aws dynamodb delete-item --table-name <state-table-name> --key '{"pk":{"S":"STATUS#ecs-service#dev-cluster/api"},"sk":{"S":"CURRENT"}}'
-```
-
-To stop managing a group only temporarily, use `disable` rather than deletion; the configuration stays. Note that a disabled group accepts no override, so starting it later means returning it to `pin` or `schedule` first.
-
-## IAM permissions required
-
-The permissions needed by the principal running `cheapskate-cli` or the web console are given below. No start/stop API permission is required.
-
-| Permission | Purpose |
-|---|---|
-| `dynamodb:Scan` / `Query` / `BatchGetItem` / `GetItem` / `PutItem` / `UpdateItem` / `DeleteItem` on the state table | Reading and writing records. Only `doctor` uses Scan. The `UpdateItem` and `DeleteItem` calls from `doctor --prune` also manage the lease at `LOCK` / `RECONCILE` |
-| `tag:GetResources` | Listing the resources matching a selector |
-| `Describe*` on RDS/ECS/EC2 | The current state in `show` and on the group page |
-
-Without `tag:GetResources`, `doctor` reports a discovery error and withholds the orphan verdict.
+Do not change that group again during this sequence. Waiting lets invocations that read older configuration finish before management ends.

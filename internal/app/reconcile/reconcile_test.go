@@ -1,1279 +1,209 @@
 package reconcile
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"io"
 	"log/slog"
-	"os"
-	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/mock/gomock"
 
 	"cheapskate/internal/app/port"
 	"cheapskate/internal/app/port/porttest"
 	"cheapskate/internal/core/model"
 	"cheapskate/internal/state"
-	mocks "cheapskate/internal/state/mocks"
 )
 
-func rdsInstance(ref string) model.Resource {
-	return model.Resource{Type: model.TypeRdsInstance, Ref: ref}
-}
-func rdsCluster(ref string) model.Resource {
-	return model.Resource{Type: model.TypeRdsCluster, Ref: ref}
-}
-func ecsService(ref string) model.Resource {
-	return model.Resource{Type: model.TypeEcsService, Ref: ref}
-}
-func ec2Instance(ref string) model.Resource {
-	return model.Resource{Type: model.TypeEc2Instance, Ref: ref}
+type memoryStore struct {
+	rows []state.GroupRow
+	err  error
 }
 
-type fixture struct {
-	db         *mocks.DynaStore
-	deps       *Deps
-	rds        *porttest.Target
-	cluster    *porttest.Target
-	ecs        *porttest.Target
-	ec2        *porttest.Target
-	notifier   *porttest.Notifier
-	discoverer *porttest.Discoverer
+func (store *memoryStore) ListGroups(context.Context) ([]state.GroupRow, error) {
+	return store.rows, store.err
 }
 
-func newFixture(t *testing.T) *fixture {
-	t.Helper()
-	ctrl := gomock.NewController(t)
-	api, db := mocks.NewDynaStore(ctrl)
-	rds := porttest.NewTarget(model.TypeRdsInstance)
-	cluster := porttest.NewTarget(model.TypeRdsCluster)
-	ecs := porttest.NewTarget(model.TypeEcsService)
-	ec2 := porttest.NewTarget(model.TypeEc2Instance)
-	notifier := &porttest.Notifier{}
+func testDeps(store Store, discoverer port.Discoverer, targets ...*porttest.Target) *Deps {
+	targetMap := map[model.ResourceType]port.Target{}
+	for _, target := range targets {
+		targetMap[target.Type()] = target
+	}
+	return &Deps{
+		Store: store, Discoverer: discoverer, Targets: targetMap,
+		Notifier: &porttest.Notifier{}, Location: time.UTC,
+		Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+}
+
+func taggedResource(arn, ref, group string) model.Resource {
+	return model.Resource{Type: model.TypeRdsInstance, ARN: arn, Ref: ref, Tags: map[string]string{model.GroupTagKey: group}}
+}
+
+func TestRunIgnoresPayloadAndReconcilesAllResources(t *testing.T) {
+	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
+	store := &memoryStore{rows: []state.GroupRow{{Name: "dev", Group: model.GroupSpec{Name: "dev", Override: model.OverrideStopped}}}}
 	discoverer := porttest.NewDiscoverer()
-	return &fixture{
-		db: db, rds: rds, cluster: cluster, ecs: ecs, ec2: ec2, notifier: notifier, discoverer: discoverer,
-		deps: &Deps{
-			Store:           state.New(api, "state"),
-			Discoverer:      discoverer,
-			Targets:         map[model.ResourceType]port.Target{rds.Typ: rds, cluster.Typ: cluster, ecs.Typ: ecs, ec2.Typ: ec2},
-			Notifier:        notifier,
-			DefaultTimezone: "UTC",
-			Log:             slog.New(slog.NewTextHandler(io.Discard, nil)),
-		},
+	discoverer.Resources = map[string]model.Resource{
+		"a": taggedResource("a", "a", "dev"),
+		"b": taggedResource("b", "b", "dev"),
 	}
-}
+	target := porttest.NewTarget(model.TypeRdsInstance)
+	target.Observations["a"] = model.Observation{State: model.StateRunning}
+	target.Observations["b"] = model.Observation{State: model.StateRunning}
 
-func s[T ~string](v T) types.AttributeValue { return &types.AttributeValueMemberS{Value: string(v)} }
-func n(v int) types.AttributeValue          { return &types.AttributeValueMemberN{Value: fmt.Sprint(v)} }
-
-// セレクタのタグ値をグループ名と一致させた group# アイテムを用意する
-// discoverer のテストダブルも同じキーを用いるため、f.discoverer.ByTagValue[name] がそのグループのメンバーとなる
-// 別途のメンバー登録は不要である
-func (f *fixture) seedGroup(name string, mode model.Mode, desired model.DesiredState) {
-	f.db.Seed(map[string]types.AttributeValue{
-		// pk の接頭辞は state 側のキー設計であり、status のリソース ID 名前空間である model.GroupNamespace ではない
-		// 文字列は同一だが根拠が異なるため、共有しない (state/items.go を参照)
-		"pk": s("group#" + name), "mode": s(mode), "desired": s(desired),
-		"tag_key": s("env"), "tag_value": s(name),
-		"types": &types.AttributeValueMemberSS{Value: model.TypeNames(model.KnownTypes)},
-	})
-}
-
-// pinned かつ stopped のグループを用意し、その 1 リソースを discoverer へ結線する
-// 本ファイルのテストは主に 1 リソースを扱うため、グループ名をそのリソースの識別にも用いる
-func (f *fixture) pinnedStoppedGroup(name string, res model.Resource) {
-	f.seedGroup(name, model.ModePinned, model.DesiredStopped)
-	f.discoverer.ByTagValue[name] = []model.Resource{res}
-}
-
-var now = time.Date(2026, 7, 15, 3, 0, 0, 0, time.UTC)
-
-func runEmpty(t *testing.T, f *fixture) Summary {
-	t.Helper()
-	summary, err := Run(context.Background(), json.RawMessage(`{}`), f.deps, now)
+	summary, err := Run(context.Background(), json.RawMessage(`not-json`), testDeps(store, discoverer, target), now)
 	require.NoError(t, err)
-	return summary
-}
-
-// context の deadline がない場合は既定時間を用い、deadline がある場合は残り時間と安全余裕を含む期限を返す。
-// 期限切れの context では負の残り時間を加算せず、安全余裕だけを確保する。
-func TestLeaseExpiration(t *testing.T) {
-	t.Run("without deadline", func(t *testing.T) {
-		assert.Equal(t, now.Add(defaultLeaseDuration), leaseExpiration(context.Background(), now))
-	})
-
-	t.Run("active deadline", func(t *testing.T) {
-		before := time.Now()
-		deadline := before.Add(time.Hour)
-		ctx, cancel := context.WithDeadline(context.Background(), deadline)
-		defer cancel()
-
-		got := leaseExpiration(ctx, now)
-		after := time.Now()
-
-		assert.GreaterOrEqual(t, got, now.Add(deadline.Sub(after)+leaseSafetyMargin))
-		assert.LessOrEqual(t, got, now.Add(deadline.Sub(before)+leaseSafetyMargin))
-	})
-
-	t.Run("expired deadline", func(t *testing.T) {
-		ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Minute))
-		defer cancel()
-
-		assert.Equal(t, now.Add(leaseSafetyMargin), leaseExpiration(ctx, now))
-	})
-}
-
-func TestOperationScopeHashTracksEffectiveConfiguration(t *testing.T) {
-	cfg := model.GroupConfig{
-		Name: "dev", Mode: model.ModePinned, Desired: model.DesiredStopped,
-		Selector: model.Selector{TagKey: "env", TagValue: "dev", Types: []model.ResourceType{model.TypeRdsInstance}},
-	}
-	first := newOperationScope(cfg, nil, model.DesiredStopped, "UTC")
-	second := newOperationScope(cfg, nil, model.DesiredStopped, "UTC")
-
-	assert.Equal(t, first, second)
-	assert.Equal(t, "dev", first.Group)
-	assert.Len(t, first.ConfigHash, 64)
-
-	changedSelector := cfg
-	changedSelector.Selector.TagValue = "prod"
-	assert.NotEqual(t, first.ConfigHash, newOperationScope(changedSelector, nil, model.DesiredStopped, "UTC").ConfigHash)
-	assert.NotEqual(t, first.ConfigHash, newOperationScope(cfg, &model.Override{Desired: model.DesiredRunning, ExpiresAt: now.Add(time.Hour).Unix()}, model.DesiredRunning, "UTC").ConfigHash)
-}
-
-func TestStopsRunningPinnedResource(t *testing.T) {
-	f := newFixture(t)
-	f.pinnedStoppedGroup("dev-db", rdsInstance("dev-db"))
-	f.rds.Observations["dev-db"] = model.Observation{State: model.StateRunning}
-
-	summary := runEmpty(t, f)
-
-	assert.Equal(t, []string{"dev-db"}, f.rds.Stopped)
-	require.Len(t, summary.Actions, 1)
-	assert.Equal(t, model.ActionStop, summary.Actions[0].Action)
-	assert.Equal(t, "dev-db", summary.Actions[0].Group)
-	status := f.db.Item("status#rds-instance#dev-db")
-	require.NotNil(t, status, "status item not written")
-	assert.Equal(t, "stop", status["last_action"].(*types.AttributeValueMemberS).Value)
-	require.Len(t, f.notifier.Published, 1)
-	assert.Equal(t, "[cheapskate] stop: dev-db/rds-instance#dev-db", f.notifier.Published[0].Subject)
-}
-
-// 定常reconcileは設定のQueryとstatusのBatchGetItemを使用し、全件Scanとリソース単位のGetItemを行わない。
-func TestRunDoesNotScanOrReadStatusesOneByOne(t *testing.T) {
-	f := newFixture(t)
-	f.pinnedStoppedGroup("dev-db", rdsInstance("dev-db"))
-	f.rds.Observations["dev-db"] = model.Observation{State: model.StateStopped}
-
-	runEmpty(t, f)
-
-	assert.Equal(t, 1, f.db.Calls("query"))
-	assert.Equal(t, 2, f.db.Calls("batch-get"), "グループstatusとリソースstatusをそれぞれ一括取得する")
-	assert.Zero(t, f.db.Calls("scan"))
-	assert.Zero(t, f.db.Calls("get"))
-}
-
-func TestRunSkipsAllWorkWhileAnotherInvocationHoldsLease(t *testing.T) {
-	f := newFixture(t)
-	f.pinnedStoppedGroup("dev-db", rdsInstance("dev-db"))
-	f.rds.Observations["dev-db"] = model.Observation{State: model.StateRunning}
-	acquired, err := f.deps.Store.AcquireLease(context.Background(), "other-invocation", now, now.Add(time.Minute))
-	require.NoError(t, err)
-	require.True(t, acquired)
-
-	summary := runEmpty(t, f)
-
-	assert.Equal(t, "lease-held", summary.Skipped)
-	assert.Zero(t, summary.Reconciled)
-	assert.Empty(t, summary.Actions)
-	assert.Empty(t, summary.Errors)
-	assert.Zero(t, f.db.Calls("query"), "リースを取得できない呼び出しは設定を読み取らない")
-	assert.Zero(t, f.discoverer.Calls(), "リースを取得できない呼び出しはAWSを探索しない")
-	assert.Empty(t, f.rds.Stopped)
-}
-
-// model.TypeEc2Instance を Deps.Targets 内の Target へ解決する経路を検証する
-// 他の種別と同じ pin/stop のディスパッチを、ec2-instance についても通す
-func TestStopsRunningPinnedEc2Instance(t *testing.T) {
-	f := newFixture(t)
-	f.pinnedStoppedGroup("dev-vm", ec2Instance("i-0abc123"))
-	f.ec2.Observations["i-0abc123"] = model.Observation{State: model.StateRunning}
-
-	summary := runEmpty(t, f)
-
-	assert.Equal(t, []string{"i-0abc123"}, f.ec2.Stopped)
-	require.Len(t, summary.Actions, 1)
-	assert.Equal(t, model.ActionStop, summary.Actions[0].Action)
-	status := f.db.Item("status#ec2-instance#i-0abc123")
-	require.NotNil(t, status, "status item not written")
-	assert.Equal(t, "stop", status["last_action"].(*types.AttributeValueMemberS).Value)
-}
-
-// terminated 状態の EC2 インスタンスは、Tagging API から 1 時間程度は返り続ける
-// Ec2InstanceTarget.Describe は "terminated" を StateNotFound へ写像し (ec2.go を参照)、reconcile はこれをスキップとして扱う
-// TestNotFoundAfterDiscoverySkipsWithoutError と同じ経路を、実際の EC2 ターゲットで検証する
-func TestTerminatedEc2InstanceSkippedWithoutError(t *testing.T) {
-	f := newFixture(t)
-	f.pinnedStoppedGroup("dev-vm", ec2Instance("i-0abc123"))
-	f.ec2.Observations["i-0abc123"] = model.Observation{State: model.StateNotFound}
-
-	summary := runEmpty(t, f)
-
-	assert.Empty(t, summary.Errors)
-	assert.Empty(t, summary.Actions)
-	assert.Empty(t, f.ec2.Stopped)
-	assert.Nil(t, f.db.Item("status#ec2-instance#i-0abc123"), "a skip must not write status")
-	assert.Empty(t, f.notifier.Published, "a skip must never notify")
-}
-
-func TestStopsAllResourcesOfPinnedGroup(t *testing.T) {
-	f := newFixture(t)
-	f.seedGroup("dev", model.ModePinned, model.DesiredStopped)
-	f.discoverer.ByTagValue["dev"] = []model.Resource{rdsInstance("dev-db"), ecsService("dev-cluster/api")}
-	f.rds.Observations["dev-db"] = model.Observation{State: model.StateRunning}
-	f.ecs.Observations["dev-cluster/api"] = model.Observation{State: model.StateRunning}
-
-	summary := runEmpty(t, f)
-
-	assert.Equal(t, []string{"dev-db"}, f.rds.Stopped)
-	assert.Equal(t, []string{"dev-cluster/api"}, f.ecs.Stopped)
-	require.Len(t, summary.Actions, 2)
-	for _, a := range summary.Actions {
-		assert.Equal(t, "dev", a.Group)
-	}
-	require.NotNil(t, f.db.Item("status#rds-instance#dev-db"), "status stays per-resource")
-	require.NotNil(t, f.db.Item("status#ecs-service#dev-cluster/api"), "status stays per-resource")
-	assert.Len(t, f.notifier.Published, 2)
-}
-
-func TestConvergedWritesAndNotifiesNothing(t *testing.T) {
-	f := newFixture(t)
-	f.pinnedStoppedGroup("dev-db", rdsInstance("dev-db"))
-	f.rds.Observations["dev-db"] = model.Observation{State: model.StateStopped}
-
-	summary := runEmpty(t, f)
-
-	assert.Empty(t, summary.Actions)
-	assert.Empty(t, summary.Errors)
-	assert.Nil(t, f.db.Item("status#rds-instance#dev-db"), "converged cycle must not write status")
-	assert.Empty(t, f.notifier.Published, "converged cycle must not notify")
-}
-
-func TestTransitioningIsSkipped(t *testing.T) {
-	f := newFixture(t)
-	f.pinnedStoppedGroup("dev-db", rdsInstance("dev-db"))
-	f.rds.Observations["dev-db"] = model.Observation{State: model.StateTransitioning, Detail: "stopping"}
-
-	summary := runEmpty(t, f)
-
-	assert.Empty(t, f.rds.Stopped)
-	assert.Empty(t, f.rds.Started)
-	assert.Empty(t, summary.Actions)
-	assert.Empty(t, summary.Errors)
-}
-
-// disabled のグループでは Discover を呼んではならない
-// 収束の対象が存在しないため、セレクタの解決と AWS Tagging API への呼び出しはいずれも不要である
-// 加えて、そのグループが持たない権限を要求する場合がある
-func TestDisabledGroupSkipsDiscoveryAndAllResources(t *testing.T) {
-	f := newFixture(t)
-	f.seedGroup("dev", model.ModeDisabled, "")
-
-	summary := runEmpty(t, f)
-
-	assert.Zero(t, f.discoverer.Calls(), "disabled group must never call Discover")
-	assert.Empty(t, f.rds.Stopped)
-	assert.Empty(t, f.ecs.Stopped)
-	assert.Zero(t, summary.Reconciled)
-}
-
-func TestActiveGroupWithNoResourcesReconcilesZero(t *testing.T) {
-	f := newFixture(t)
-	f.seedGroup("dev", model.ModePinned, model.DesiredStopped)
-
-	summary := runEmpty(t, f)
-
-	assert.Zero(t, summary.Reconciled)
-	assert.Empty(t, summary.Actions)
-	assert.Empty(t, summary.Errors)
-}
-
-// 探索の直後に消えるリソースは、エラーではなくスキップとして扱う
-// 削除との競合、または Tagging API の反映遅延によるものである
-// 廃止したメンバー登録モデルでは、登録済みのリソースの消失は設定の不整合を示すエラーであった
-func TestNotFoundAfterDiscoverySkipsWithoutError(t *testing.T) {
-	f := newFixture(t)
-	f.pinnedStoppedGroup("gone", rdsInstance("gone"))
-	// 観測値が未設定であるため、porttest.Target.Describe は StateNotFound を返す
-
-	summary := runEmpty(t, f)
-
-	assert.Empty(t, summary.Errors)
-	require.Len(t, summary.Actions, 0)
-	assert.Nil(t, f.db.Item("status#rds-instance#gone"), "a skip must not write status")
-	assert.Empty(t, f.notifier.Published, "a skip must never notify")
-}
-
-// 内容が変わらないエラーは、毎サイクルではなく 1 度だけ通知しなければならない
-func TestRepeatedSameErrorNotifiesOnce(t *testing.T) {
-	f := newFixture(t)
-	f.pinnedStoppedGroup("broken", rdsInstance("broken"))
-	f.rds.DescribeErr = fmt.Errorf("access denied")
-
-	runEmpty(t, f)
-	runEmpty(t, f)
-
-	assert.Len(t, f.notifier.Published, 1, "repeated identical error must notify once")
-}
-
-// エラーメッセージが変化した場合は、改めて通知しなければならない
-func TestChangedErrorNotifiesAgain(t *testing.T) {
-	f := newFixture(t)
-	f.pinnedStoppedGroup("dev-db", rdsInstance("dev-db"))
-	f.rds.DescribeErr = fmt.Errorf("first failure")
-
-	runEmpty(t, f)
-
-	f.rds.DescribeErr = fmt.Errorf("second, different failure")
-	runEmpty(t, f)
-
-	assert.Len(t, f.notifier.Published, 2, "changed error must notify again")
-}
-
-// エラー状態のリソースが収束した場合、復旧通知を 1 度だけ送り、last_error を削除する
-func TestRecoveryNotifiesOnceAndClearsError(t *testing.T) {
-	f := newFixture(t)
-	f.pinnedStoppedGroup("dev-db", rdsInstance("dev-db"))
-	f.rds.DescribeErr = fmt.Errorf("transient failure")
-
-	runEmpty(t, f)
-	require.Len(t, f.notifier.Published, 1, "initial error must notify")
-
-	f.rds.DescribeErr = nil
-	f.rds.Observations["dev-db"] = model.Observation{State: model.StateStopped} // desired=stopped に対してすでに収束済み
-	runEmpty(t, f)
-
-	require.Len(t, f.notifier.Published, 2, "recovery must notify once")
-	assert.Equal(t, "[cheapskate] recovered: dev-db/rds-instance#dev-db", f.notifier.Published[1].Subject)
-	status := f.db.Item("status#rds-instance#dev-db")
-	assert.Equal(t, "", status["last_error"].(*types.AttributeValueMemberS).Value, "last_error must be cleared")
-
-	runEmpty(t, f)
-	assert.Len(t, f.notifier.Published, 2, "already-recovered convergence must not notify again")
-}
-
-// performAction の default 節は Run 経由では到達しない
-// model.DecideAction が返すのは "stop"、"start"、"" に限るためである
-// この節は、model.Action に値が追加されたとき、未知のアクションを Target へ送らないために存在する
-func TestPerformActionRejectsUnknownAction(t *testing.T) {
-	tgt := porttest.NewTarget(model.TypeRdsInstance)
-	err := performAction(context.Background(), model.Resource{}, "pause", tgt)
-	assert.ErrorContains(t, err, `unknown action "pause"`)
-	assert.Empty(t, tgt.Stopped, "the unknown-action branch must not call Stop")
-	assert.Empty(t, tgt.Started, "the unknown-action branch must not call Start")
-}
-
-// start/stop のアクションの成功が直前のエラーを解消した場合、復旧通知は送らない
-// アクション自身の通知が復旧を伝えるためである
-// 収束済みかつアクションなしの経路 (TestRecoveryNotifiesOnceAndClearsError) では、復旧通知を送る
-func TestActionSuccessClearsPriorErrorWithoutSeparateRecoveredNotification(t *testing.T) {
-	f := newFixture(t)
-	f.pinnedStoppedGroup("dev-db", rdsInstance("dev-db"))
-	f.rds.DescribeErr = fmt.Errorf("transient failure")
-
-	runEmpty(t, f)
-	require.Len(t, f.notifier.Published, 1, "initial error must notify")
-
-	f.rds.DescribeErr = nil
-	f.rds.Observations["dev-db"] = model.Observation{State: model.StateRunning} // まだ stop のアクションが必要
-	runEmpty(t, f)
-
-	require.Len(t, f.notifier.Published, 2, "the stop action's own notification must cover recovery")
-	assert.Equal(t, "[cheapskate] stop: dev-db/rds-instance#dev-db", f.notifier.Published[1].Subject)
-	status := f.db.Item("status#rds-instance#dev-db")
-	require.NotNil(t, status)
-	assert.Equal(t, "", status["last_error"].(*types.AttributeValueMemberS).Value, "last_error must be cleared even without a distinct notification")
-}
-
-// 復旧したエラーの削除における PutStatus の失敗は、ログへの記録のみとし、reconcile のエラーとしても panic としてもならない
-// 過去のエラーの記録の更新が失敗しただけであり、リソース自体は収束しているためである
-func TestClearRecoveredErrorPutStatusFailureIsLoggedNotSurfaced(t *testing.T) {
-	f := newFixture(t)
-	f.pinnedStoppedGroup("dev-db", rdsInstance("dev-db"))
-	f.rds.DescribeErr = fmt.Errorf("transient failure")
-	runEmpty(t, f)
-	require.Len(t, f.notifier.Published, 1)
-
-	f.rds.DescribeErr = nil
-	f.rds.Observations["dev-db"] = model.Observation{State: model.StateStopped} // desired=stopped に対してすでに収束済み
-	f.db.FailOn("update", "status#rds-instance#dev-db", fmt.Errorf("dynamodb unavailable"))
-
-	summary := runEmpty(t, f)
-
-	assert.Empty(t, summary.Errors, "a failure clearing the recovered error must not surface as a reconcile error")
-	assert.Len(t, f.notifier.Published, 1, "no recovered notification when the clearing PutStatus itself failed")
-	status := f.db.Item("status#rds-instance#dev-db")
-	require.NotNil(t, status)
-	assert.NotEqual(t, "", status["last_error"].(*types.AttributeValueMemberS).Value, "last_error must remain since the clear failed")
-}
-
-// アクション通知は 2 回の Publish がともに失敗した時点で打ち切る
-// 通知の失敗は AWS 操作と完了記録の成功を変更しないため、reconcile のエラーと通知待ちは残さない
-func TestActionNotificationStopsAfterTwoFailuresWithoutError(t *testing.T) {
-	f := newFixture(t)
-	var logBuf bytes.Buffer
-	f.deps.Log = slog.New(slog.NewTextHandler(&logBuf, nil))
-	f.pinnedStoppedGroup("dev-db", rdsInstance("dev-db"))
-	f.rds.Observations["dev-db"] = model.Observation{State: model.StateRunning}
-	f.notifier.Err = fmt.Errorf("sns down")
-
-	summary := runEmpty(t, f)
-
-	assert.Empty(t, summary.Errors, "notify failure must not surface as a reconcile error")
-	require.Len(t, summary.Actions, 1, "action must still be recorded")
-	status := f.db.Item("status#rds-instance#dev-db")
-	require.NotNil(t, status)
-	assert.Equal(t, "", status["last_error"].(*types.AttributeValueMemberS).Value, "notify failure must not be written as last_error")
-	assert.NotContains(t, status, "notification_pending", "通知失敗は AWS 操作を防ぐ状態を残さない")
-	require.Len(t, f.notifier.Published, 2)
-	assert.Equal(t, f.notifier.Published[0].Payload["operation_id"], f.notifier.Published[1].Payload["operation_id"])
-	assert.Equal(t, now.Format(time.RFC3339), f.notifier.Published[0].Payload["at"])
-	assert.Equal(t, now.Format(time.RFC3339), f.notifier.Published[1].Payload["at"])
-	assert.Equal(t, 2, strings.Count(logBuf.String(), "action-notify-failed"))
-	assert.Contains(t, logBuf.String(), "action-notify-abandoned")
-}
-
-// 初回の Publish 失敗後の再送は、同じ操作の通知として operation_id と時刻を維持する
-func TestActionNotificationRetryUsesSameOperationIDAndTime(t *testing.T) {
-	f := newFixture(t)
-	f.pinnedStoppedGroup("dev-db", rdsInstance("dev-db"))
-	f.rds.Observations["dev-db"] = model.Observation{State: model.StateRunning}
-	f.notifier.Errors = []error{fmt.Errorf("sns down"), nil}
-
-	runEmpty(t, f)
-	require.Len(t, f.notifier.Published, 2)
-	firstOperationID := f.notifier.Published[0].Payload["operation_id"]
-	require.NotEmpty(t, firstOperationID)
-	assert.Equal(t, firstOperationID, f.notifier.Published[1].Payload["operation_id"])
-	assert.Equal(t, f.notifier.Published[0].Payload["at"], f.notifier.Published[1].Payload["at"])
-	assert.Equal(t, []string{"dev-db"}, f.rds.Stopped, "通知の再試行では停止操作を再実行しない")
-}
-
-// 前回の通知が 2 回失敗しても、次の reconcile は新しい AWS 操作を実行する
-// 各通知の at は操作時刻であり、後続操作の通知が先に届いた場合も前後関係を判定できる
-func TestNotificationFailureDoesNotBlockNextAWSAction(t *testing.T) {
-	f := newFixture(t)
-	f.pinnedStoppedGroup("dev-db", rdsInstance("dev-db"))
-	f.rds.Observations["dev-db"] = model.Observation{State: model.StateRunning}
-	f.notifier.Err = fmt.Errorf("sns down")
-
-	runEmpty(t, f)
-	require.Len(t, f.notifier.Published, 2)
-	firstOperationID := f.notifier.Published[0].Payload["operation_id"]
-	require.NotEmpty(t, firstOperationID)
-
-	f.seedGroup("dev-db", model.ModePinned, model.DesiredRunning)
-	f.rds.Observations["dev-db"] = model.Observation{State: model.StateStopped}
-	secondAt := now.Add(time.Minute)
-	second, err := Run(context.Background(), json.RawMessage(`{}`), f.deps, secondAt)
-	require.NoError(t, err)
-
-	assert.Empty(t, second.Errors)
-	assert.Equal(t, []string{"dev-db"}, f.rds.Started)
-	require.Len(t, f.notifier.Published, 4)
-	secondOperationID := f.notifier.Published[2].Payload["operation_id"]
-	assert.NotEqual(t, firstOperationID, secondOperationID)
-	assert.Equal(t, secondOperationID, f.notifier.Published[3].Payload["operation_id"])
-	assert.Equal(t, now.Format(time.RFC3339), f.notifier.Published[0].Payload["at"])
-	assert.Equal(t, secondAt.Format(time.RFC3339), f.notifier.Published[2].Payload["at"])
-}
-
-// アクションの成功後における PutStatus の失敗は、そのサイクルのエラーとして記録し、他のリソースの reconcile を継続する
-// 永続化が失敗した場合も、リソース単位の隔離を保つ
-func TestPutStatusFailureAfterActionIsRecordedButIsolated(t *testing.T) {
-	f := newFixture(t)
-	f.pinnedStoppedGroup("dev-db", rdsInstance("dev-db"))
-	f.pinnedStoppedGroup("b-fine", rdsCluster("b-fine"))
-	f.rds.Observations["dev-db"] = model.Observation{State: model.StateRunning}
-	f.cluster.Observations["b-fine"] = model.Observation{State: model.StateRunning}
-	f.db.FailOn("update", "status#rds-instance#dev-db", fmt.Errorf("dynamodb unavailable"))
-
-	summary := runEmpty(t, f)
-
-	require.Len(t, summary.Errors, 1)
-	assert.Equal(t, "rds-instance#dev-db", summary.Errors[0].ResourceID)
-	assert.Len(t, f.cluster.Stopped, 1, "second resource must still be reconciled")
-}
-
-func TestPendingOperationRecoversWithoutRepeatingAWSAction(t *testing.T) {
-	f := newFixture(t)
-	f.pinnedStoppedGroup("dev-db", rdsInstance("dev-db"))
-	f.rds.Observations["dev-db"] = model.Observation{State: model.StateRunning}
-	f.db.FailOnNth("update", "status#rds-instance#dev-db", 2, fmt.Errorf("dynamodb unavailable after action"))
-
-	first := runEmpty(t, f)
-	require.Len(t, first.Errors, 1)
-	assert.Len(t, f.rds.Stopped, 1)
-	status := f.db.Item("status#rds-instance#dev-db")
-	require.NotNil(t, status)
-	require.NotNil(t, status["pending_operation_id"])
-	assert.NotEmpty(t, status["pending_operation_id"].(*types.AttributeValueMemberS).Value)
-	assert.Nil(t, status["last_action"], "完了記録に失敗した操作を完了済みとして扱わない")
-
-	f.rds.Observations["dev-db"] = model.Observation{State: model.StateTransitioning, Detail: "stopping"}
-	second := runEmpty(t, f)
-	assert.Empty(t, second.Errors)
-	assert.Len(t, f.rds.Stopped, 1, "遷移中は停止操作を再実行しない")
-
-	f.rds.Observations["dev-db"] = model.Observation{State: model.StateStopped}
-	third := runEmpty(t, f)
-	assert.Empty(t, third.Errors)
-	require.Len(t, third.Actions, 1, "観測結果から未完了の操作を完了へ進める")
-	assert.Equal(t, model.ActionStop, third.Actions[0].Action)
-	assert.Len(t, f.rds.Stopped, 1, "収束確認後も停止操作を再実行しない")
-
-	status = f.db.Item("status#rds-instance#dev-db")
-	assert.Equal(t, "", status["pending_operation_id"].(*types.AttributeValueMemberS).Value)
-	assert.Equal(t, "stop", status["last_action"].(*types.AttributeValueMemberS).Value)
-	assert.Equal(t, "", status["last_error"].(*types.AttributeValueMemberS).Value)
-	var actionNotifications int
-	for _, notification := range f.notifier.Published {
-		if strings.Contains(notification.Subject, " stop: ") {
-			actionNotifications++
-		}
-	}
-	assert.Equal(t, 1, actionNotifications)
-	assert.Len(t, f.notifier.Published, 2, "復旧した操作の通知とは別に recovered を送信しない")
-}
-
-// 動的なタグ所属が操作中に変わっても、未完了操作は開始時のグループへ帰属させる。
-// 新しい所有者の設定は旧操作の完了を記録した次のサイクルから適用し、1 サイクルで逆向きの操作を続けて実行しない。
-func TestPendingOperationKeepsOriginalOwnerAcrossMembershipChange(t *testing.T) {
-	f := newFixture(t)
-	resource := rdsInstance("shared-db")
-	resourceID := resource.ID()
-	f.pinnedStoppedGroup("a-old", resource)
-	f.rds.Observations[resource.Ref] = model.Observation{State: model.StateRunning}
-	f.db.FailOnNth("update", "status#"+resourceID, 2, fmt.Errorf("completion interrupted"))
-
-	first := runEmpty(t, f)
-	require.Len(t, first.Errors, 1)
-	status := f.db.Item("status#" + resourceID)
-	require.NotNil(t, status)
-	assert.Equal(t, "a-old", status["pending_group"].(*types.AttributeValueMemberS).Value)
-	assert.Len(t, status["pending_config_hash"].(*types.AttributeValueMemberS).Value, 64)
-
-	f.discoverer.ByTagValue["a-old"] = nil
-	f.seedGroup("b-new", model.ModePinned, model.DesiredRunning)
-	f.discoverer.ByTagValue["b-new"] = []model.Resource{resource}
-	f.rds.Observations[resource.Ref] = model.Observation{State: model.StateStopped}
-
-	second := runEmpty(t, f)
-	require.Len(t, second.Actions, 1)
-	assert.Equal(t, "a-old", second.Actions[0].Group)
-	assert.Equal(t, model.ActionStop, second.Actions[0].Action)
-	assert.Equal(t, "operation-context-changed", second.Actions[0].Skipped)
-	assert.Empty(t, f.rds.Started, "新しい所有者の逆向き操作は次のサイクルまで待つ")
-
-	var recovered *porttest.Notification
-	for i := range f.notifier.Published {
-		n := &f.notifier.Published[i]
-		if n.Payload["operation_id"] != nil && n.Payload["action"] == model.ActionStop {
-			recovered = n
-		}
-	}
-	require.NotNil(t, recovered)
-	assert.Equal(t, "a-old", recovered.Payload["group"])
-
-	third := runEmpty(t, f)
-	require.Len(t, third.Actions, 1)
-	assert.Equal(t, "b-new", third.Actions[0].Group)
-	assert.Equal(t, model.ActionStart, third.Actions[0].Action)
-	assert.Equal(t, []string{"shared-db"}, f.rds.Started)
-}
-
-// 未完了操作の各フィールドを個別に破損させ、操作を再開できる値として解釈されないことを確かめる。
-// 不完全な監査証跡に基づく AWS 操作の再実行を防ぐため、フィールド間の不整合も拒否する。
-func TestPendingOperationRejectsInvalidStatus(t *testing.T) {
-	valid := model.Status{
-		PendingOperationID: "op-a",
-		PendingAction:      model.ActionStop,
-		PendingDesired:     model.DesiredStopped,
-		PendingObserved:    model.StateRunning,
-		PendingStartedAt:   now.Format(time.RFC3339),
-	}
-	cases := []struct {
-		name   string
-		change func(*model.Status)
-		want   string
-	}{
-		{"invalid started_at", func(s *model.Status) { s.PendingStartedAt = "not-a-time" }, "invalid started_at"},
-		{"invalid action", func(s *model.Status) { s.PendingAction = model.ActionNone }, "invalid action"},
-		{"invalid desired", func(s *model.Status) { s.PendingDesired = model.DesiredNone }, "invalid desired state"},
-		{"invalid observed", func(s *model.Status) { s.PendingObserved = model.StateTransitioning }, "invalid observed state"},
-		{"inconsistent action", func(s *model.Status) { s.PendingAction = model.ActionStart }, "inconsistent action"},
-		{"group without config hash", func(s *model.Status) { s.PendingGroup = "dev" }, "incomplete ownership context"},
-		{"config hash without group", func(s *model.Status) { s.PendingConfigHash = strings.Repeat("a", 64) }, "incomplete ownership context"},
-		{"invalid group", func(s *model.Status) { s.PendingGroup, s.PendingConfigHash = "bad/group", strings.Repeat("a", 64) }, "invalid group"},
-		{"invalid config hash", func(s *model.Status) { s.PendingGroup, s.PendingConfigHash = "dev", "not-a-hash" }, "invalid config hash"},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			status := valid
-			tc.change(&status)
-
-			op, startedAt, err := pendingOperation(status)
-
-			require.ErrorContains(t, err, tc.want)
-			assert.Equal(t, state.PendingOperation{}, op)
-			assert.True(t, startedAt.IsZero())
-		})
-	}
-}
-
-func TestPendingOperationAcceptsLegacyStatusWithoutOwnershipContext(t *testing.T) {
-	status := model.Status{
-		PendingOperationID: "op-a", PendingAction: model.ActionStop,
-		PendingDesired: model.DesiredStopped, PendingObserved: model.StateRunning,
-		PendingStartedAt: now.Format(time.RFC3339),
-	}
-
-	op, _, err := pendingOperation(status)
-
-	require.NoError(t, err)
-	assert.Empty(t, op.Group)
-	assert.Empty(t, op.ConfigHash)
-}
-
-// 未完了操作は 30 分未満では再実行せず、30 分に達した時点で放棄してエラーとして記録する。
-// 境界時刻の比較が変わっても、AWS 操作の早すぎる再実行や無期限の停止を生じさせないためである。
-func TestPendingOperationRecoveryTimeoutBoundary(t *testing.T) {
-	cases := []struct {
-		name          string
-		age           time.Duration
-		wantAbandoned bool
-	}{
-		{"before boundary", pendingRecoveryAfter - time.Second, false},
-		{"at boundary", pendingRecoveryAfter, true},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			f := newFixture(t)
-			resource := rdsInstance("dev-db")
-			resourceID := resource.ID()
-			f.pinnedStoppedGroup("dev-db", resource)
-			f.rds.Observations[resource.Ref] = model.Observation{State: model.StateRunning}
-			op := state.PendingOperation{
-				ID: "op-a", Action: model.ActionStop, Desired: model.DesiredStopped,
-				Observed: model.StateRunning, StartedAt: now.Add(-tc.age).Format(time.RFC3339),
-			}
-			require.NoError(t, f.deps.Store.BeginOperation(context.Background(), resourceID, op))
-
-			summary := runEmpty(t, f)
-
-			assert.Empty(t, f.rds.Stopped, "未完了操作の確認時に AWS 操作を再実行してはならない")
-			assert.Empty(t, summary.Actions)
-			status := f.db.Item("status#" + resourceID)
-			require.NotNil(t, status)
-			pendingID, ok := status["pending_operation_id"].(*types.AttributeValueMemberS)
-			require.True(t, ok)
-			if tc.wantAbandoned {
-				require.Len(t, summary.Errors, 1)
-				assert.Contains(t, summary.Errors[0].Error, "did not converge")
-				assert.Equal(t, "", pendingID.Value)
-				lastError, ok := status["last_error"].(*types.AttributeValueMemberS)
-				require.True(t, ok)
-				assert.Contains(t, lastError.Value, "did not converge")
-			} else {
-				assert.Empty(t, summary.Errors)
-				assert.Equal(t, "op-a", pendingID.Value)
-			}
-		})
-	}
-}
-
-// エラー記録用の PutStatus が失敗した場合も、Run は panic せず他のリソースの処理を継続しなければならない
-// その失敗はログへ記録するのみとする
-func TestErrorRecordingFailureDoesNotPanic(t *testing.T) {
-	f := newFixture(t)
-	f.pinnedStoppedGroup("a-broken", rdsInstance("a-broken"))
-	f.pinnedStoppedGroup("b-fine", rdsCluster("b-fine"))
-	f.rds.DescribeErr = fmt.Errorf("boom")
-	f.cluster.Observations["b-fine"] = model.Observation{State: model.StateRunning}
-	f.db.FailOn("update", "status#rds-instance#a-broken", fmt.Errorf("dynamodb also down"))
-	f.notifier.Err = fmt.Errorf("sns also down")
-
-	summary := runEmpty(t, f)
-
-	require.Len(t, summary.Errors, 1)
-	assert.Equal(t, "rds-instance#a-broken", summary.Errors[0].ResourceID)
-	assert.Len(t, f.cluster.Stopped, 1, "second resource must still be reconciled despite the first's reporting failing entirely")
-}
-
-func TestOneFailureDoesNotBreakOthers(t *testing.T) {
-	f := newFixture(t)
-	f.pinnedStoppedGroup("a-broken", rdsInstance("a-broken"))
-	f.pinnedStoppedGroup("b-fine", rdsCluster("b-fine"))
-	f.rds.DescribeErr = fmt.Errorf("boom")
-	f.cluster.Observations["b-fine"] = model.Observation{State: model.StateRunning}
-
-	summary := runEmpty(t, f)
-
-	require.Len(t, summary.Errors, 1)
-	assert.Equal(t, "rds-instance#a-broken", summary.Errors[0].ResourceID)
-	assert.Len(t, f.cluster.Stopped, 1, "second resource must still be reconciled")
-}
-
-func TestOverrideBeatsPinnedGroup(t *testing.T) {
-	f := newFixture(t)
-	f.pinnedStoppedGroup("dev-db", rdsInstance("dev-db"))
-	f.db.Seed(map[string]types.AttributeValue{
-		"pk": s("override#dev-db"), "desired": s(model.DesiredRunning),
-		"expires_at": n(int(now.Add(time.Hour).Unix())),
-	})
-	f.rds.Observations["dev-db"] = model.Observation{State: model.StateStopped}
-
-	runEmpty(t, f)
-
-	assert.Len(t, f.rds.Started, 1, "override running must start the stopped instance")
-}
-
-func TestOverrideAppliesToEveryResourceInGroup(t *testing.T) {
-	f := newFixture(t)
-	f.seedGroup("dev", model.ModePinned, model.DesiredStopped)
-	f.discoverer.ByTagValue["dev"] = []model.Resource{rdsInstance("dev-db"), ecsService("dev-cluster/api")}
-	f.db.Seed(map[string]types.AttributeValue{
-		"pk": s("override#dev"), "desired": s(model.DesiredRunning),
-		"expires_at": n(int(now.Add(time.Hour).Unix())),
-	})
-	f.rds.Observations["dev-db"] = model.Observation{State: model.StateStopped}
-	f.ecs.Observations["dev-cluster/api"] = model.Observation{State: model.StateStopped}
-
-	runEmpty(t, f)
-
-	assert.Equal(t, []string{"dev-db"}, f.rds.Started)
-	assert.Equal(t, []string{"dev-cluster/api"}, f.ecs.Started)
-}
-
-// disabled は override より優先度の高い停止である
-// disable は override# アイテムを削除しないため、pin → override → disable の順の操作により、disabled のグループに未失効の override が残る状態となる
-// この経路で reconciler が override を適用した場合、停止したグループが override の失効まで起動する
-func TestDisabledGroupIgnoresLiveOverride(t *testing.T) {
-	f := newFixture(t)
-	f.seedGroup("dev", model.ModeDisabled, "")
-	f.discoverer.ByTagValue["dev"] = []model.Resource{rdsInstance("dev-db")}
-	f.db.Seed(map[string]types.AttributeValue{
-		"pk": s("override#dev"), "desired": s(model.DesiredRunning),
-		"expires_at": n(int(now.Add(time.Hour).Unix())),
-	})
-	f.rds.Observations["dev-db"] = model.Observation{State: model.StateStopped}
-
-	summary := runEmpty(t, f)
-
-	assert.Empty(t, f.rds.Started, "disabled group must not start anything, even with a live override")
-	assert.Zero(t, f.discoverer.Calls(), "disabled group must never call Discover")
-	assert.Zero(t, summary.Reconciled)
-	assert.Empty(t, summary.Errors)
-}
-
-func TestStatusAttrsFromTargetArePersisted(t *testing.T) {
-	f := newFixture(t)
-	f.pinnedStoppedGroup("dev-api", ecsService("dev/api"))
-	f.ecs.Observations["dev/api"] = model.Observation{State: model.StateRunning}
-
-	runEmpty(t, f)
-
-	status := f.db.Item("status#ecs-service#dev/api")
-	require.NotNil(t, status, "status item not written")
-	assert.Equal(t, "running", status["observed_state"].(*types.AttributeValueMemberS).Value)
-	assert.Equal(t, "stop", status["last_action"].(*types.AttributeValueMemberS).Value)
-}
-
-// Stop の前に復元用の状態を先行して書き込むことはしない
-// ECS の起動時 desired count とスケーリングの上下限は、保存したステータスではなくリソース自身のタグから取得するためである
-// したがって Stop の失敗が残すのは、記録されたエラーのみでなければならない
-// last_action と observed_state はアクションの成功後にのみ書き込むため、残ってはならない
-func TestFailedStopRecordsOnlyTheError(t *testing.T) {
-	f := newFixture(t)
-	f.pinnedStoppedGroup("dev-api", ecsService("dev/api"))
-	f.ecs.Observations["dev/api"] = model.Observation{State: model.StateRunning}
-	f.ecs.StopErr = fmt.Errorf("boom: crashed mid-mutation")
-
-	summary := runEmpty(t, f)
-
-	require.Len(t, summary.Errors, 1)
-	assert.Empty(t, f.ecs.Stopped, "Stop must have failed, not succeeded")
-	status := f.db.Item("status#ecs-service#dev/api")
-	require.NotNil(t, status, "error must be recorded")
-	_, hasLastAction := status["last_action"]
-	assert.False(t, hasLastAction, "a failed stop must not record last_action")
-	_, hasObservedState := status["observed_state"]
-	assert.False(t, hasObservedState, "a failed stop must not record observed_state")
-}
-
-// 動的探索による設定の継承を検証する
-// pinned または schedule のグループのセレクタに新たに一致したリソースは、次の reconcile で操作の対象となる
-// グループとスケジュールの設定を変更せず、リソースへのタグ付与のみを行った場合が該当する
-func TestNewlyDiscoveredResourceInheritsGroupsExistingPinOnNextReconcile(t *testing.T) {
-	f := newFixture(t)
-	f.seedGroup("dev", model.ModePinned, model.DesiredStopped)
-	f.discoverer.ByTagValue["dev"] = []model.Resource{rdsInstance("dev-db")}
-	f.rds.Observations["dev-db"] = model.Observation{State: model.StateRunning}
-
-	runEmpty(t, f)
-	require.Len(t, f.rds.Stopped, 1, "first resource acted on")
-
-	// 2 つめのリソースが、pinned である同じグループのセレクタに一致する
-	// リソースへタグを付与した状態であり、グループ設定は変更していない
-	f.discoverer.ByTagValue["dev"] = []model.Resource{rdsInstance("dev-db"), ecsService("dev-cluster/api")}
-	f.ecs.Observations["dev-cluster/api"] = model.Observation{State: model.StateRunning}
-
-	runEmpty(t, f)
-
-	assert.Equal(t, []string{"dev-cluster/api"}, f.ecs.Stopped, "newly discovered resource must inherit the group's existing pin and be acted on immediately")
-}
-
-// グループ単位の失敗は、リソースごとではなく "group#<name>" のステータスへ 1 度だけ記録する
-// resolveGroup が失敗した時点で Discover は呼ばれもしないためである
-// 通知の重複排除はグループ単位でも同じように効く
-func TestGroupLevelErrorRecordedOnceNotPerResource(t *testing.T) {
-	f := newFixture(t)
-	f.seedGroup("dev", model.ModeSchedule, "") // start/stop の cron がないため schedule.ResolveDesired が失敗する
-
-	summary := runEmpty(t, f)
-	require.Len(t, summary.Errors, 1, "a group-level error must be recorded once, not per resource")
-	assert.Zero(t, summary.Reconciled)
-	assert.Equal(t, "dev", summary.Errors[0].Group)
-	assert.Empty(t, summary.Errors[0].ResourceID, "a group-level error has no single resource_id")
-	assert.Zero(t, f.discoverer.Calls(), "Discover must never be called once group resolution fails")
-	require.Len(t, f.notifier.Published, 1)
-
-	status := f.db.Item("status#group#dev")
-	require.NotNil(t, status, "group-level failure recorded under status#group#<name>")
-
-	runEmpty(t, f)
-	assert.Len(t, f.notifier.Published, 1, "repeated identical group-level error must not notify again")
-}
-
-// あるグループ配下のアイテム(ここでは override)が壊れていても、他のグループの reconcile を止めてはならない
-// 壊れたグループについては desired が確定できないので、推測して操作するのではなく必ず何もしない
-// 誤った向きへ倒すと、止めるべきでないものを止める・起こすべきでないものを起こすことになる
-// 失敗はグループ単位のエラーと同じ経路(status#group#<name>)へ記録し、オペレータに届ける
-func TestCorruptGroupRecordIsRecordedAndDoesNotTouchItsResources(t *testing.T) {
-	f := newFixture(t)
-	f.pinnedStoppedGroup("broken", rdsInstance("broken-db"))
-	f.db.Seed(map[string]types.AttributeValue{
-		"pk": s("override#broken"), "desired": s(model.DesiredRunning),
-		"expires_at": s("not-a-number"), // 数値でなければならず、UnmarshalMap が失敗する
-	})
-	f.rds.Observations["broken-db"] = model.Observation{State: model.StateRunning}
-	f.pinnedStoppedGroup("fine", rdsInstance("fine-db"))
-	f.rds.Observations["fine-db"] = model.Observation{State: model.StateRunning}
-
-	summary := runEmpty(t, f)
-
-	require.Len(t, summary.Errors, 1)
-	assert.Equal(t, "broken", summary.Errors[0].Group)
-	assert.Empty(t, summary.Errors[0].ResourceID, "破損はグループ単位の失敗であってリソースの問題ではない")
-	assert.Equal(t, []string{"fine-db"}, f.rds.Stopped, "壊れたグループのリソースには触れず、他のグループは通常どおり収束する")
-	assert.NotNil(t, f.db.Item("status#group#broken"), "破損は status#group#<name> へ記録される")
-	assert.Nil(t, f.db.Item("status#rds-instance#broken-db"), "リソース側のステータスは書かれない")
-
-	// 破損が直るまで毎サイクル同じエラーが出続けるので、通知は 1 度きりでなければならない
-	runEmpty(t, f)
-	var notified int
-	for _, p := range f.notifier.Published {
-		if strings.Contains(p.Subject, "broken") {
-			notified++
-		}
-	}
-	assert.Equal(t, 1, notified, "repeated identical corruption must not notify again")
-}
-
-// 孤立データは警告を伴ってスキップしなければならない
-// 対応する group# アイテムを持たない override などであり、削除の中断により生じる
-// 処理の中断も、既定値による解決も行ってはならない
-func TestOrphanedGroupDataIsSkippedWithWarning(t *testing.T) {
-	f := newFixture(t)
-	var logBuf bytes.Buffer
-	f.deps.Log = slog.New(slog.NewTextHandler(&logBuf, nil))
-	f.db.Seed(map[string]types.AttributeValue{
-		"pk": s("override#ghost"), "desired": s(model.DesiredRunning),
-		"expires_at": n(int(now.Add(time.Hour).Unix())),
-	})
-
-	summary := runEmpty(t, f)
-
-	assert.Empty(t, summary.Actions)
-	assert.Empty(t, summary.Errors)
-	assert.Contains(t, logBuf.String(), "orphaned-group-data")
-}
-
-func loadFixture(t *testing.T, name string) json.RawMessage {
-	t.Helper()
-	raw, err := os.ReadFile(filepath.Join("testdata", name))
-	require.NoError(t, err)
-	return raw
-}
-
-// RDS イベント時に単一リソースへ絞る reconcile は、メンバー登録とともに廃止した
-// 絞り込みに使える O(1) の リソース -> グループ 逆引きがもう存在しないためである
-// 現在は RDS かどうかを問わず、すべてのイベントが全グループの完全な reconcile を起動する
-func TestRdsEventTriggersFullReconcile(t *testing.T) {
-	f := newFixture(t)
-	f.pinnedStoppedGroup("dev-aurora", rdsCluster("dev-aurora"))
-	f.pinnedStoppedGroup("other-db", rdsInstance("other-db"))
-	f.cluster.Observations["dev-aurora"] = model.Observation{State: model.StateRunning}
-	f.rds.Observations["other-db"] = model.Observation{State: model.StateRunning}
-
-	summary, err := Run(context.Background(), loadFixture(t, "rds-event-0151-cluster-started.json"), f.deps, now)
-	require.NoError(t, err)
-
 	assert.Equal(t, 2, summary.Reconciled)
-	assert.Len(t, f.cluster.Stopped, 1)
-	assert.Len(t, f.rds.Stopped, 1, "an RDS event must reconcile every group, not just the resource it names")
+	assert.ElementsMatch(t, []string{"a", "b"}, target.Stopped)
+	assert.Len(t, summary.Actions, 2)
+	assert.Empty(t, summary.Errors)
 }
 
-// 既知かどうかを問わず、すべてのイベントソースで全体 reconcile を行う
-// 単一リソースへ絞り込む経路は存在しない
-func TestEventSourcePresentStillFullReconciles(t *testing.T) {
-	f := newFixture(t)
-	var logBuf bytes.Buffer
-	f.deps.Log = slog.New(slog.NewTextHandler(&logBuf, nil))
-	f.pinnedStoppedGroup("db1", rdsInstance("db1"))
-	f.rds.Observations["db1"] = model.Observation{State: model.StateRunning}
+func TestDiscoveryFailureAbortsBeforeDescribe(t *testing.T) {
+	store := &memoryStore{rows: []state.GroupRow{{Name: "dev", Group: model.GroupSpec{Name: "dev", Override: model.OverrideStopped}}}}
+	discoverer := porttest.NewDiscoverer()
+	discoverer.Err = errors.New("tagging unavailable")
+	target := porttest.NewTarget(model.TypeRdsInstance)
 
-	summary, err := Run(context.Background(), json.RawMessage(`{"source":"aws.partner/whatever"}`), f.deps, now)
+	_, err := Run(context.Background(), nil, testDeps(store, discoverer, target), time.Now())
+	assert.ErrorContains(t, err, "tagging unavailable")
+	assert.Empty(t, target.Described)
+	assert.Empty(t, target.Stopped)
+	assert.Empty(t, target.Started)
+}
+
+func TestConfigurationFailureAbortsBeforeDiscovery(t *testing.T) {
+	store := &memoryStore{err: errors.New("query unavailable")}
+	discoverer := porttest.NewDiscoverer()
+	target := porttest.NewTarget(model.TypeRdsInstance)
+
+	_, err := Run(context.Background(), nil, testDeps(store, discoverer, target), time.Now())
+
+	assert.ErrorContains(t, err, "query unavailable")
+	assert.Zero(t, discoverer.Calls())
+	assert.Empty(t, target.Described)
+}
+
+func TestResourceErrorsDoNotStopOtherResources(t *testing.T) {
+	store := &memoryStore{rows: []state.GroupRow{{Name: "dev", Group: model.GroupSpec{Name: "dev", Override: model.OverrideStopped}}}}
+	discoverer := porttest.NewDiscoverer()
+	discoverer.Resources = map[string]model.Resource{
+		"bad":  taggedResource("bad", "bad", "unknown"),
+		"good": taggedResource("good", "good", "dev"),
+	}
+	target := porttest.NewTarget(model.TypeRdsInstance)
+	target.Observations["good"] = model.Observation{State: model.StateRunning}
+
+	summary, err := Run(context.Background(), nil, testDeps(store, discoverer, target), time.Now())
 	require.NoError(t, err)
-	assert.Equal(t, 1, summary.Reconciled)
-	assert.Contains(t, logBuf.String(), "event-received")
+	assert.Equal(t, []string{"good"}, target.Stopped)
+	assert.Len(t, summary.Actions, 1)
+	assert.Len(t, summary.Errors, 1)
 }
 
-// セレクタ重複の防護策として、複数グループのセレクタにマッチしたリソースは名前順で最初のグループが取得する
-// 取得できなかったグループは、二重の管理を行わず、リソース単位のエラーを受け取る
-func TestSelectorOverlapFirstGroupWinsBySortedName(t *testing.T) {
-	f := newFixture(t)
-	f.seedGroup("a-first", model.ModePinned, model.DesiredStopped)
-	f.seedGroup("z-second", model.ModePinned, model.DesiredRunning)
-	shared := rdsInstance("shared-db")
-	f.discoverer.ByTagValue["a-first"] = []model.Resource{shared}
-	f.discoverer.ByTagValue["z-second"] = []model.Resource{shared}
-	f.rds.Observations["shared-db"] = model.Observation{State: model.StateRunning}
+func TestActionFailureDoesNotStopLaterResourceOrNotify(t *testing.T) {
+	store := &memoryStore{rows: []state.GroupRow{{Name: "dev", Group: model.GroupSpec{Name: "dev", Override: model.OverrideStopped}}}}
+	discoverer := porttest.NewDiscoverer()
+	discoverer.Resources = map[string]model.Resource{
+		"a": taggedResource("a", "a", "dev"),
+		"b": taggedResource("b", "b", "dev"),
+	}
+	target := porttest.NewTarget(model.TypeRdsInstance)
+	target.Observations["a"] = model.Observation{State: model.StateRunning}
+	target.Observations["b"] = model.Observation{State: model.StateRunning}
+	target.StopErrs["a"] = errors.New("cannot stop a")
+	deps := testDeps(store, discoverer, target)
+	notifier := deps.Notifier.(*porttest.Notifier)
 
-	summary := runEmpty(t, f)
+	summary, err := Run(context.Background(), nil, deps, time.Now())
 
-	assert.Equal(t, []string{"shared-db"}, f.rds.Stopped, "the first group (a-first, pinned stopped) must act on the shared resource")
-	assert.Equal(t, 1, summary.Reconciled, "重複セレクタの負け側を同じリソースとして重ねて数えてはならない")
-	require.Len(t, summary.Errors, 1)
-	assert.Equal(t, "z-second", summary.Errors[0].Group, "the losing group must get the per-resource error")
-	assert.Equal(t, "rds-instance#shared-db", summary.Errors[0].ResourceID)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"b"}, target.Stopped)
+	assert.Len(t, summary.Errors, 1)
+	assert.Len(t, summary.Actions, 1)
+	assert.Len(t, notifier.Published, 1)
 }
 
-// 所有グループが Status の一括取得前に失敗した場合、重複セレクタの負け側が返す結果行だけを根拠に処理件数へ加えてはならない。
-func TestOverlapLoserDoesNotCountResourceWhenOwnerCouldNotProcessIt(t *testing.T) {
-	f := newFixture(t)
-	f.seedGroup("a-first", model.ModePinned, model.DesiredStopped)
-	f.seedGroup("z-second", model.ModePinned, model.DesiredRunning)
-	shared := rdsInstance("shared-db")
-	f.discoverer.ByTagValue["a-first"] = []model.Resource{shared}
-	f.discoverer.ByTagValue["z-second"] = []model.Resource{shared}
-	f.db.FailOnNth("batch-get", "", 2, fmt.Errorf("status unavailable"))
+func TestInvalidAndDisabledGroupsDoNotDescribe(t *testing.T) {
+	store := &memoryStore{rows: []state.GroupRow{
+		{Name: "bad", Group: model.GroupSpec{Name: "bad"}},
+		{Name: "off", Group: model.GroupSpec{Name: "off", Override: model.OverrideDisabled}},
+	}}
+	discoverer := porttest.NewDiscoverer()
+	discoverer.Resources = map[string]model.Resource{
+		"bad": taggedResource("bad", "bad", "bad"),
+		"off": taggedResource("off", "off", "off"),
+	}
+	target := porttest.NewTarget(model.TypeRdsInstance)
 
-	summary := runEmpty(t, f)
-
+	summary, err := Run(context.Background(), nil, testDeps(store, discoverer, target), time.Now())
+	require.NoError(t, err)
 	assert.Zero(t, summary.Reconciled)
-	assert.Empty(t, f.rds.Stopped)
-	assert.Empty(t, f.rds.Started)
-	require.Len(t, summary.Errors, 2)
+	assert.Len(t, summary.Errors, 2)
+	assert.Empty(t, target.Described)
+	assert.Empty(t, target.Stopped)
 }
 
-// セレクタ重複のエラーは、リソースが共有する status# ではなく、報告する側のグループの status#group# に記録しなければならない
-// 共有アイテムへ書いた場合、そのリソースを所有するグループの clearRecoveredError と同じアイテムを毎サイクル更新することになる
-func TestSelectorOverlapRecordsOnGroupStatusNotOnSharedResource(t *testing.T) {
-	f := newFixture(t)
-	f.seedGroup("a-first", model.ModePinned, model.DesiredStopped)
-	f.seedGroup("z-second", model.ModePinned, model.DesiredRunning)
-	shared := rdsInstance("shared-db")
-	f.discoverer.ByTagValue["a-first"] = []model.Resource{shared}
-	f.discoverer.ByTagValue["z-second"] = []model.Resource{shared}
-	f.rds.Observations["shared-db"] = model.Observation{State: model.StateStopped} // a-first から見て収束済み
+func TestLaterCycleConvergesToLatestSnapshot(t *testing.T) {
+	store := &memoryStore{rows: []state.GroupRow{{Name: "dev", Group: model.GroupSpec{Name: "dev", Override: model.OverrideStopped}}}}
+	discoverer := porttest.NewDiscoverer()
+	discoverer.Resources = map[string]model.Resource{"db": taggedResource("db", "db", "dev")}
+	target := porttest.NewTarget(model.TypeRdsInstance)
+	target.Observations["db"] = model.Observation{State: model.StateRunning}
+	deps := testDeps(store, discoverer, target)
 
-	runEmpty(t, f)
-
-	assert.Nil(t, f.db.Item("status#rds-instance#shared-db"),
-		"the shared resource's status must stay owned by the group that claimed it")
-	groupStatus := f.db.Item("status#group#z-second")
-	require.NotNil(t, groupStatus, "the losing group must record the overlap on its own status")
-	assert.Contains(t, groupStatus["last_error"].(*types.AttributeValueMemberS).Value, "shared-db")
+	_, err := Run(context.Background(), nil, deps, time.Now())
+	require.NoError(t, err)
+	store.rows[0].Group.Override = model.OverrideRunning
+	target.Observations["db"] = model.Observation{State: model.StateStopped}
+	_, err = Run(context.Background(), nil, deps, time.Now())
+	require.NoError(t, err)
+	assert.Equal(t, []string{"db"}, target.Stopped)
+	assert.Equal(t, []string{"db"}, target.Started)
 }
 
-// セレクタ重複が続いている間、通知は最初の 1 回だけでなければならない
-// 記録先が共有の status# だった頃は、所有グループのクリアと報告グループの記録が毎サイクル交互に走り、「recovered」と「error」を 5 分おきに永久に鳴らし続けていた
-func TestSelectorOverlapDoesNotFlapNotifications(t *testing.T) {
-	f := newFixture(t)
-	f.seedGroup("a-first", model.ModePinned, model.DesiredStopped)
-	f.seedGroup("z-second", model.ModePinned, model.DesiredRunning)
-	shared := rdsInstance("shared-db")
-	f.discoverer.ByTagValue["a-first"] = []model.Resource{shared}
-	f.discoverer.ByTagValue["z-second"] = []model.Resource{shared}
-	f.rds.Observations["shared-db"] = model.Observation{State: model.StateStopped}
+func TestSuccessfulActionNotificationHasSlimPayload(t *testing.T) {
+	store := &memoryStore{rows: []state.GroupRow{{Name: "dev", Group: model.GroupSpec{Name: "dev", Override: model.OverrideRunning}}}}
+	discoverer := porttest.NewDiscoverer()
+	discoverer.Resources = map[string]model.Resource{"db": taggedResource("db", "db", "dev")}
+	target := porttest.NewTarget(model.TypeRdsInstance)
+	target.Observations["db"] = model.Observation{State: model.StateStopped}
+	deps := testDeps(store, discoverer, target)
+	notifier := deps.Notifier.(*porttest.Notifier)
 
-	runEmpty(t, f)
-	require.Len(t, f.notifier.Published, 1, "the overlap must be reported once")
-	assert.Contains(t, f.notifier.Published[0].Subject, "error: z-second")
-
-	runEmpty(t, f) // 何も変わっていない 2 サイクル目
-	runEmpty(t, f)
-
-	assert.Len(t, f.notifier.Published, 1, "an unchanged overlap must never notify again")
+	_, err := Run(context.Background(), nil, deps, time.Unix(100, 0))
+	require.NoError(t, err)
+	require.Len(t, notifier.Published, 1)
+	payload := notifier.Published[0].Payload
+	assert.ElementsMatch(t, []string{"group", "resource_id", "action", "desired", "at"}, mapKeys(payload))
 }
 
-// 遷移中を最初に観測したサイクルで transitioning_since を 1 回だけ書く
-// 遷移中のリソースは毎サイクル skip されるので、無条件に書くと定常状態の書き込みを避けた設計が崩れる
-func TestTransitioningRecordsSinceOnceThenClearsOnConvergence(t *testing.T) {
-	f := newFixture(t)
-	f.pinnedStoppedGroup("dev-db", rdsInstance("dev-db"))
-	f.rds.Observations["dev-db"] = model.Observation{State: model.StateTransitioning, Detail: "stopping"}
+func TestActionNotificationIsAttemptedAtMostTwice(t *testing.T) {
+	store := &memoryStore{rows: []state.GroupRow{{Name: "dev", Group: model.GroupSpec{Name: "dev", Override: model.OverrideRunning}}}}
+	discoverer := porttest.NewDiscoverer()
+	discoverer.Resources = map[string]model.Resource{"db": taggedResource("db", "db", "dev")}
+	target := porttest.NewTarget(model.TypeRdsInstance)
+	target.Observations["db"] = model.Observation{State: model.StateStopped}
+	deps := testDeps(store, discoverer, target)
+	notifier := deps.Notifier.(*porttest.Notifier)
+	notifier.Err = errors.New("publish failed")
 
-	require.NoError(t, runAt(t, f, now))
-	since := statusAttr(t, f, "status#rds-instance#dev-db", "transitioning_since")
-	assert.Equal(t, now.Format(time.RFC3339), since)
+	summary, err := Run(context.Background(), nil, deps, time.Now())
 
-	require.NoError(t, runAt(t, f, now.Add(10*time.Minute))) // まだ遷移中
-	assert.Equal(t, since, statusAttr(t, f, "status#rds-instance#dev-db", "transitioning_since"),
-		"an already-recorded transition must not be re-stamped every cycle")
-
-	f.rds.Observations["dev-db"] = model.Observation{State: model.StateStopped}
-	require.NoError(t, runAt(t, f, now.Add(20*time.Minute)))
-	assert.Empty(t, statusAttr(t, f, "status#rds-instance#dev-db", "transitioning_since"),
-		"reaching a settled state must clear the transition marker")
-	assert.Empty(t, f.notifier.Published, "a stuck transition is surfaced by doctor, never by notification")
-}
-
-// transitioning_since の記録と消去は、いずれもベストエフォートである
-// これは監査のための情報であり収束の判断には用いないため、書き込みの失敗を理由にそのサイクルをエラーとしてはならず、他のリソースの処理も止めてはならない
-// 失敗の理由は必ずログへ記録する
-func TestTransitioningMarkerFailuresAreLoggedNotSurfaced(t *testing.T) {
-	t.Run("mark", func(t *testing.T) {
-		f := newFixture(t)
-		var logBuf bytes.Buffer
-		f.deps.Log = slog.New(slog.NewTextHandler(&logBuf, nil))
-		f.pinnedStoppedGroup("dev-db", rdsInstance("dev-db"))
-		f.pinnedStoppedGroup("b-fine", rdsCluster("b-fine"))
-		f.rds.Observations["dev-db"] = model.Observation{State: model.StateTransitioning, Detail: "stopping"}
-		f.cluster.Observations["b-fine"] = model.Observation{State: model.StateRunning}
-		f.db.FailOn("update", "status#rds-instance#dev-db", fmt.Errorf("dynamodb unavailable"))
-
-		summary := runEmpty(t, f)
-
-		assert.Empty(t, summary.Errors, "監査情報の書き込み失敗を収束の失敗にしてはならない")
-		assert.Contains(t, logBuf.String(), "transitioning-mark-failed")
-		assert.Len(t, f.cluster.Stopped, 1, "他のリソースの reconcile は続く")
-	})
-
-	t.Run("clear", func(t *testing.T) {
-		f := newFixture(t)
-		var logBuf bytes.Buffer
-		f.deps.Log = slog.New(slog.NewTextHandler(&logBuf, nil))
-		f.pinnedStoppedGroup("dev-db", rdsInstance("dev-db"))
-		f.rds.Observations["dev-db"] = model.Observation{State: model.StateTransitioning}
-		require.NoError(t, runAt(t, f, now)) // transitioning_since を残す
-
-		f.rds.Observations["dev-db"] = model.Observation{State: model.StateStopped} // desired=stopped に収束
-		f.db.FailOn("update", "status#rds-instance#dev-db", fmt.Errorf("dynamodb unavailable"))
-
-		summary := runEmpty(t, f)
-
-		assert.Empty(t, summary.Errors)
-		assert.Contains(t, logBuf.String(), "transitioning-clear-failed")
-	})
-}
-
-// 探索できたリソースの種別に対応する Target が結線されていない状態は、結線側の不備である
-// エラーを記録せずにスキップした場合、そのリソースは収束せず、検知の経路も存在しない
-// リソース単位のエラーとして記録し、他のリソースは通常どおり処理する
-func TestUnknownResourceTypeIsRecordedPerResource(t *testing.T) {
-	f := newFixture(t)
-	f.seedGroup("dev", model.ModePinned, model.DesiredStopped)
-	f.discoverer.ByTagValue["dev"] = []model.Resource{
-		{Type: "sqs-queue", Ref: "unwired"}, // Deps.Targets にない種別
-		rdsInstance("dev-db"),
-	}
-	f.rds.Observations["dev-db"] = model.Observation{State: model.StateRunning}
-
-	summary := runEmpty(t, f)
-
-	require.Len(t, summary.Errors, 1)
-	assert.Equal(t, "sqs-queue#unwired", summary.Errors[0].ResourceID)
-	assert.Contains(t, summary.Errors[0].Error, `no target for type "sqs-queue"`)
-	assert.Equal(t, []string{"dev-db"}, f.rds.Stopped, "結線漏れが同じグループの他のリソースを巻き込んではならない")
-}
-
-// 名前順で先のグループを探索できない場合、後続グループのリソース所有権も確定できない。
-// 後続グループが返したリソースを操作せず、両方のグループ Status に原因を記録する。
-func TestEarlierDiscoverFailureBlocksLaterGroups(t *testing.T) {
-	f := newFixture(t)
-	f.seedGroup("dev", model.ModePinned, model.DesiredStopped)
-	f.discoverer.ErrByTagValue["dev"] = fmt.Errorf("AccessDenied")
-	f.pinnedStoppedGroup("fine", rdsInstance("fine-db"))
-	f.rds.Observations["fine-db"] = model.Observation{State: model.StateRunning}
-
-	summary := runEmpty(t, f)
-
-	require.Len(t, summary.Errors, 2)
-	assert.Zero(t, summary.Reconciled)
-	byGroup := map[string]Result{}
-	for _, result := range summary.Errors {
-		byGroup[result.Group] = result
-	}
-	assert.Empty(t, byGroup["dev"].ResourceID)
-	assert.Contains(t, byGroup["dev"].Error, "AccessDenied")
-	assert.Contains(t, byGroup["fine"].Error, `discovery failed for earlier group "dev"`)
-	assert.NotNil(t, f.db.Item("status#group#dev"))
-	assert.NotNil(t, f.db.Item("status#group#fine"))
-	assert.Empty(t, f.rds.Stopped, "所有者が不明なリソースを後続グループの設定で操作してはならない")
-}
-
-// 名前順で後のグループの探索失敗は、先に所有権を得るグループの判定へ影響しない。
-func TestLaterDiscoverFailureDoesNotBlockEarlierOwner(t *testing.T) {
-	f := newFixture(t)
-	f.pinnedStoppedGroup("a-fine", rdsInstance("fine-db"))
-	f.rds.Observations["fine-db"] = model.Observation{State: model.StateRunning}
-	f.seedGroup("z-broken", model.ModePinned, model.DesiredStopped)
-	f.discoverer.ErrByTagValue["z-broken"] = fmt.Errorf("AccessDenied")
-
-	summary := runEmpty(t, f)
-
-	require.Len(t, summary.Errors, 1)
-	assert.Equal(t, 1, summary.Reconciled)
-	assert.Equal(t, "z-broken", summary.Errors[0].Group)
-	assert.Equal(t, []string{"fine-db"}, f.rds.Stopped)
-}
-
-// 復旧通知の Publish が失敗しても、last_error はすでに消えている
-// この通知は「直りました」と伝えるだけのものなので、送れなかったことを理由に直っていない状態へ巻き戻したり、そのサイクルをエラーにしたりしてはならない
-// 次のサイクルは last_error が空なので復旧通知を再送しない(重複排除の代償として受け入れる)
-func TestRecoveredNotifyFailureLeavesErrorCleared(t *testing.T) {
-	f := newFixture(t)
-	var logBuf bytes.Buffer
-	f.deps.Log = slog.New(slog.NewTextHandler(&logBuf, nil))
-	f.pinnedStoppedGroup("dev-db", rdsInstance("dev-db"))
-	f.rds.DescribeErr = fmt.Errorf("transient failure")
-	runEmpty(t, f) // last_error を残す
-
-	f.rds.DescribeErr = nil
-	f.rds.Observations["dev-db"] = model.Observation{State: model.StateStopped} // desired=stopped に収束
-	f.notifier.Err = fmt.Errorf("sns down")
-
-	summary := runEmpty(t, f)
-
-	assert.Empty(t, summary.Errors, "通知が送れないことは収束の失敗ではない")
-	assert.Contains(t, logBuf.String(), "recovery-notify-failed")
-	assert.Equal(t, "", statusAttr(t, f, "status#rds-instance#dev-db", "last_error"),
-		"PutStatus は成功しているので last_error は消えたままでなければならない")
-}
-
-// グループ Status は reconcile の出力であり、その破損によって有効な設定の適用を停止してはならない。
-// 破損はログと doctor に委ね、リソース操作を継続する。
-func TestMalformedGroupStatusDoesNotBlockResources(t *testing.T) {
-	f := newFixture(t)
-	f.pinnedStoppedGroup("dev", rdsInstance("dev-db"))
-	f.rds.Observations["dev-db"] = model.Observation{State: model.StateRunning}
-	f.db.Seed(map[string]types.AttributeValue{
-		"pk": s("status#group#dev"), "last_action": &types.AttributeValueMemberBOOL{Value: true},
-	})
-
-	summary := runEmpty(t, f)
-
+	require.NoError(t, err)
+	assert.Len(t, summary.Actions, 1)
 	assert.Empty(t, summary.Errors)
-	assert.Equal(t, []string{"dev-db"}, f.rds.Stopped)
-	require.Len(t, summary.Actions, 1)
-	assert.Equal(t, model.ActionStop, summary.Actions[0].Action)
+	assert.Len(t, notifier.Published, 2)
 }
 
-// 監査属性だけが壊れたリソース Status では、読めた pending 属性に基づいて安全性を判定できる。
-// 監査属性の破損は AWS 操作を停止させない。
-func TestMalformedAuditStatusDoesNotBlockResource(t *testing.T) {
-	f := newFixture(t)
-	f.pinnedStoppedGroup("dev", rdsInstance("dev-db"))
-	f.rds.Observations["dev-db"] = model.Observation{State: model.StateRunning}
-	f.db.Seed(map[string]types.AttributeValue{
-		"pk": s("status#rds-instance#dev-db"), "last_action": &types.AttributeValueMemberBOOL{Value: true},
-	})
-
-	summary := runEmpty(t, f)
-
-	assert.Empty(t, summary.Errors)
-	assert.Equal(t, []string{"dev-db"}, f.rds.Stopped)
-}
-
-// pending 属性を復号できない場合、AWS 操作が実行済みかを判断できない。
-// 同じ操作の再送を避けるため、リソースを fail-closed とする。
-func TestMalformedPendingStatusBlocksResource(t *testing.T) {
-	f := newFixture(t)
-	f.pinnedStoppedGroup("dev", rdsInstance("dev-db"))
-	f.rds.Observations["dev-db"] = model.Observation{State: model.StateRunning}
-	f.db.Seed(map[string]types.AttributeValue{
-		"pk": s("status#rds-instance#dev-db"), "pending_operation_id": &types.AttributeValueMemberBOOL{Value: true},
-	})
-
-	summary := runEmpty(t, f)
-
-	require.Len(t, summary.Errors, 1)
-	assert.Contains(t, summary.Errors[0].Error, "pending_operation_id")
-	assert.Empty(t, f.rds.Stopped)
-}
-
-// 起動が成立しない失敗は、空の Summary による成功ではなく Run のエラーとする
-// イベントの読み取り失敗とテーブルの読み取り失敗が該当する
-// Lambda の呼び出しを失敗させ、再試行とアラームの対象とするためである
-func TestRunAbortsOnUnusableInput(t *testing.T) {
-	t.Run("malformed event", func(t *testing.T) {
-		f := newFixture(t)
-
-		_, err := Run(context.Background(), json.RawMessage(`{not json`), f.deps, now)
-
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "unmarshal event")
-		assert.Zero(t, f.discoverer.Calls(), "イベントが読めない時点で何も収束させてはならない")
-	})
-
-	t.Run("query failure", func(t *testing.T) {
-		f := newFixture(t)
-		f.pinnedStoppedGroup("dev-db", rdsInstance("dev-db"))
-		f.db.FailOn("query", "", fmt.Errorf("dynamodb unavailable"))
-
-		_, err := Run(context.Background(), json.RawMessage(`{}`), f.deps, now)
-
-		require.Error(t, err)
-		assert.Empty(t, f.rds.Stopped, "設定が読めない状態で何かを操作してはならない")
-	})
-}
-
-func runAt(t *testing.T, f *fixture, at time.Time) error {
-	t.Helper()
-	_, err := Run(context.Background(), json.RawMessage(`{}`), f.deps, at)
-	return err
-}
-
-func statusAttr(t *testing.T, f *fixture, pk, attr string) string {
-	t.Helper()
-	item := f.db.Item(pk)
-	require.NotNil(t, item, "status item %s not written", pk)
-	v, ok := item[attr]
-	if !ok {
-		return ""
+func mapKeys(values map[string]any) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
 	}
-	return v.(*types.AttributeValueMemberS).Value
+	return keys
 }

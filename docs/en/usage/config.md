@@ -1,42 +1,19 @@
-# Environment variable reference
+# Runtime configuration
 
-This document specifies the environment variables read by the reconciler, the web console, and `cheapskate-cli`.
+The executables use the following environment variables.
 
-## Reconciler
+| Variable | Required | Default | Purpose |
+| --- | --- | --- | --- |
+| `STATE_TABLE_NAME` | reconciler and web console | — | DynamoDB table name |
+| `DEFAULT_TIMEZONE` | no | `UTC` | IANA time zone for all schedules and web dates |
+| `NOTIFICATION_TOPIC_ARN` | no | empty | Destination for successful-action notifications |
+| `METRICS_ENABLED` | no | `false` | Emit custom metrics when `true` |
+| `METRICS_NAMESPACE` | no | `cheapskate` | Custom metric namespace |
+| `PORT` | web-console image only | `8000` | HTTP listen port used with Lambda Web Adapter |
+| `BASE_PATH` | web console only | empty | URL path prefix |
 
-The variables it reads are given below. It reads no others.
+`DEFAULT_TIMEZONE` is validated at reconciler and web-console startup with the Go time-zone database. An invalid value prevents startup. The CLI reads the same variable and also defaults to UTC.
 
-| Variable | Required | Meaning |
-| --- | --- | --- |
-| `STATE_TABLE_NAME` | yes | DynamoDB table name |
-| `NOTIFICATION_TOPIC_ARN` | no | SNS topic ARN. Empty or unset disables notifications |
-| `DEFAULT_TIMEZONE` | no | The IANA timezone used for cron evaluation (default `UTC`) |
-| `STATUS_RETENTION_DAYS` | no | Days from the last status update until DynamoDB TTL deletion (default `30`). Must be a positive integer |
-| `METRICS_ENABLED` | no | Whether to emit CloudWatch custom metrics (default `false`). A boolean (`true`/`false`, `1`/`0`) |
-| `METRICS_NAMESPACE` | no | The namespace for the CloudWatch metrics (default `cheapskate`) |
+The CLI table name can be supplied with `-table`; otherwise it reads `CHEAPSKATE_TABLE` and then `STATE_TABLE_NAME`.
 
-An invalid `STATUS_RETENTION_DAYS` or `METRICS_ENABLED` fails startup rather than falling back to the default. `METRICS_NAMESPACE` yields the default `cheapskate` whether it is unset or empty, so use `METRICS_ENABLED` to turn metrics off.
-
-Disabling metrics loses the trends in failure and action counts. Per-resource and per-group failures do not appear in the built-in Lambda `Errors` metric, so provide SNS or status/log monitoring separately. While disabled, one `metrics-disabled` log line is written per cold start.
-
-## Web console
-
-The variables it reads are given below.
-
-| Variable | Required | Meaning |
-| --- | --- | --- |
-| `STATE_TABLE_NAME` | yes | DynamoDB table name (`CHEAPSKATE_TABLE` also works) |
-| `DEFAULT_TIMEZONE` | no | The IANA timezone used to display crons (defaults to the server's local time) |
-| `BASE_PATH` | no | The base path including the API Gateway stage name (for example `/console`). Unset means the root |
-| `PORT` | no | The listen port (bound to `127.0.0.1`). Unset means the value of the `-addr` flag (default `127.0.0.1:8080`) |
-
-> [!NOTE]
-> `PORT` is already set in the container image and is not something to specify when deploying to Lambda.
-
-## cheapskate-cli
-
-The variables it reads are given below.
-
-| Variable | Required | Meaning |
-| --- | --- | --- |
-| `CHEAPSKATE_TABLE` | no | DynamoDB table name (the `-table` flag works too) |
+An invalid `METRICS_ENABLED` value prevents reconciler startup. Empty `METRICS_NAMESPACE` selects `cheapskate`.

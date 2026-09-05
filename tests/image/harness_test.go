@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -60,8 +61,55 @@ func emulatorEnv(t *testing.T, table string) map[string]string {
 		"AWS_ACCESS_KEY_ID":     os.Getenv("AWS_ACCESS_KEY_ID"),
 		"AWS_SECRET_ACCESS_KEY": os.Getenv("AWS_SECRET_ACCESS_KEY"),
 		"AWS_REGION":            os.Getenv("AWS_REGION"),
-		"DEFAULT_TIMEZONE":      "Asia/Tokyo",
 	}
+}
+
+// 不正なタイムゾーンを渡したイメージが、アプリケーションを開始せずに理由を記録することを確認する
+func assertRejectsInvalidTimezone(t *testing.T, image string, env map[string]string) {
+	t.Helper()
+	env["DEFAULT_TIMEZONE"] = "Invalid/Timezone"
+	ctx := context.Background()
+	c, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: testcontainers.ContainerRequest{
+			Image:        image,
+			ExposedPorts: []string{"8080/tcp"},
+			Entrypoint:   []string{"/usr/local/bin/aws-lambda-rie"},
+			Cmd:          []string{"/var/runtime/bootstrap"},
+			Env:          env,
+			WaitingFor:   wait.ForListeningPort("8080/tcp").WithStartupTimeout(30 * time.Second),
+		},
+		Started: true,
+	})
+	require.NoError(t, err, "start image with invalid DEFAULT_TIMEZONE")
+	t.Cleanup(func() { _ = c.Terminate(context.Background()) })
+	host, err := c.Host(ctx)
+	require.NoError(t, err)
+	port, err := c.MappedPort(ctx, "8080/tcp")
+	require.NoError(t, err)
+	url := "http://" + host + ":" + port.Port() + invokePath
+	client := &http.Client{Timeout: 5 * time.Second}
+	if resp, invokeErr := client.Post(url, "application/json", bytes.NewReader([]byte("{}"))); invokeErr == nil {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+	}
+
+	deadline := time.Now().Add(15 * time.Second)
+	var logs string
+	for time.Now().Before(deadline) {
+		stream, logErr := c.Logs(ctx)
+		if logErr == nil {
+			body, readErr := io.ReadAll(stream)
+			stream.Close()
+			if readErr == nil {
+				logs = string(body)
+				if strings.Contains(logs, "invalid DEFAULT_TIMEZONE") {
+					return
+				}
+			}
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	t.Fatalf("image did not reject an invalid DEFAULT_TIMEZONE; logs:\n%s", logs)
 }
 
 // RIE 上で動作するイメージと、その呼び出し先

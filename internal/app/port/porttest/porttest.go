@@ -23,61 +23,60 @@ var (
 )
 
 // port.Discoverer のテストダブル
-// Resources と Err は、すべてのセレクタに対する応答となる
-// ByTagValue と ErrByTagValue は、セレクタのタグ値をキーとしてグループ単位でそれらを上書きする
-// フィクスチャのグループはタグ値をグループ名と一致させるため、ByTagValue のキーはグループ名に対応する
-// Selectors は渡されたセレクタを呼び出し順に記録し、探索されたグループの検証に用いる
+// Resources は固定タグで検出するリソースを表し、Err は検出全体の失敗を表す
 type Discoverer struct {
-	Resources     []model.Resource
-	Err           error
-	ByTagValue    map[string][]model.Resource
-	ErrByTagValue map[string]error
-	Selectors     []model.Selector
+	Resources map[string]model.Resource
+	Err       error
+	CallsN    int
 }
 
-// グループ単位のマップを初期化した Discoverer を返す
-// Resources と Err のみを用いるテストでは、ゼロ値で足りる
+// 空のリソースマップを持つ Discoverer を返す
 func NewDiscoverer() *Discoverer {
-	return &Discoverer{ByTagValue: map[string][]model.Resource{}, ErrByTagValue: map[string]error{}}
+	return &Discoverer{Resources: map[string]model.Resource{}}
 }
 
-func (d *Discoverer) Discover(_ context.Context, sel model.Selector) ([]model.Resource, error) {
-	d.Selectors = append(d.Selectors, sel)
-	if err, ok := d.ErrByTagValue[sel.TagValue]; ok {
-		return nil, err
-	}
+func (d *Discoverer) Discover(context.Context) (map[string]model.Resource, error) {
+	d.CallsN++
 	if d.Err != nil {
 		return nil, d.Err
-	}
-	if res, ok := d.ByTagValue[sel.TagValue]; ok {
-		return res, nil
 	}
 	return d.Resources, nil
 }
 
 // これまでの Discover の呼び出し回数を返す
-func (d *Discoverer) Calls() int { return len(d.Selectors) }
+func (d *Discoverer) Calls() int { return d.CallsN }
 
 // 状態を持つ port.Target のテストダブル
 // Describe は Observations を参照し、未登録の場合は StateNotFound を返す
-// Stop/Start は、対応するエラーフィールドが未設定の場合に、呼ばれた ref を記録する
+// 各操作は、リソース別または共通のエラーが未設定の場合に、呼ばれた ref を記録する
 type Target struct {
 	Typ          model.ResourceType
 	Observations map[string]model.Observation
 	DescribeErr  error
+	DescribeErrs map[string]error
 	StopErr      error
+	StopErrs     map[string]error
 	StartErr     error
+	StartErrs    map[string]error
+	Described    []string
 	Stopped      []string
 	Started      []string
 }
 
 func NewTarget(typ model.ResourceType) *Target {
-	return &Target{Typ: typ, Observations: map[string]model.Observation{}}
+	return &Target{
+		Typ: typ, Observations: map[string]model.Observation{},
+		DescribeErrs: map[string]error{}, StopErrs: map[string]error{}, StartErrs: map[string]error{},
+	}
 }
 
 func (t *Target) Type() model.ResourceType { return t.Typ }
 
 func (t *Target) Describe(_ context.Context, ref string) (model.Observation, error) {
+	t.Described = append(t.Described, ref)
+	if err := t.DescribeErrs[ref]; err != nil {
+		return model.Observation{}, err
+	}
 	if t.DescribeErr != nil {
 		return model.Observation{}, t.DescribeErr
 	}
@@ -87,15 +86,21 @@ func (t *Target) Describe(_ context.Context, ref string) (model.Observation, err
 	return model.Observation{State: model.StateNotFound}, nil
 }
 
-func (t *Target) Stop(_ context.Context, ref string) error {
+func (t *Target) Stop(_ context.Context, res model.Resource) error {
+	if err := t.StopErrs[res.Ref]; err != nil {
+		return err
+	}
 	if t.StopErr != nil {
 		return t.StopErr
 	}
-	t.Stopped = append(t.Stopped, ref)
+	t.Stopped = append(t.Stopped, res.Ref)
 	return nil
 }
 
 func (t *Target) Start(_ context.Context, res model.Resource) error {
+	if err := t.StartErrs[res.Ref]; err != nil {
+		return err
+	}
 	if t.StartErr != nil {
 		return t.StartErr
 	}

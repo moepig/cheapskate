@@ -1,24 +1,9 @@
-# Reconcile persistence boundaries
+# Reconcile boundaries
 
-The reconciler cannot place an AWS action and a DynamoDB write in one transaction. It therefore moves status through operation intent and operation result, allowing a later Lambda invocation to resolve the AWS action after an interruption. Notifications are outside the status transition.
+One invocation takes two in-memory snapshots before it touches a resource: a strongly consistent Query of every group and every page of fixed-tag discovery. Failure of either global read returns an error with no resource Describe, Start, or Stop calls.
 
-## Persisting AWS actions
+Each valid resource is then processed independently. The adapter describes it, transitional observations are skipped, and a stable mismatch receives Start or Stop. One resource failure increments the summary error count but does not stop later resources.
 
-Processing for each resource proceeds in this order.
+No action history or checkpoint is persisted. Overlapping invocations can repeat an absolute-state operation or use different configuration snapshots. Tests therefore assert eventual convergence in a later cycle rather than exactly-once delivery.
 
-1. Record an operation intent, including its operation ID, owning group, and effective-configuration hash, only when `pending_operation_id` is empty.
-2. Perform the AWS action.
-3. Conditionally and atomically replace that intent with the completion record, using the same operation ID.
-4. Publish a notification containing the action time, with at most two attempts.
-
-If execution ends after a successful AWS action but before its completion record, `pending_operation_id` remains. The next cycle resolves the result from the observed AWS state and does not perform the same AWS action again.
-
-If tag membership or configuration changes while an operation is pending, the original `pending_group` and `pending_config_hash` remain attached to it. The completion notification goes to the group that started the operation, and the reconciler does not start an AWS action from the new configuration in that cycle. The current owner and configuration take effect in the next cycle. A status record from an older version that lacks both attributes is recovered in compatibility mode and attributed to the current group.
-
-## Notification delivery boundary
-
-Each notification gets at most two Publish attempts within the same processing run. After two failures, the reconciler abandons it without leaving notification retry state in status. Notification failure is not a reconcile error and does not stop a later AWS action.
-
-The `at` field is the time of the action, error, or recovery being reported, not the notification-send time. Both attempts retain the same `at`. If different notifications arrive out of order, their `at` values establish their ordering. The `operation_id` in an action notification identifies duplicates for the same operation.
-
-Because notifications are not durable, one can be lost if Lambda ends after recording completion but before Publish. Durable retry would require outbox items keyed by operation ID and a DynamoDB transaction that commits the AWS action completion record and the outbox item together.
+An action notification occurs after the successful resource call and receives at most two Publish attempts. Notification failure is logged but does not reverse the resource call or stop the cycle.

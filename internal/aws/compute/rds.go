@@ -3,7 +3,10 @@ package compute
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/rds"
 	"github.com/aws/aws-sdk-go-v2/service/rds/types"
 
@@ -41,6 +44,12 @@ func (t *RdsInstanceTarget) Describe(ctx context.Context, ref string) (model.Obs
 		return model.Observation{}, err
 	}
 	for _, inst := range out.DBInstances {
+		if inst.DBClusterIdentifier != nil && *inst.DBClusterIdentifier != "" {
+			return model.Observation{}, fmt.Errorf("RDS instance %s is a cluster member", ref)
+		}
+		if inst.Engine != nil && strings.HasPrefix(*inst.Engine, "custom-") {
+			return model.Observation{}, fmt.Errorf("RDS instance %s uses unsupported RDS Custom engine %q", ref, *inst.Engine)
+		}
 		if inst.DBInstanceStatus == nil {
 			continue
 		}
@@ -49,8 +58,8 @@ func (t *RdsInstanceTarget) Describe(ctx context.Context, ref string) (model.Obs
 	return model.Observation{State: model.StateNotFound}, nil
 }
 
-func (t *RdsInstanceTarget) Stop(ctx context.Context, ref string) error {
-	_, err := t.Client.StopDBInstance(ctx, &rds.StopDBInstanceInput{DBInstanceIdentifier: &ref})
+func (t *RdsInstanceTarget) Stop(ctx context.Context, res model.Resource) error {
+	_, err := t.Client.StopDBInstance(ctx, &rds.StopDBInstanceInput{DBInstanceIdentifier: &res.Ref})
 	return err
 }
 
@@ -76,6 +85,9 @@ func (t *RdsClusterTarget) Describe(ctx context.Context, ref string) (model.Obse
 		return model.Observation{}, err
 	}
 	for _, c := range out.DBClusters {
+		if c.Engine == nil || !strings.HasPrefix(*c.Engine, "aurora") {
+			return model.Observation{}, fmt.Errorf("RDS cluster %s uses unsupported non-Aurora engine %q", ref, aws.ToString(c.Engine))
+		}
 		if c.Status == nil {
 			continue
 		}
@@ -84,8 +96,8 @@ func (t *RdsClusterTarget) Describe(ctx context.Context, ref string) (model.Obse
 	return model.Observation{State: model.StateNotFound}, nil
 }
 
-func (t *RdsClusterTarget) Stop(ctx context.Context, ref string) error {
-	_, err := t.Client.StopDBCluster(ctx, &rds.StopDBClusterInput{DBClusterIdentifier: &ref})
+func (t *RdsClusterTarget) Stop(ctx context.Context, res model.Resource) error {
+	_, err := t.Client.StopDBCluster(ctx, &rds.StopDBClusterInput{DBClusterIdentifier: &res.Ref})
 	return err
 }
 

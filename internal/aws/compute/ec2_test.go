@@ -137,7 +137,7 @@ func TestEc2StopStart(t *testing.T) {
 		})
 	tgt := &Ec2InstanceTarget{Client: c}
 
-	require.NoError(t, tgt.Stop(context.Background(), "i-0abc123"))
+	require.NoError(t, tgt.Stop(context.Background(), model.Resource{Ref: "i-0abc123"}))
 	require.NoError(t, tgt.Start(context.Background(), model.Resource{Ref: "i-0abc123"}))
 }
 

@@ -1,13 +1,13 @@
-// Resource Groups Tagging API を通じて、ターゲットグループのセレクタに一致する AWS リソースを探索する
+// Resource Groups Tagging API を通じて、固定の所属タグを持つ AWS リソースを探索する
 // この API を呼ぶのは本パッケージに限る。port.Discoverer を実装する
 package tagging
 
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strings"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/resourcegroupstaggingapi"
 	"github.com/aws/aws-sdk-go-v2/service/resourcegroupstaggingapi/types"
 
@@ -26,13 +26,10 @@ type Discoverer struct {
 	Client API
 }
 
-// sel.TagKey=sel.TagValue が付与され、種別が sel.Types に含まれるリソースをすべて返す
-// reconcile の順序と表示を決定的とするため、Resource.ID() でソートする
-// 解釈できない ARN が存在する場合、呼び出し全体を失敗させる
-// 該当するのは旧形式の ARN (ParseARN を参照)、またはフィルタと対応づけの不具合であり、スキップした場合はこれらの不備が検知されないためである
-func (d *Discoverer) Discover(ctx context.Context, sel model.Selector) ([]model.Resource, error) {
-	typeFilters := make([]string, 0, len(sel.Types))
-	for _, t := range sel.Types {
+// 固定の所属タグを持つ全対応リソースを ARN をキーとする map で返す。
+func (d *Discoverer) Discover(ctx context.Context) (map[string]model.Resource, error) {
+	typeFilters := make([]string, 0, len(model.KnownTypes))
+	for _, t := range model.KnownTypes {
 		info, ok := model.Info(t)
 		if !ok {
 			return nil, fmt.Errorf("discover: unknown resource type %q", t)
@@ -40,13 +37,14 @@ func (d *Discoverer) Discover(ctx context.Context, sel model.Selector) ([]model.
 		typeFilters = append(typeFilters, info.TaggingFilter())
 	}
 
-	var resources []model.Resource
+	resources := map[string]model.Resource{}
 	var token *string
 	for {
 		out, err := d.Client.GetResources(ctx, &resourcegroupstaggingapi.GetResourcesInput{
-			TagFilters:          []types.TagFilter{{Key: &sel.TagKey, Values: []string{sel.TagValue}}},
+			TagFilters:          []types.TagFilter{{Key: aws.String(model.GroupTagKey)}},
 			ResourceTypeFilters: typeFilters,
 			PaginationToken:     token,
+			ResourcesPerPage:    aws.Int32(100),
 		})
 		if err != nil {
 			return nil, fmt.Errorf("discover: GetResources: %w", err)
@@ -62,7 +60,7 @@ func (d *Discoverer) Discover(ctx context.Context, sel model.Selector) ([]model.
 				return nil, fmt.Errorf("discover: %w", err)
 			}
 			r.Tags = tagsToMap(m.Tags)
-			resources = append(resources, r)
+			resources[r.ARN] = r
 		}
 		if out.PaginationToken == nil || *out.PaginationToken == "" {
 			break
@@ -70,7 +68,6 @@ func (d *Discoverer) Discover(ctx context.Context, sel model.Selector) ([]model.
 		token = out.PaginationToken
 	}
 
-	sort.Slice(resources, func(i, j int) bool { return resources[i].ID() < resources[j].ID() })
 	return resources, nil
 }
 

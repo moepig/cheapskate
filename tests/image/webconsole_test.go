@@ -62,6 +62,12 @@ func TestWebconsoleImageServesThroughTheLambdaWebAdapter(t *testing.T) {
 	})
 }
 
+func TestWebconsoleImageRejectsInvalidTimezone(t *testing.T) {
+	cfg := emutest.Config(t)
+	table := emutest.CreateStateTable(t, cfg)
+	assertRejectsInvalidTimezone(t, buildImage(t, "webconsole"), emulatorEnv(t, table))
+}
+
 // API Gateway REST API (本番構成) が送信するプロキシイベントを組み立てる
 // sourceIP は requestContext.identity に入り、クライアントは設定できない
 func proxyEvent(t *testing.T, sourceIP string, headers map[string]string) []byte {

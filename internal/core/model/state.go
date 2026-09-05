@@ -1,9 +1,5 @@
 package model
 
-import (
-	"fmt"
-)
-
 // cheapskate がリソースをどの状態にしたいか
 type DesiredState string
 
@@ -14,20 +10,6 @@ const (
 	// 空文字と未決定を同じ表現としないため、名前を与える
 	DesiredNone DesiredState = ""
 )
-
-// d が running か stopped かを検査する
-func (d DesiredState) Validate() error {
-	if d != DesiredRunning && d != DesiredStopped {
-		return fmt.Errorf("desired state must be running or stopped, got %q", d)
-	}
-	return nil
-}
-
-// 入力された文字列を DesiredState として解釈する
-func ParseDesired(s string) (DesiredState, error) {
-	d := DesiredState(s)
-	return d, d.Validate()
-}
 
 // Describe API 越しに見えたリソースの実際の状態
 type ObservedState string
