@@ -51,6 +51,30 @@ func TestResolveDesiredChoosesStoppedWhenTicksTie(t *testing.T) {
 	assert.Equal(t, model.DesiredStopped, desired)
 }
 
+func TestResolveDesiredAtScheduleAndOverrideBoundaries(t *testing.T) {
+	group := model.GroupSpec{Name: "dev", StartCron: "0 * * * *", StopCron: "30 * * * *"}
+	for name, test := range map[string]struct {
+		now  time.Time
+		want model.DesiredState
+	}{
+		"before stop": {now: time.Date(2026, 9, 3, 12, 29, 59, 0, time.UTC), want: model.DesiredRunning},
+		"at stop":     {now: time.Date(2026, 9, 3, 12, 30, 0, 0, time.UTC), want: model.DesiredStopped},
+		"after stop":  {now: time.Date(2026, 9, 3, 12, 30, 1, 0, time.UTC), want: model.DesiredStopped},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := ResolveDesired(group, test.now, time.UTC)
+			require.NoError(t, err)
+			assert.Equal(t, test.want, got)
+		})
+	}
+
+	group.Override = model.OverrideStopped
+	group.OverrideExpiresAt = time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC).Unix()
+	got, err := ResolveDesired(group, time.Date(2026, 9, 3, 12, 0, 0, 500_000_000, time.UTC), time.UTC)
+	require.NoError(t, err)
+	assert.Equal(t, model.DesiredRunning, got)
+}
+
 func withOverride(group model.GroupSpec, override model.Override, expiresAt int64) model.GroupSpec {
 	group.Override, group.OverrideExpiresAt = override, expiresAt
 	return group
