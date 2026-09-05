@@ -23,7 +23,7 @@ func TestRdsInstanceRejectsClusterMembersAndCustom(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			client := mocks.NewMockRdsAPI(gomock.NewController(t))
 			client.EXPECT().DescribeDBInstances(gomock.Any(), gomock.Any()).Return(&rds.DescribeDBInstancesOutput{DBInstances: []types.DBInstance{instance}}, nil)
-			_, err := (&RdsInstanceTarget{Client: client}).Describe(context.Background(), "db")
+			_, err := (&RdsInstanceTarget{Client: client}).Describe(context.Background(), model.Resource{Ref: "db"})
 			assert.Error(t, err)
 		})
 	}
@@ -34,7 +34,7 @@ func TestRdsInstanceAcceptsStandaloneDatabase(t *testing.T) {
 	client.EXPECT().DescribeDBInstances(gomock.Any(), gomock.Any()).Return(&rds.DescribeDBInstancesOutput{DBInstances: []types.DBInstance{{
 		DBInstanceIdentifier: aws.String("db"), DBInstanceStatus: aws.String("available"), Engine: aws.String("postgres"),
 	}}}, nil)
-	observation, err := (&RdsInstanceTarget{Client: client}).Describe(context.Background(), "db")
+	observation, err := (&RdsInstanceTarget{Client: client}).Describe(context.Background(), model.Resource{Ref: "db"})
 	require.NoError(t, err)
 	assert.Equal(t, model.StateRunning, observation.State)
 }
@@ -46,7 +46,7 @@ func TestRdsClusterAcceptsOnlyAurora(t *testing.T) {
 			client.EXPECT().DescribeDBClusters(gomock.Any(), gomock.Any()).Return(&rds.DescribeDBClustersOutput{DBClusters: []types.DBCluster{{
 				DBClusterIdentifier: aws.String("cluster"), Status: aws.String("stopped"), Engine: aws.String(engine),
 			}}}, nil)
-			observation, err := (&RdsClusterTarget{Client: client}).Describe(context.Background(), "cluster")
+			observation, err := (&RdsClusterTarget{Client: client}).Describe(context.Background(), model.Resource{Ref: "cluster"})
 			if wantErr {
 				assert.Error(t, err)
 				return

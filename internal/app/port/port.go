@@ -28,7 +28,7 @@ type Discoverer interface {
 // internal/aws/compute が model.Type* 定数ごとに 1 つの値として実装する
 type Target interface {
 	Type() model.ResourceType
-	Describe(ctx context.Context, ref string) (model.Observation, error)
+	Describe(ctx context.Context, res model.Resource) (model.Observation, error)
 	Stop(ctx context.Context, res model.Resource) error
 	// res を再び起動する
 	// res.Tags は、AWS リソース自身のタグから読んだ種別固有の起動設定を保持する
@@ -42,7 +42,7 @@ type Target interface {
 // これにより読み取り専用のフロントエンドは、コントロールプレーンを変更する経路を持たない
 // すべての Target がこのインターフェースを満たし、絞り込みは internal/wire が行う
 type Describer interface {
-	Describe(ctx context.Context, ref string) (model.Observation, error)
+	Describe(ctx context.Context, res model.Resource) (model.Observation, error)
 }
 
 // アクションと失敗のときだけ publish する

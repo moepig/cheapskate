@@ -84,7 +84,7 @@ func (s *Service) Show(ctx context.Context, name string, now time.Time) (GroupDe
 		}
 		row := ResourceRow{Resource: resource}
 		if describer, ok := s.describers[resource.Type]; ok {
-			observation, describeErr := describer.Describe(ctx, resource.Ref)
+			observation, describeErr := describer.Describe(ctx, resource)
 			if describeErr != nil {
 				row.LiveErr = describeErr
 			} else {

@@ -72,15 +72,15 @@ func NewTarget(typ model.ResourceType) *Target {
 
 func (t *Target) Type() model.ResourceType { return t.Typ }
 
-func (t *Target) Describe(_ context.Context, ref string) (model.Observation, error) {
-	t.Described = append(t.Described, ref)
-	if err := t.DescribeErrs[ref]; err != nil {
+func (t *Target) Describe(_ context.Context, res model.Resource) (model.Observation, error) {
+	t.Described = append(t.Described, res.Ref)
+	if err := t.DescribeErrs[res.Ref]; err != nil {
 		return model.Observation{}, err
 	}
 	if t.DescribeErr != nil {
 		return model.Observation{}, t.DescribeErr
 	}
-	if obs, ok := t.Observations[ref]; ok {
+	if obs, ok := t.Observations[res.Ref]; ok {
 		return obs, nil
 	}
 	return model.Observation{State: model.StateNotFound}, nil
@@ -115,7 +115,7 @@ type Describer struct {
 	Err error
 }
 
-func (d Describer) Describe(context.Context, string) (model.Observation, error) {
+func (d Describer) Describe(context.Context, model.Resource) (model.Observation, error) {
 	return d.Obs, d.Err
 }
 

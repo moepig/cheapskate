@@ -35,7 +35,8 @@ func (t *RdsInstanceTarget) Type() model.ResourceType { return model.TypeRdsInst
 // 加えて、nil を無条件に参照した場合は panic となる
 // reconciler は Lambda 上で動作するため、この panic はリソース 1 件の失敗にとどまらず呼び出し全体を失敗させる
 // 1 件の失敗を他のリソースへ波及させないという不変条件が成立しなくなる
-func (t *RdsInstanceTarget) Describe(ctx context.Context, ref string) (model.Observation, error) {
+func (t *RdsInstanceTarget) Describe(ctx context.Context, res model.Resource) (model.Observation, error) {
+	ref := res.Ref
 	out, err := t.Client.DescribeDBInstances(ctx, &rds.DescribeDBInstancesInput{DBInstanceIdentifier: &ref})
 	if err != nil {
 		if _, ok := errors.AsType[*types.DBInstanceNotFoundFault](err); ok {
@@ -76,7 +77,8 @@ type RdsClusterTarget struct {
 func (t *RdsClusterTarget) Type() model.ResourceType { return model.TypeRdsCluster }
 
 // ステータスが nil のクラスタをスキップする理由は、RdsInstanceTarget.Describe と同じである
-func (t *RdsClusterTarget) Describe(ctx context.Context, ref string) (model.Observation, error) {
+func (t *RdsClusterTarget) Describe(ctx context.Context, res model.Resource) (model.Observation, error) {
+	ref := res.Ref
 	out, err := t.Client.DescribeDBClusters(ctx, &rds.DescribeDBClustersInput{DBClusterIdentifier: &ref})
 	if err != nil {
 		if _, ok := errors.AsType[*types.DBClusterNotFoundFault](err); ok {

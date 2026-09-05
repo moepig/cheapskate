@@ -23,10 +23,10 @@ const (
 
 // Describe API を通じて観測したターゲットの状態
 // State の語彙は全種別で共通であり、種別ごとに異なる詳細は Detail の自由記述が保持する
-// 種別固有のフィールドを追加しないことにより、この型を扱う reconcile と各 UI は種別を参照しない
 type Observation struct {
-	State  ObservedState `json:"state"`
-	Detail string        `json:"detail,omitempty"`
+	State      ObservedState `json:"state"`
+	Detail     string        `json:"detail,omitempty"`
+	NeedsStart bool          `json:"needs_start,omitempty"`
 }
 
 // desired と observed の食い違いを解消するために reconciler が取る操作

@@ -23,11 +23,14 @@ func TestEcsDescribeAcceptsReplicaAndRejectsDaemon(t *testing.T) {
 		ecstypes.SchedulingStrategyDaemon:  true,
 	} {
 		t.Run(string(strategy), func(t *testing.T) {
-			client := mocks.NewMockEcsAPI(gomock.NewController(t))
+			controller := gomock.NewController(t)
+			client := mocks.NewMockEcsAPI(controller)
+			autoScaling := mocks.NewMockAutoScalingAPI(controller)
 			client.EXPECT().DescribeServices(gomock.Any(), gomock.Any()).Return(&ecs.DescribeServicesOutput{Services: []ecstypes.Service{{
 				Status: aws.String("ACTIVE"), SchedulingStrategy: strategy, DesiredCount: 1, RunningCount: 1,
 			}}}, nil)
-			observation, err := (&EcsServiceTarget{Ecs: client}).Describe(context.Background(), "dev/api")
+			autoScaling.EXPECT().DescribeScalableTargets(gomock.Any(), gomock.Any()).AnyTimes().Return(&aas.DescribeScalableTargetsOutput{}, nil)
+			observation, err := (&EcsServiceTarget{Ecs: client, AutoScaling: autoScaling}).Describe(context.Background(), model.Resource{Ref: "dev/api"})
 			if wantErr {
 				assert.Error(t, err)
 				return
@@ -36,6 +39,27 @@ func TestEcsDescribeAcceptsReplicaAndRejectsDaemon(t *testing.T) {
 			assert.Equal(t, model.StateRunning, observation.State)
 		})
 	}
+}
+
+func TestEcsDescribeMarksRunningServiceForStartWhenScalableBoundsDiffer(t *testing.T) {
+	controller := gomock.NewController(t)
+	ecsClient := mocks.NewMockEcsAPI(controller)
+	autoScaling := mocks.NewMockAutoScalingAPI(controller)
+	ecsClient.EXPECT().DescribeServices(gomock.Any(), gomock.Any()).Return(&ecs.DescribeServicesOutput{Services: []ecstypes.Service{{
+		Status: aws.String("ACTIVE"), SchedulingStrategy: ecstypes.SchedulingStrategyReplica, DesiredCount: 2, RunningCount: 2,
+	}}}, nil)
+	autoScaling.EXPECT().DescribeScalableTargets(gomock.Any(), gomock.Any()).Return(&aas.DescribeScalableTargetsOutput{
+		ScalableTargets: []aastypes.ScalableTarget{{MinCapacity: aws.Int32(0), MaxCapacity: aws.Int32(0)}},
+	}, nil)
+
+	observation, err := (&EcsServiceTarget{Ecs: ecsClient, AutoScaling: autoScaling}).Describe(context.Background(), model.Resource{
+		Ref:  "dev/api",
+		Tags: map[string]string{model.EcsDesiredCountTagKey: "2", model.EcsScalingMinTagKey: "1", model.EcsScalingMaxTagKey: "3"},
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, model.StateRunning, observation.State)
+	assert.True(t, observation.NeedsStart)
 }
 
 func TestEcsStopWithScalableTargetOnlyClampsTarget(t *testing.T) {
@@ -84,12 +108,40 @@ func TestEcsStartRestoresBoundsBeforeDesiredCount(t *testing.T) {
 				assert.EqualValues(t, 3, aws.ToInt32(input.MaxCapacity))
 				return &aas.RegisterScalableTargetOutput{}, nil
 			}),
+		ecsClient.EXPECT().DescribeServices(gomock.Any(), gomock.Any()).Return(&ecs.DescribeServicesOutput{Services: []ecstypes.Service{{
+			Status: aws.String("ACTIVE"), SchedulingStrategy: ecstypes.SchedulingStrategyReplica, DesiredCount: 0,
+		}}}, nil),
 		ecsClient.EXPECT().UpdateService(gomock.Any(), gomock.Any()).DoAndReturn(
 			func(_ context.Context, input *ecs.UpdateServiceInput, _ ...func(*ecs.Options)) (*ecs.UpdateServiceOutput, error) {
 				assert.EqualValues(t, 2, aws.ToInt32(input.DesiredCount))
 				return &ecs.UpdateServiceOutput{}, nil
 			}),
 	)
+	require.NoError(t, (&EcsServiceTarget{Ecs: ecsClient, AutoScaling: autoScaling}).Start(context.Background(), resource))
+}
+
+func TestEcsStartRepairsBoundsWithoutUpdatingDesiredCount(t *testing.T) {
+	controller := gomock.NewController(t)
+	ecsClient := mocks.NewMockEcsAPI(controller)
+	autoScaling := mocks.NewMockAutoScalingAPI(controller)
+	resource := model.Resource{Ref: "dev/api", Tags: map[string]string{
+		model.EcsDesiredCountTagKey: "2", model.EcsScalingMinTagKey: "1", model.EcsScalingMaxTagKey: "3",
+	}}
+	gomock.InOrder(
+		autoScaling.EXPECT().DescribeScalableTargets(gomock.Any(), gomock.Any()).Return(&aas.DescribeScalableTargetsOutput{
+			ScalableTargets: []aastypes.ScalableTarget{{MinCapacity: aws.Int32(0), MaxCapacity: aws.Int32(0)}},
+		}, nil),
+		autoScaling.EXPECT().RegisterScalableTarget(gomock.Any(), gomock.Any()).DoAndReturn(
+			func(_ context.Context, input *aas.RegisterScalableTargetInput, _ ...func(*aas.Options)) (*aas.RegisterScalableTargetOutput, error) {
+				assert.EqualValues(t, 1, aws.ToInt32(input.MinCapacity))
+				assert.EqualValues(t, 3, aws.ToInt32(input.MaxCapacity))
+				return &aas.RegisterScalableTargetOutput{}, nil
+			}),
+		ecsClient.EXPECT().DescribeServices(gomock.Any(), gomock.Any()).Return(&ecs.DescribeServicesOutput{Services: []ecstypes.Service{{
+			Status: aws.String("ACTIVE"), SchedulingStrategy: ecstypes.SchedulingStrategyReplica, DesiredCount: 2, RunningCount: 2,
+		}}}, nil),
+	)
+
 	require.NoError(t, (&EcsServiceTarget{Ecs: ecsClient, AutoScaling: autoScaling}).Start(context.Background(), resource))
 }
 

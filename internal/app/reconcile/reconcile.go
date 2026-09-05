@@ -128,7 +128,7 @@ func Run(ctx context.Context, _ json.RawMessage, deps *Deps, now time.Time) (Sum
 			continue
 		}
 		summary.Reconciled++
-		observation, err := target.Describe(ctx, resource.Ref)
+		observation, err := target.Describe(ctx, resource)
 		if err != nil {
 			result.Error = fmt.Sprintf("resource %s: describe: %v", resource.ARN, err)
 			summary.Errors = append(summary.Errors, result)
@@ -138,6 +138,9 @@ func Run(ctx context.Context, _ json.RawMessage, deps *Deps, now time.Time) (Sum
 		result.Desired = group.desired
 		result.Observed = observation.State
 		action := model.DecideAction(group.desired, observation.State)
+		if action == model.ActionNone && group.desired == model.DesiredRunning && observation.NeedsStart {
+			action = model.ActionStart
+		}
 		if action == model.ActionNone {
 			if observation.State == model.StateTransitioning || observation.State == model.StateNotFound {
 				result.Skipped = string(observation.State)

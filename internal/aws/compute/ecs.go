@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	aas "github.com/aws/aws-sdk-go-v2/service/applicationautoscaling"
 	aastypes "github.com/aws/aws-sdk-go-v2/service/applicationautoscaling/types"
 	"github.com/aws/aws-sdk-go-v2/service/ecs"
@@ -40,8 +41,8 @@ type EcsServiceTarget struct {
 
 func (t *EcsServiceTarget) Type() model.ResourceType { return model.TypeEcsService }
 
-func (t *EcsServiceTarget) Describe(ctx context.Context, ref string) (model.Observation, error) {
-	cluster, service, err := splitEcsRef(ref)
+func (t *EcsServiceTarget) Describe(ctx context.Context, res model.Resource) (model.Observation, error) {
+	cluster, service, err := splitEcsRef(res.Ref)
 	if err != nil {
 		return model.Observation{}, err
 	}
@@ -52,12 +53,24 @@ func (t *EcsServiceTarget) Describe(ctx context.Context, ref string) (model.Obse
 	for _, s := range out.Services {
 		if s.Status != nil && *s.Status == "ACTIVE" {
 			if s.SchedulingStrategy != ecstypes.SchedulingStrategyReplica {
-				return model.Observation{}, fmt.Errorf("ecs service %s uses unsupported scheduling strategy %q", ref, s.SchedulingStrategy)
+				return model.Observation{}, fmt.Errorf("ecs service %s uses unsupported scheduling strategy %q", res.Ref, s.SchedulingStrategy)
 			}
-			return model.Observation{
+			observation := model.Observation{
 				State:  ecsServiceState(s.DesiredCount, s.RunningCount, s.PendingCount),
 				Detail: fmt.Sprintf("desiredCount=%d runningCount=%d pendingCount=%d", s.DesiredCount, s.RunningCount, s.PendingCount),
-			}, nil
+			}
+			config, err := ecsConfigFromTags(res.Tags)
+			if err != nil {
+				return model.Observation{}, err
+			}
+			scalable, err := t.scalableTarget(ctx, cluster, service)
+			if err != nil {
+				return model.Observation{}, err
+			}
+			if observation.State == model.StateRunning && scalable != nil && (aws.ToInt32(scalable.MinCapacity) != config.minimum || aws.ToInt32(scalable.MaxCapacity) != config.maximum) {
+				observation.NeedsStart = true
+			}
+			return observation, nil
 		}
 	}
 	return model.Observation{State: model.StateNotFound}, nil
@@ -95,9 +108,7 @@ func (t *EcsServiceTarget) Stop(ctx context.Context, res model.Resource) error {
 	return err
 }
 
-// start も 2 段階からなるが、Stop と異なり巻き戻しを行わない
-// 前段で min が 1 以上へ戻った時点で Auto Scaling がサービスを起動するため、後段の UpdateService が失敗しても、残る状態は起動の方向にある
-// 次のサイクルの再試行が desiredCount を目的の値へ揃える
+// Auto Scaling の min/max をタグ値へ復元し、必要な場合に desiredCount を復元する。
 func (t *EcsServiceTarget) Start(ctx context.Context, res model.Resource) error {
 	cluster, service, err := splitEcsRef(res.Ref)
 	if err != nil {
@@ -112,12 +123,37 @@ func (t *EcsServiceTarget) Start(ctx context.Context, res model.Resource) error 
 		return err
 	}
 	if scalable != nil {
-		if err := t.register(ctx, cluster, service, config.minimum, config.maximum); err != nil {
-			return err
+		if aws.ToInt32(scalable.MinCapacity) != config.minimum || aws.ToInt32(scalable.MaxCapacity) != config.maximum {
+			if err := t.register(ctx, cluster, service, config.minimum, config.maximum); err != nil {
+				return err
+			}
 		}
+	}
+	currentDesired, err := t.desiredCount(ctx, cluster, service)
+	if err != nil {
+		return err
+	}
+	if currentDesired == config.desired {
+		return nil
 	}
 	_, err = t.Ecs.UpdateService(ctx, &ecs.UpdateServiceInput{Cluster: &cluster, Service: &service, DesiredCount: &config.desired})
 	return err
+}
+
+func (t *EcsServiceTarget) desiredCount(ctx context.Context, cluster, service string) (int32, error) {
+	out, err := t.Ecs.DescribeServices(ctx, &ecs.DescribeServicesInput{Cluster: &cluster, Services: []string{service}})
+	if err != nil {
+		return 0, err
+	}
+	for _, s := range out.Services {
+		if s.Status != nil && *s.Status == "ACTIVE" {
+			if s.SchedulingStrategy != ecstypes.SchedulingStrategyReplica {
+				return 0, fmt.Errorf("ecs service %s/%s uses unsupported scheduling strategy %q", cluster, service, s.SchedulingStrategy)
+			}
+			return s.DesiredCount, nil
+		}
+	}
+	return 0, fmt.Errorf("ecs service %s/%s was not found", cluster, service)
 }
 
 type ecsConfig struct {

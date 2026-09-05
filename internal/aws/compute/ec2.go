@@ -26,8 +26,8 @@ type Ec2InstanceTarget struct {
 
 func (t *Ec2InstanceTarget) Type() model.ResourceType { return model.TypeEc2Instance }
 
-func (t *Ec2InstanceTarget) Describe(ctx context.Context, ref string) (model.Observation, error) {
-	out, err := t.Client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{InstanceIds: []string{ref}})
+func (t *Ec2InstanceTarget) Describe(ctx context.Context, res model.Resource) (model.Observation, error) {
+	out, err := t.Client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{InstanceIds: []string{res.Ref}})
 	if err != nil {
 		if isEc2NotFound(err) {
 			return model.Observation{State: model.StateNotFound}, nil

@@ -46,7 +46,7 @@ func TestEc2DescribeStateMapping(t *testing.T) {
 		c.EXPECT().DescribeInstances(gomock.Any(), gomock.Any()).Return(ec2State(tc.raw), nil)
 		tgt := &Ec2InstanceTarget{Client: c}
 
-		obs, err := tgt.Describe(context.Background(), "i-0abc123")
+		obs, err := tgt.Describe(context.Background(), model.Resource{Ref: "i-0abc123"})
 		require.NoError(t, err, tc.raw)
 		assert.Equal(t, tc.want, obs.State, tc.raw)
 	}
@@ -66,7 +66,7 @@ func TestEc2DescribeSkipsInstancesWithoutState(t *testing.T) {
 	}, nil)
 	tgt := &Ec2InstanceTarget{Client: c}
 
-	obs, err := tgt.Describe(context.Background(), "i-0abc123")
+	obs, err := tgt.Describe(context.Background(), model.Resource{Ref: "i-0abc123"})
 
 	require.NoError(t, err)
 	assert.Equal(t, model.StateRunning, obs.State)
@@ -82,7 +82,7 @@ func TestEc2DescribeWithOnlyStatelessInstancesIsNotFound(t *testing.T) {
 	}, nil)
 	tgt := &Ec2InstanceTarget{Client: c}
 
-	obs, err := tgt.Describe(context.Background(), "i-0abc123")
+	obs, err := tgt.Describe(context.Background(), model.Resource{Ref: "i-0abc123"})
 
 	require.NoError(t, err)
 	assert.Equal(t, model.StateNotFound, obs.State)
@@ -94,7 +94,7 @@ func TestEc2DescribeEmptyReservationsIsNotFound(t *testing.T) {
 	c.EXPECT().DescribeInstances(gomock.Any(), gomock.Any()).Return(&ec2.DescribeInstancesOutput{}, nil)
 	tgt := &Ec2InstanceTarget{Client: c}
 
-	obs, err := tgt.Describe(context.Background(), "gone")
+	obs, err := tgt.Describe(context.Background(), model.Resource{Ref: "gone"})
 	require.NoError(t, err)
 	assert.Equal(t, model.StateNotFound, obs.State)
 }
@@ -106,7 +106,7 @@ func TestEc2DescribeNotFoundErrorCode(t *testing.T) {
 		Return(nil, &smithy.GenericAPIError{Code: "InvalidInstanceID.NotFound"})
 	tgt := &Ec2InstanceTarget{Client: c}
 
-	obs, err := tgt.Describe(context.Background(), "gone")
+	obs, err := tgt.Describe(context.Background(), model.Resource{Ref: "gone"})
 	require.NoError(t, err, "InvalidInstanceID.NotFound must convert to StateNotFound, not an error")
 	assert.Equal(t, model.StateNotFound, obs.State)
 }
@@ -118,7 +118,7 @@ func TestEc2DescribeOtherErrorPassesThrough(t *testing.T) {
 		Return(nil, &smithy.GenericAPIError{Code: "UnauthorizedOperation"})
 	tgt := &Ec2InstanceTarget{Client: c}
 
-	_, err := tgt.Describe(context.Background(), "i-0abc123")
+	_, err := tgt.Describe(context.Background(), model.Resource{Ref: "i-0abc123"})
 	require.Error(t, err, "non-NotFound API errors must pass through unchanged")
 }
 
