@@ -101,6 +101,9 @@ func (s *Service) Schedule(ctx context.Context, name string, schedule model.Sche
 	if err := model.ValidGroupName(name); err != nil {
 		return model.GroupSpec{}, err
 	}
+	if schedule.StartCron == "" || schedule.StopCron == "" {
+		return model.GroupSpec{}, fmt.Errorf("schedule start_cron and stop_cron are required")
+	}
 	existing, err := s.store.GetGroup(ctx, name)
 	if err != nil {
 		return model.GroupSpec{}, err

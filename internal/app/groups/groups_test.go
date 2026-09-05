@@ -41,6 +41,25 @@ func TestScheduleCreatesAndUpdatesWithoutLosingOverride(t *testing.T) {
 	assert.Equal(t, "0 8 * * *", group.StartCron)
 }
 
+func TestScheduleRequiresBothCronExpressionsDespiteOverride(t *testing.T) {
+	_, service := fixture(t)
+	ctx := context.Background()
+	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
+	_, err := service.Override(ctx, "dev", model.OverrideRunning, 0, now)
+	require.NoError(t, err)
+
+	_, err = service.Schedule(ctx, "dev", model.ScheduleSpec{}, now)
+	assert.ErrorContains(t, err, "start_cron and stop_cron are required")
+	_, err = service.Schedule(ctx, "dev", model.ScheduleSpec{StartCron: "0 9 * * *"}, now)
+	assert.ErrorContains(t, err, "start_cron and stop_cron are required")
+
+	groups, err := service.List(ctx, now)
+	require.NoError(t, err)
+	require.Len(t, groups, 1)
+	assert.Empty(t, groups[0].Group.StartCron)
+	assert.Empty(t, groups[0].Group.StopCron)
+}
+
 func TestOverrideCreationAndTimedRules(t *testing.T) {
 	_, service := fixture(t)
 	ctx := context.Background()
