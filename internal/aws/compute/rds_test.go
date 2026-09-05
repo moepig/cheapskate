@@ -2,6 +2,7 @@ package compute
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -65,4 +66,57 @@ func TestRdsTargetsStartAndStop(t *testing.T) {
 	resource := model.Resource{Ref: "db"}
 	require.NoError(t, target.Stop(context.Background(), resource))
 	require.NoError(t, target.Start(context.Background(), resource))
+}
+
+func TestRdsTargetsUseResourceIdentifiersForEveryOperation(t *testing.T) {
+	controller := gomock.NewController(t)
+	client := mocks.NewMockRdsAPI(controller)
+	instance := &RdsInstanceTarget{Client: client}
+	cluster := &RdsClusterTarget{Client: client}
+	resource := model.Resource{Ref: "db"}
+	clusterResource := model.Resource{Ref: "aurora"}
+	client.EXPECT().StopDBInstance(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, in *rds.StopDBInstanceInput, _ ...func(*rds.Options)) (*rds.StopDBInstanceOutput, error) {
+		assert.Equal(t, "db", aws.ToString(in.DBInstanceIdentifier))
+		return &rds.StopDBInstanceOutput{}, nil
+	})
+	client.EXPECT().StartDBInstance(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, in *rds.StartDBInstanceInput, _ ...func(*rds.Options)) (*rds.StartDBInstanceOutput, error) {
+		assert.Equal(t, "db", aws.ToString(in.DBInstanceIdentifier))
+		return &rds.StartDBInstanceOutput{}, nil
+	})
+	client.EXPECT().StopDBCluster(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, in *rds.StopDBClusterInput, _ ...func(*rds.Options)) (*rds.StopDBClusterOutput, error) {
+		assert.Equal(t, "aurora", aws.ToString(in.DBClusterIdentifier))
+		return &rds.StopDBClusterOutput{}, nil
+	})
+	client.EXPECT().StartDBCluster(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, in *rds.StartDBClusterInput, _ ...func(*rds.Options)) (*rds.StartDBClusterOutput, error) {
+		assert.Equal(t, "aurora", aws.ToString(in.DBClusterIdentifier))
+		return &rds.StartDBClusterOutput{}, nil
+	})
+
+	require.NoError(t, instance.Stop(context.Background(), resource))
+	require.NoError(t, instance.Start(context.Background(), resource))
+	require.NoError(t, cluster.Stop(context.Background(), clusterResource))
+	require.NoError(t, cluster.Start(context.Background(), clusterResource))
+}
+
+func TestRdsInstanceDescribeHandlesNotFoundNilStatusAndAPIFailure(t *testing.T) {
+	for name, test := range map[string]struct {
+		output    *rds.DescribeDBInstancesOutput
+		apiErr    error
+		wantState model.ObservedState
+	}{
+		"not found":  {apiErr: &types.DBInstanceNotFoundFault{}, wantState: model.StateNotFound},
+		"nil status": {output: &rds.DescribeDBInstancesOutput{DBInstances: []types.DBInstance{{DBInstanceIdentifier: aws.String("db")}}}, wantState: model.StateNotFound},
+	} {
+		t.Run(name, func(t *testing.T) {
+			client := mocks.NewMockRdsAPI(gomock.NewController(t))
+			client.EXPECT().DescribeDBInstances(gomock.Any(), gomock.Any()).Return(test.output, test.apiErr)
+			observation, err := (&RdsInstanceTarget{Client: client}).Describe(context.Background(), model.Resource{Ref: "db"})
+			require.NoError(t, err)
+			assert.Equal(t, test.wantState, observation.State)
+		})
+	}
+	client := mocks.NewMockRdsAPI(gomock.NewController(t))
+	client.EXPECT().DescribeDBInstances(gomock.Any(), gomock.Any()).Return(nil, errors.New("RDS unavailable"))
+	_, err := (&RdsInstanceTarget{Client: client}).Describe(context.Background(), model.Resource{Ref: "db"})
+	assert.ErrorContains(t, err, "RDS unavailable")
 }
