@@ -99,6 +99,28 @@ func TestCommandsRejectUnexpectedPositionals(t *testing.T) {
 	assert.Error(t, cmdClearOverride(context.Background(), service, []string{"--group", "dev", "extra"}, io.Discard, "text", now))
 }
 
+func TestShowJSONAndInvalidStoredGroupExitCode(t *testing.T) {
+	db, service := cliFixture(t)
+	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
+	_, err := service.Override(context.Background(), "dev", model.OverrideRunning, 0, now)
+	require.NoError(t, err)
+	var stdout, stderr bytes.Buffer
+	require.NoError(t, cmdShow(context.Background(), service, []string{"--group", "dev"}, &stdout, &stderr, "json", now))
+	assert.Contains(t, stdout.String(), `"name": "dev"`)
+	assert.Empty(t, stderr.String())
+
+	db.Seed(map[string]types.AttributeValue{
+		"pk": &types.AttributeValueMemberS{Value: "CONFIG"}, "sk": &types.AttributeValueMemberS{Value: "GROUP#broken"},
+		"unknown": &types.AttributeValueMemberS{Value: "value"},
+	})
+	stdout.Reset()
+	err = cmdShow(context.Background(), service, []string{"--group", "broken"}, &stdout, &stderr, "json", now)
+	var commandErr *commandError
+	require.ErrorAs(t, err, &commandErr)
+	assert.Equal(t, 2, commandErr.code)
+	assert.Contains(t, stdout.String(), `"error"`)
+}
+
 func TestResourceConfig(t *testing.T) {
 	assert.Nil(t, resourceConfig(model.Resource{Type: model.TypeRdsInstance}))
 	resource := model.Resource{Type: model.TypeEcsService, Tags: map[string]string{model.EcsDesiredCountTagKey: "2"}}
