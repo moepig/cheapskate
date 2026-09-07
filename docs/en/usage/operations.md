@@ -19,7 +19,11 @@ cheapskate-cli remove --group dev
 
 `schedule` creates a group when absent or changes only its two cron attributes. An indefinite `override` can also create a group and changes only override attributes. A timed override requires an existing schedule. `clear-override` also requires a schedule. `remove` conditionally deletes the complete group item.
 
-Every change first performs a strongly consistent read and validates the full item. A conditional-write conflict is returned without an automatic retry. Changes to schedule and override attributes preserve each other; two writes to the same attribute use DynamoDB's last-applied value.
+Every change first performs a strongly consistent read and checks unknown attributes and attribute types. Schedule, override, and clear-override validate the complete resulting group. Remove deletes a decodable item without validating cron expressions or cross-attribute invariants. A schedule change is rejected while an expired override remains because the resulting expiry is in the past; clear or replace that override first.
+
+A conditional-write conflict is returned without an automatic retry. Changes to schedule and override attributes preserve each other; two writes to the same attribute use DynamoDB's last-applied value.
+
+Do not delete and recreate a group under the same name concurrently with another configuration change. Write conditions check attribute existence only, so a stale request can change or delete the recreated group.
 
 Exit codes are:
 
@@ -29,11 +33,15 @@ Exit codes are:
 | `1` | Arguments, AWS, DynamoDB, or internal failure |
 | `2` | Invalid stored group or conditional-write conflict |
 
-Text `list` writes valid groups to stdout and invalid rows to stderr. JSON `list` always writes one complete object containing `groups` and `errors` to stdout. Either form exits with code 2 when an invalid row exists. JSON `show` emits a structured error object for invalid stored data and returns code 2.
+Text `list` writes valid groups to stdout and invalid rows to stderr. When the list read succeeds, JSON list writes one complete object containing groups and errors to stdout. A failure of the read itself goes to stderr and returns exit code 1. Either form exits with code 2 when an invalid row exists. JSON `show` emits a structured error object for invalid stored data and returns code 2.
+
+Validation failure of a proposed group change returns exit code 1.
+
+Show returns exit code 0 even when individual resource Describe calls fail. JSON includes the cause in each affected resource’s live_error, so inspect observations rather than exit status alone before ending management. CLI expiry timestamps use UTC RFC 3339 regardless of DEFAULT_TIMEZONE.
 
 ## Web console
 
-The web console provides group list and detail pages plus schedule and override forms. Detail pages show `cheapskate:group=<group>`, ECS configuration tags, and current read-only observations. Dates are displayed and parsed in `DEFAULT_TIMEZONE`. A write conflict returns HTTP 409.
+The web console provides group list and detail pages plus schedule and override forms. Detail pages show `cheapskate:group=<group>`, ECS configuration tags, and current read-only observations. Dates are displayed and parsed in `DEFAULT_TIMEZONE`. A write conflict returns HTTP 409. The detail form initializes Until to two hours after page rendering; clear it to set an indefinite override. The index override form creates indefinite overrides.
 
 ## Safely ending management
 

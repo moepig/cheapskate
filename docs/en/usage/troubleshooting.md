@@ -2,9 +2,9 @@
 
 ## Start with the cycle summary
 
-Each reconciler cycle writes structured logs and finishes with a `summary` record. Check `ReconciledResources`, successful actions, and group or resource error counts. When custom metrics are enabled, `ReconcileErrors` and `ReconcileAborted` provide alarm inputs, but logs contain the affected group, ARN, and cause.
+Each reconciler cycle that completes both global reads finishes with a `summary` record. A global read failure returns a Lambda error without a summary record. Check `ReconciledResources`, successful actions, and group or resource error counts. When custom metrics are enabled, `ReconcileErrors` and `ReconcileAborted` provide alarm inputs, but logs contain the affected group, ARN, and cause.
 
-A configuration Query failure or global resource-discovery failure aborts the cycle before any resource Describe or change call. Fix DynamoDB or `tag:GetResources` access and invoke again.
+A configuration Query failure or global resource-discovery failure aborts the cycle before any resource Describe or change call. Check DynamoDB and `tag:GetResources` access. ARN parsing errors also abort global discovery, so inspect any ARN named in the error, including ECS short-format service ARNs. Fix the cause and invoke again.
 
 ## Common configuration errors
 
@@ -12,6 +12,7 @@ A configuration Query failure or global resource-discovery failure aborts the cy
 | --- | --- |
 | Group appears in the invalid-row output | Unknown attributes, attribute types, cron field count and reachability, paired cron attributes, override value, and expiry integer/range |
 | Timed override is rejected | The group must already have both cron attributes, and the expiry must be in the future |
+| Saving a schedule after override expiry fails | Clear or replace the expired override before saving the schedule |
 | Clearing an override is rejected | Add a schedule first, or remove an override-only group |
 | HTTP 409 or CLI exit 2 during a write | Another request deleted or changed the required item state; reread and explicitly retry the intended operation |
 
@@ -26,7 +27,7 @@ The reconciler isolates these errors and continues with other resources:
 - ECS services that are not `REPLICA` or have invalid restoration tags;
 - missing adapter permissions or throttled service calls.
 
-Transitional resources are intentionally skipped. A later five-minute cycle observes them again. Start and Stop delivery is at least once, so adapters and operator procedures must tolerate repeated absolute-state requests.
+RDS and EC2 observations classified as transitioning are intentionally skipped. ECS task-count differences do not suppress Stop. A later five-minute cycle observes them again. Start and Stop delivery is at least once, so adapters and operator procedures must tolerate repeated absolute-state requests.
 
 ## No action occurs
 

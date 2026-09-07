@@ -16,7 +16,7 @@ The definition files under `.github/` and their roles are collected below.
 
 `test.yml` has no trigger of its own (`workflow_call`). A release therefore runs the same checks a pull request does, against the tagged commit. The release job declares `needs: test`, so if any of them fails, no release is created for that tag and nothing is pushed to GHCR.
 
-Every job runs on `ubuntu-latest` and takes the Go version from `go.mod`. The integration and image tests need no credentials: both the emulator and the Runtime Interface Emulator run on the runner's docker daemon.
+Every job runs on ubuntu-latest. Jobs that set up Go take its version from go.mod. The integration and image tests need no credentials: both the emulator and the Runtime Interface Emulator run on the runner's docker daemon.
 
 ## Composition
 
@@ -46,7 +46,7 @@ flowchart LR
 
 `goreleaser check` validates the configuration but never builds, so it cannot see a broken `build/Dockerfile.*`. Only a snapshot does: it cross-compiles every target, assembles both images, and pushes nothing. It has to be `--snapshot` rather than `--skip=publish`, because dockers_v2 builds and pushes in one step and skipping publication skips the image build with it.
 
-It is also the slowest thing in CI, at roughly six minutes against three for everything else combined, and nothing but a change to the release path can break it. The build therefore runs only when `.goreleaser.yaml`, `build/`, the root `Dockerfile`, or the module files changed. The job itself always runs: filtering it away with `on.paths` would leave a required check that never reports, and a pull request waiting on it forever. Instead the job reports either way and skips only its expensive steps.
+The snapshot build runs only on pull requests changing .goreleaser.yaml, build/, the root Dockerfile, go.mod, or go.sum. Pushes to main skip the build. The job itself always runs: filtering it away with `on.paths` would leave a required check that never reports, and a pull request waiting on it forever. Instead the job reports either way and skips only its expensive steps.
 
 The gap this leaves is a Go change that compiles on linux but not on the CLI's release platforms. `make lint` cross-compiles the CLI for darwin and windows, which closes it on every pull request and takes seconds with a warm build cache.
 
@@ -60,7 +60,7 @@ Branch protection selects the required checks by these names, and whether Depend
 
 Every workflow declares `permissions: contents: read` at the top and raises it only in the jobs that need it, so write access exists only while it is needed. The release job holds `contents: write` and `packages: write`, and the auto-merge job holds `contents: write` and `pull-requests: write`.
 
-Runs triggered by Dependabot are the one case with different defaults. Whatever the workflow asks for, `GITHUB_TOKEN` is read-only and the Actions secrets are out of reach. What raises it to the level merging needs is the job-level `permissions`.
+The auto-merge job runs only when the pull request author is dependabot[bot]. It passes GITHUB_TOKEN to fetch-metadata and gh pr merge and requests write permissions at job level.
 
 ## Pinning actions by SHA
 

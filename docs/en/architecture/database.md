@@ -15,4 +15,6 @@ Only group items are stored. One group uses `pk=CONFIG` and `sk=GROUP#<name>`.
 
 Unknown attributes and malformed attribute types invalidate the group. Expired overrides remain valid stored data and are ignored during desired-state resolution.
 
-All group enumeration uses a strongly consistent Query on `CONFIG`. Configuration changes first use a strongly consistent `GetItem`, validate the complete result, and then issue an operation-specific conditional write. Attribute-level updates preserve concurrent changes to unrelated attributes. A conditional failure is reported as a conflict and is not retried automatically.
+All group enumeration uses a strongly consistent Query on `CONFIG`. Configuration changes first use a strongly consistent GetItem and validate attribute decoding before an operation-specific conditional write. Schedule, override, and clear-override validate the complete resulting group; remove does not validate cron expressions or cross-attribute invariants. Attribute-level updates preserve concurrent changes to unrelated attributes. A conditional failure is reported as a conflict and is not retried automatically.
+
+Creation requires an absent item. Existing schedule updates, indefinite override updates, and deletion require an existing item. Timed overrides and clear-override also require both cron attributes to exist. Conditions do not compare values or revisions, so writes to the same attributes do not conflict; the last-applied values remain.

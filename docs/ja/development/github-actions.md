@@ -16,7 +16,7 @@ CI、リリース、依存の更新は、いずれも `.github/` 配下の定義
 
 `test.yml` は自身のトリガを持たない(`workflow_call`)。したがってリリース時には、pull request と同一の検査がタグ付けされたコミットに対して走る。リリースジョブは `needs: test` を宣言しており、いずれかが失敗した場合、そのタグにリリースは作られず、GHCR へも何も push されない。
 
-各ジョブは `ubuntu-latest` 上で動作し、Go のバージョンは `go.mod` から取る。統合テストとイメージテストに認証情報は要らない。エミュレータも Runtime Interface Emulator も、ランナーの docker デーモンで動作する。
+各ジョブは ubuntu-latest 上で動作する。Go をセットアップするジョブでは、バージョンを go.mod から取る。統合テストとイメージテストに認証情報は要らない。エミュレータも Runtime Interface Emulator も、ランナーの docker デーモンで動作する。
 
 ## 構成
 
@@ -46,7 +46,7 @@ flowchart LR
 
 `goreleaser check` は設定を検証するがビルドを行わない。したがって `build/Dockerfile.*` の誤りは検出できない。それを検出するのはスナップショットのみである。スナップショットは全ターゲットをクロスコンパイルし、両方のイメージを組み立て、何も push しない。`--skip=publish` ではなく `--snapshot` である必要がある。dockers_v2 はビルドと push が一体であり、publish を飛ばすとイメージのビルドごと飛ぶためである。
 
-同時に、これは CI で最も所要時間が長い。他の全ジョブの合計が約 3 分であるのに対し、単独で約 6 分を要する。そして、これを破壊しうるのはリリース経路の変更だけである。したがってビルドが走るのは、`.goreleaser.yaml`、`build/`、ルートの `Dockerfile`、モジュールファイルのいずれかが変わった場合に限る。ジョブ自体は常に実行する。`on.paths` でジョブごと除外すると、報告されない必須チェックが生まれ、pull request がそれを永久に待つことになるためである。代わりに、ジョブは常に結果を報告し、重いステップだけを飛ばす。
+スナップショットのビルドが走るのは、pull request で .goreleaser.yaml、build/、ルートの Dockerfile、go.mod、go.sum のいずれかが変わった場合に限る。main への push ではビルドを省略する。ジョブ自体は常に実行する。`on.paths` でジョブごと除外すると、報告されない必須チェックが生まれ、pull request がそれを永久に待つことになるためである。代わりに、ジョブは常に結果を報告し、重いステップだけを飛ばす。
 
 この構成で残る隙は、linux ではコンパイルできるが CLI のリリース対象プラットフォームでは通らない Go の変更である。`make lint` が CLI を darwin と windows 向けにクロスコンパイルすることで、これを pull request ごとに塞ぐ。ビルドキャッシュが温まっていれば数秒で完了する。
 
@@ -60,7 +60,7 @@ flowchart LR
 
 各ワークフローは先頭で `permissions: contents: read` を宣言し、必要なジョブでのみ引き上げる。書き込み権限を持つのは必要な間だけである。リリースジョブは `contents: write` と `packages: write`、自動マージのジョブは `contents: write` と `pull-requests: write` を持つ。
 
-Dependabot によって起動された実行だけは既定が異なる。ワークフローが何を要求していても、`GITHUB_TOKEN` は読み取り専用となり、Actions のシークレットにも触れられない。マージに必要な水準へ引き上げているのは、ジョブ単位の `permissions` である。
+自動マージジョブは pull request の作成者が dependabot[bot] の場合だけ実行する。fetch-metadata と gh pr merge には GITHUB_TOKEN を渡す。書き込み権限の要求はジョブ単位の permissions に記述する。
 
 ## action の SHA 固定
 
