@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
 
+	"cheapskate/internal/app/port"
 	"cheapskate/internal/app/port/porttest"
 	"cheapskate/internal/core/model"
 	"cheapskate/internal/state"
@@ -56,6 +57,43 @@ func TestScheduleAndOverrideFormsUseApplicationService(t *testing.T) {
 	assert.Equal(t, "disabled", item["override"].(*types.AttributeValueMemberS).Value)
 	assert.Equal(t, "0 9 * * *", item["start_cron"].(*types.AttributeValueMemberS).Value)
 	assert.NotNil(t, item["override_expires_at"])
+}
+
+func TestGroupDetailRendersScheduleResourcesStateAndBasePath(t *testing.T) {
+	api, db := statemocks.NewDynaStore(gomock.NewController(t))
+	discoverer := porttest.NewDiscoverer()
+	discoverer.Resources = map[string]model.Resource{
+		"arn:aws:ecs:ap-northeast-1:123456789012:service/dev/api": {
+			Type: model.TypeEcsService, Ref: "dev/api", ARN: "arn:aws:ecs:ap-northeast-1:123456789012:service/dev/api",
+			Tags: map[string]string{model.GroupTagKey: "dev", model.EcsDesiredCountTagKey: "2"},
+		},
+	}
+	describers := map[model.ResourceType]port.Describer{
+		model.TypeEcsService: porttest.Describer{Obs: model.Observation{State: model.StateRunning, Detail: "desiredCount=2"}},
+	}
+	location := time.FixedZone("JST", 9*60*60)
+	server := New(state.New(api, "table"), discoverer, describers, "/stage/", location, nil)
+	now := time.Date(2026, 9, 3, 12, 0, 0, 0, location)
+	server.now = func() time.Time { return now }
+	_, err := server.service.Schedule(context.Background(), "dev", model.ScheduleSpec{StartCron: "0 9 * * *", StopCron: "0 20 * * *"}, now)
+	require.NoError(t, err)
+
+	request := httptest.NewRequest(http.MethodGet, "/group?name=dev", nil)
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+
+	require.Equal(t, http.StatusOK, response.Code)
+	body := response.Body.String()
+	assert.Contains(t, body, "<h2>dev</h2>")
+	assert.Contains(t, body, "cheapskate:group=dev")
+	assert.Contains(t, body, "start: 0 9 * * *")
+	assert.Contains(t, body, "stop: 0 20 * * *")
+	assert.Contains(t, body, "dev/api")
+	assert.Contains(t, body, "desired: 2")
+	assert.Contains(t, body, "running (desiredCount=2)")
+	assert.Contains(t, body, `action="/stage/op"`)
+	assert.Contains(t, body, "All schedules and dates use JST")
+	assert.Equal(t, 2, db.Calls("get"))
 }
 
 func TestInvalidGroupDoesNotDiscoverResources(t *testing.T) {

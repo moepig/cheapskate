@@ -22,7 +22,11 @@ ECS には停止状態がないため、cheapskate は service を 0 まで scal
 
 scalable target の有無によらず、3 個すべての値が `0 <= min <= desired <= max` を満たす必要がある。タグが存在しない場合だけ既定値を使い、空文字列はエラーにする。
 
-scalable target がある場合、Stop は上下限だけを `0/0` に変更する。Start は min/max に差がある場合だけ復元し、続いて desired count を再取得して、タグの値と異なる場合だけ更新する。上下限の変更後に desired count の更新が失敗した場合は、変更前の上下限への復元を試みる。desired count の再取得に失敗した場合は、その復元を行わずエラーを返す。
+scalable target がある場合、Stop は上下限だけを `0/0` に変更する。Start は上下限を一時的に desired count のタグ値へ揃え、台数を再取得して、タグ値と異なる場合だけ更新する。台数の設定に成功した後、上下限を min/max のタグ値へ戻す。
+
+途中でエラーが発生した場合、一時的な上下限を維持する。通常の上下限との差が残るため、次の reconcile で起動処理を再開できる。通常の上下限も desired count と同値である場合は、上下限の設定によって起動台数へ調整されるため、そのまま収束済みとなる。上下限を通常値へ戻した後に応答だけが失われた場合も、次の reconcile では収束済みとして扱う。通知は欠落しうる。
+
+既存の scalable target の capacity は、上下限の更新時にその範囲内へ調整される。API の動作は、[RegisterScalableTarget](https://docs.aws.amazon.com/autoscaling/application/APIReference/API_RegisterScalableTarget.html) を参照。
 
 scalable target がない場合、Stop は desired count を 0 にし、Start は設定値または既定値へ戻す。scalable target がなくても、3 個のタグ値をすべて検証する。
 

@@ -13,11 +13,20 @@
 package image
 
 import (
+	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-lambda-go/events"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -62,6 +71,88 @@ func TestWebconsoleImageServesThroughTheLambdaWebAdapter(t *testing.T) {
 	})
 }
 
+func TestWebconsoleImageLifecycleThroughTheLambdaWebAdapter(t *testing.T) {
+	cfg := emutest.Config(t)
+	table := emutest.CreateStateTable(t, cfg)
+	env := emulatorEnv(t, table)
+	env["BASE_PATH"] = "/stage"
+	env["DEFAULT_TIMEZONE"] = "Asia/Tokyo"
+	console := startUnderRIE(t, buildImage(t, "webconsole"), env,
+		proxyEvent(t, warmupSourceIP, nil))
+
+	db := dynamodb.NewFromConfig(cfg)
+	post := func(values url.Values, origin string) events.APIGatewayProxyResponse {
+		headers := map[string]string{"Content-Type": "application/x-www-form-urlencoded", "Origin": origin}
+		return invokeProxyResponse(t, console, proxyRequest(t, realSourceIP, http.MethodPost, "/op", values.Encode(), headers, nil))
+	}
+
+	schedule := post(url.Values{
+		"action": {"schedule"}, "group": {"dev"}, "start": {"0 9 * * *"}, "stop": {"0 20 * * *"},
+	}, "http://example.com")
+	assert.Equal(t, http.StatusSeeOther, schedule.StatusCode)
+	assert.Equal(t, "/stage/group?name=dev&msg=schedule+saved", responseHeader(schedule, "Location"))
+	item, err := db.GetItem(context.Background(), &dynamodb.GetItemInput{TableName: aws.String(table), Key: map[string]types.AttributeValue{
+		"pk": &types.AttributeValueMemberS{Value: "CONFIG"}, "sk": &types.AttributeValueMemberS{Value: "GROUP#dev"},
+	}})
+	require.NoError(t, err)
+	assert.Equal(t, "0 9 * * *", item.Item["start_cron"].(*types.AttributeValueMemberS).Value)
+	assert.Equal(t, "0 20 * * *", item.Item["stop_cron"].(*types.AttributeValueMemberS).Value)
+
+	detail := invokeProxyResponse(t, console, proxyRequest(t, realSourceIP, http.MethodGet, "/group", "", nil, map[string]string{"name": "dev"}))
+	assert.Equal(t, http.StatusOK, detail.StatusCode)
+	detailBody := responseBody(t, detail)
+	assert.Contains(t, detailBody, "<h2>dev</h2>")
+	assert.Contains(t, detailBody, "All schedules and dates use Asia/Tokyo")
+	assert.Contains(t, detailBody, `action="/stage/op"`)
+
+	crossOrigin := post(url.Values{"action": {"override"}, "group": {"dev"}, "override": {"stopped"}}, "https://attacker.example")
+	assert.Equal(t, http.StatusForbidden, crossOrigin.StatusCode)
+	item, err = db.GetItem(context.Background(), &dynamodb.GetItemInput{TableName: aws.String(table), Key: map[string]types.AttributeValue{
+		"pk": &types.AttributeValueMemberS{Value: "CONFIG"}, "sk": &types.AttributeValueMemberS{Value: "GROUP#dev"},
+	}})
+	require.NoError(t, err)
+	assert.Nil(t, item.Item["override"], "cross-origin POST must not change DynamoDB")
+
+	expectedUntil := time.Now().In(time.FixedZone("JST", 9*60*60)).Add(2 * time.Hour).Truncate(time.Minute)
+	until := expectedUntil.Format("2006-01-02T15:04")
+	override := post(url.Values{
+		"action": {"override"}, "group": {"dev"}, "override": {"stopped"}, "until": {until},
+	}, "http://example.com")
+	assert.Equal(t, http.StatusSeeOther, override.StatusCode)
+	assert.Equal(t, "/stage/group?name=dev&msg=override+saved", responseHeader(override, "Location"))
+	item, err = db.GetItem(context.Background(), &dynamodb.GetItemInput{TableName: aws.String(table), Key: map[string]types.AttributeValue{
+		"pk": &types.AttributeValueMemberS{Value: "CONFIG"}, "sk": &types.AttributeValueMemberS{Value: "GROUP#dev"},
+	}})
+	require.NoError(t, err)
+	assert.Equal(t, "stopped", item.Item["override"].(*types.AttributeValueMemberS).Value)
+	expiresAt, ok := item.Item["override_expires_at"].(*types.AttributeValueMemberN)
+	require.True(t, ok, "override_expires_at must be a DynamoDB Number")
+	assert.Equal(t, strconv.FormatInt(expectedUntil.Unix(), 10), expiresAt.Value)
+
+	detail = invokeProxyResponse(t, console, proxyRequest(t, realSourceIP, http.MethodGet, "/group", "", nil, map[string]string{"name": "dev"}))
+	require.Equal(t, http.StatusOK, detail.StatusCode)
+	assert.Contains(t, responseBody(t, detail), "stopped until "+expectedUntil.Format("2006-01-02 15:04 MST"))
+
+	cleared := post(url.Values{"action": {"clear-override"}, "group": {"dev"}}, "http://example.com")
+	assert.Equal(t, http.StatusSeeOther, cleared.StatusCode)
+	assert.Equal(t, "/stage/group?name=dev&msg=override+cleared", responseHeader(cleared, "Location"))
+	item, err = db.GetItem(context.Background(), &dynamodb.GetItemInput{TableName: aws.String(table), Key: map[string]types.AttributeValue{
+		"pk": &types.AttributeValueMemberS{Value: "CONFIG"}, "sk": &types.AttributeValueMemberS{Value: "GROUP#dev"},
+	}})
+	require.NoError(t, err)
+	assert.Nil(t, item.Item["override"])
+	assert.Nil(t, item.Item["override_expires_at"])
+
+	removed := post(url.Values{"action": {"remove"}, "group": {"dev"}}, "http://example.com")
+	assert.Equal(t, http.StatusSeeOther, removed.StatusCode)
+	assert.Equal(t, "/stage/?msg=group+removed", responseHeader(removed, "Location"))
+	item, err = db.GetItem(context.Background(), &dynamodb.GetItemInput{TableName: aws.String(table), Key: map[string]types.AttributeValue{
+		"pk": &types.AttributeValueMemberS{Value: "CONFIG"}, "sk": &types.AttributeValueMemberS{Value: "GROUP#dev"},
+	}})
+	require.NoError(t, err)
+	assert.Empty(t, item.Item)
+}
+
 func TestWebconsoleImageRejectsInvalidTimezone(t *testing.T) {
 	cfg := emutest.Config(t)
 	table := emutest.CreateStateTable(t, cfg)
@@ -72,6 +163,11 @@ func TestWebconsoleImageRejectsInvalidTimezone(t *testing.T) {
 // sourceIP は requestContext.identity に入り、クライアントは設定できない
 func proxyEvent(t *testing.T, sourceIP string, headers map[string]string) []byte {
 	t.Helper()
+	return proxyRequest(t, sourceIP, http.MethodGet, "/", "", headers, nil)
+}
+
+func proxyRequest(t *testing.T, sourceIP, method, path, body string, headers, query map[string]string) []byte {
+	t.Helper()
 
 	h := map[string]string{"Host": "example.com"}
 	for k, v := range headers {
@@ -79,15 +175,17 @@ func proxyEvent(t *testing.T, sourceIP string, headers map[string]string) []byte
 	}
 
 	payload, err := json.Marshal(events.APIGatewayProxyRequest{
-		Resource:   "/",
-		Path:       "/",
-		HTTPMethod: http.MethodGet,
-		Headers:    h,
+		Resource:              path,
+		Path:                  path,
+		HTTPMethod:            method,
+		Headers:               h,
+		Body:                  body,
+		QueryStringParameters: query,
 		RequestContext: events.APIGatewayProxyRequestContext{
 			AccountID:    "123456789012",
-			ResourcePath: "/",
-			Path:         "/",
-			HTTPMethod:   http.MethodGet,
+			ResourcePath: path,
+			Path:         path,
+			HTTPMethod:   method,
 			RequestID:    "imagetest",
 			Stage:        "imagetest",
 			Identity:     events.APIGatewayRequestIdentity{SourceIP: sourceIP},
@@ -95,6 +193,37 @@ func proxyEvent(t *testing.T, sourceIP string, headers map[string]string) []byte
 	})
 	require.NoError(t, err)
 	return payload
+}
+
+func invokeProxyResponse(t *testing.T, console imageUnderRIE, payload []byte) events.APIGatewayProxyResponse {
+	t.Helper()
+	var response events.APIGatewayProxyResponse
+	require.NoError(t, json.Unmarshal(console.invoke(t, payload), &response))
+	return response
+}
+
+func responseBody(t *testing.T, response events.APIGatewayProxyResponse) string {
+	t.Helper()
+	if !response.IsBase64Encoded {
+		return response.Body
+	}
+	decoded, err := base64.StdEncoding.DecodeString(response.Body)
+	require.NoError(t, err)
+	return string(decoded)
+}
+
+func responseHeader(response events.APIGatewayProxyResponse, key string) string {
+	for name, value := range response.Headers {
+		if strings.EqualFold(name, key) {
+			return value
+		}
+	}
+	for name, values := range response.MultiValueHeaders {
+		if strings.EqualFold(name, key) && len(values) > 0 {
+			return values[0]
+		}
+	}
+	return ""
 }
 
 // アダプタが設定するものと同じ名前のヘッダを、クライアントが送信した状態を構成する

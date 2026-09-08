@@ -52,7 +52,8 @@ func (t *EcsServiceTarget) Describe(ctx context.Context, res model.Resource) (mo
 	}
 	for _, s := range out.Services {
 		if s.Status != nil && *s.Status == "ACTIVE" {
-			if s.SchedulingStrategy != ecstypes.SchedulingStrategyReplica {
+			// ECS の既定戦略は Replica であり、空値もその既定値として扱う。明示された別の戦略は拒否する。
+			if s.SchedulingStrategy != "" && s.SchedulingStrategy != ecstypes.SchedulingStrategyReplica {
 				return model.Observation{}, fmt.Errorf("ecs service %s uses unsupported scheduling strategy %q", res.Ref, s.SchedulingStrategy)
 			}
 			observation := model.Observation{
@@ -67,8 +68,8 @@ func (t *EcsServiceTarget) Describe(ctx context.Context, res model.Resource) (mo
 			if err != nil {
 				return model.Observation{}, err
 			}
-			if observation.State == model.StateRunning && scalable != nil && (aws.ToInt32(scalable.MinCapacity) != config.minimum || aws.ToInt32(scalable.MaxCapacity) != config.maximum) {
-				observation.NeedsStart = true
+			if observation.State == model.StateRunning && scalable != nil {
+				observation.NeedsStart = aws.ToInt32(scalable.MinCapacity) != config.minimum || aws.ToInt32(scalable.MaxCapacity) != config.maximum
 			}
 			if observation.State == model.StateStopped && scalable != nil && (aws.ToInt32(scalable.MinCapacity) != 0 || aws.ToInt32(scalable.MaxCapacity) != 0) {
 				observation.NeedsStop = true
@@ -108,7 +109,7 @@ func (t *EcsServiceTarget) Stop(ctx context.Context, res model.Resource) error {
 	return err
 }
 
-// Auto Scaling の min/max をタグ値へ復元し、必要な場合に desiredCount を復元する。
+// 起動台数を設定し、成功後に Auto Scaling の min/max をタグ値へ戻す。
 func (t *EcsServiceTarget) Start(ctx context.Context, res model.Resource) error {
 	cluster, service, err := splitEcsRef(res.Ref)
 	if err != nil {
@@ -122,33 +123,29 @@ func (t *EcsServiceTarget) Start(ctx context.Context, res model.Resource) error 
 	if err != nil {
 		return err
 	}
-	boundsChanged := false
-	var previousMinimum, previousMaximum int32
 	if scalable != nil {
-		if aws.ToInt32(scalable.MinCapacity) != config.minimum || aws.ToInt32(scalable.MaxCapacity) != config.maximum {
-			if err := t.register(ctx, cluster, service, config.minimum, config.maximum); err != nil {
+		// 台数の設定が完了するまでは上下限を起動台数に固定する。失敗時もこの値を残し、通常の上下限との差を維持する。
+		// RegisterScalableTarget は範囲外の capacity を上下限内へ調整する: "adjusts the capacity of the scalable target to place it within these bounds"
+		// https://docs.aws.amazon.com/autoscaling/application/APIReference/API_RegisterScalableTarget.html
+		if aws.ToInt32(scalable.MinCapacity) != config.desired || aws.ToInt32(scalable.MaxCapacity) != config.desired {
+			if err := t.register(ctx, cluster, service, config.desired, config.desired); err != nil {
 				return err
 			}
-			boundsChanged = true
-			previousMinimum = aws.ToInt32(scalable.MinCapacity)
-			previousMaximum = aws.ToInt32(scalable.MaxCapacity)
 		}
 	}
 	currentDesired, err := t.desiredCount(ctx, cluster, service)
 	if err != nil {
 		return err
 	}
-	if currentDesired == config.desired {
-		return nil
+	if currentDesired != config.desired {
+		if _, err := t.Ecs.UpdateService(ctx, &ecs.UpdateServiceInput{Cluster: &cluster, Service: &service, DesiredCount: &config.desired}); err != nil {
+			return err
+		}
 	}
-	_, err = t.Ecs.UpdateService(ctx, &ecs.UpdateServiceInput{Cluster: &cluster, Service: &service, DesiredCount: &config.desired})
-	if err == nil || !boundsChanged {
-		return err
+	if scalable != nil && (config.minimum != config.desired || config.maximum != config.desired) {
+		return t.register(ctx, cluster, service, config.minimum, config.maximum)
 	}
-	if restoreErr := t.register(ctx, cluster, service, previousMinimum, previousMaximum); restoreErr != nil {
-		return fmt.Errorf("update ECS desired count: %w; restore scalable target: %v", err, restoreErr)
-	}
-	return err
+	return nil
 }
 
 func (t *EcsServiceTarget) desiredCount(ctx context.Context, cluster, service string) (int32, error) {
@@ -158,7 +155,7 @@ func (t *EcsServiceTarget) desiredCount(ctx context.Context, cluster, service st
 	}
 	for _, s := range out.Services {
 		if s.Status != nil && *s.Status == "ACTIVE" {
-			if s.SchedulingStrategy != ecstypes.SchedulingStrategyReplica {
+			if s.SchedulingStrategy != "" && s.SchedulingStrategy != ecstypes.SchedulingStrategyReplica {
 				return 0, fmt.Errorf("ecs service %s/%s uses unsupported scheduling strategy %q", cluster, service, s.SchedulingStrategy)
 			}
 			return s.DesiredCount, nil

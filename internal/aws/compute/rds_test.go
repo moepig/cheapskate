@@ -120,3 +120,16 @@ func TestRdsInstanceDescribeHandlesNotFoundNilStatusAndAPIFailure(t *testing.T) 
 	_, err := (&RdsInstanceTarget{Client: client}).Describe(context.Background(), model.Resource{Ref: "db"})
 	assert.ErrorContains(t, err, "RDS unavailable")
 }
+
+func TestRdsClusterDescribeHandlesNotFoundAndAPIFailure(t *testing.T) {
+	client := mocks.NewMockRdsAPI(gomock.NewController(t))
+	client.EXPECT().DescribeDBClusters(gomock.Any(), gomock.Any()).Return(nil, &types.DBClusterNotFoundFault{})
+	observation, err := (&RdsClusterTarget{Client: client}).Describe(context.Background(), model.Resource{Ref: "cluster"})
+	require.NoError(t, err)
+	assert.Equal(t, model.StateNotFound, observation.State)
+
+	client = mocks.NewMockRdsAPI(gomock.NewController(t))
+	client.EXPECT().DescribeDBClusters(gomock.Any(), gomock.Any()).Return(nil, errors.New("RDS cluster unavailable"))
+	_, err = (&RdsClusterTarget{Client: client}).Describe(context.Background(), model.Resource{Ref: "cluster"})
+	assert.ErrorContains(t, err, "RDS cluster unavailable")
+}

@@ -41,6 +41,27 @@ func TestScheduleCreatesAndUpdatesWithoutLosingOverride(t *testing.T) {
 	assert.Equal(t, "0 8 * * *", group.StartCron)
 }
 
+func TestScheduleRejectsUpdateWhenExistingOverrideHasExpired(t *testing.T) {
+	db, service := fixture(t)
+	ctx := context.Background()
+	createdAt := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
+	_, err := service.Schedule(ctx, "dev", model.ScheduleSpec{StartCron: "0 9 * * *", StopCron: "0 20 * * *"}, createdAt)
+	require.NoError(t, err)
+	group, err := service.Override(ctx, "dev", model.OverrideStopped, time.Hour, createdAt)
+	require.NoError(t, err)
+	expiredAt := createdAt.Add(time.Hour)
+
+	_, err = service.Schedule(ctx, "dev", model.ScheduleSpec{StartCron: "0 8 * * *", StopCron: "0 19 * * *"}, expiredAt)
+	assert.ErrorContains(t, err, "override_expires_at must be later than")
+	assert.Equal(t, 1, db.Calls("update"), "the rejected schedule must not write over the expired timestamp")
+
+	rows, err := service.List(ctx, expiredAt)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, group.OverrideExpiresAt, rows[0].Group.OverrideExpiresAt)
+	assert.Equal(t, "0 9 * * *", rows[0].Group.StartCron)
+}
+
 func TestScheduleRequiresBothCronExpressionsDespiteOverride(t *testing.T) {
 	_, service := fixture(t)
 	ctx := context.Background()

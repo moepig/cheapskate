@@ -14,6 +14,7 @@ import (
 	"go.uber.org/mock/gomock"
 
 	"cheapskate/internal/app/groups"
+	"cheapskate/internal/app/port"
 	"cheapskate/internal/app/port/porttest"
 	"cheapskate/internal/core/model"
 	"cheapskate/internal/state"
@@ -119,6 +120,41 @@ func TestShowJSONAndInvalidStoredGroupExitCode(t *testing.T) {
 	require.ErrorAs(t, err, &commandErr)
 	assert.Equal(t, 2, commandErr.code)
 	assert.Contains(t, stdout.String(), `"error"`)
+}
+
+func TestShowJSONIncludesGroupAndResourceDetails(t *testing.T) {
+	api, db := statemocks.NewDynaStore(gomock.NewController(t))
+	store := state.New(api, "table")
+	discoverer := porttest.NewDiscoverer()
+	discoverer.Resources = map[string]model.Resource{
+		"arn:aws:ecs:service/dev/api": {
+			Type: model.TypeEcsService, Ref: "dev/api", ARN: "arn:aws:ecs:service/dev/api",
+			Tags: map[string]string{model.GroupTagKey: "dev", model.EcsDesiredCountTagKey: "2"},
+		},
+	}
+	describers := map[model.ResourceType]port.Describer{
+		model.TypeEcsService: porttest.Describer{Obs: model.Observation{State: model.StateRunning, Detail: "desiredCount=2"}},
+	}
+	service := groups.New(store, discoverer, describers, time.UTC)
+	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
+	_, err := service.Schedule(context.Background(), "dev", model.ScheduleSpec{StartCron: "0 9 * * *", StopCron: "0 20 * * *"}, now)
+	require.NoError(t, err)
+	var stdout, stderr bytes.Buffer
+
+	require.NoError(t, cmdShow(context.Background(), service, []string{"--group", "dev"}, &stdout, &stderr, "json", now))
+	var output showOutput
+	require.NoError(t, json.Unmarshal(stdout.Bytes(), &output))
+	assert.Equal(t, "dev", output.Group.Name)
+	assert.Equal(t, "0 9 * * *", output.Group.StartCron)
+	require.Len(t, output.Resources, 1)
+	assert.Equal(t, model.TypeEcsService, output.Resources[0].Type)
+	assert.Equal(t, "dev/api", output.Resources[0].Ref)
+	assert.Equal(t, map[string]any{"desired_count": "2"}, output.Resources[0].Config)
+	require.NotNil(t, output.Resources[0].Live)
+	assert.Equal(t, model.StateRunning, output.Resources[0].Live.State)
+	assert.Equal(t, "desiredCount=2", output.Resources[0].Live.Detail)
+	assert.Empty(t, stderr.String())
+	assert.Equal(t, 2, db.Calls("get"))
 }
 
 func TestResourceConfig(t *testing.T) {

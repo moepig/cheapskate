@@ -209,7 +209,7 @@ ECS 設定タグは、リソース探索後、Application Auto Scaling または
 
 既存の scalable target に `RegisterScalableTarget(0, 0)` を実行すると、現在の capacity も 0 へ変更される。この場合に `UpdateService` と rollback は実行しない。[RegisterScalableTarget](https://docs.aws.amazon.com/autoscaling/application/APIReference/API_RegisterScalableTarget.html)
 
-起動時は、scalable target がある場合に設定タグの min / max を `RegisterScalableTarget` で設定してから、設定タグの desired count を `UpdateService` で設定する。scalable target がない場合は `UpdateService` だけを呼ぶ。desired count は起動時の設定値であり、起動後に Service Auto Scaling が変更した値を継続的に元へ戻さない。
+起動時は、scalable target がある場合に `RegisterScalableTarget` で上下限を desired count のタグ値へ一時的に揃える。台数を再取得し、タグ値と異なる場合だけ `UpdateService` で設定する。成功後に上下限を min / max のタグ値へ戻す。途中で失敗した場合は一時的な上下限を維持し、通常値との差によって次回 reconcile で起動処理を再開する。通常の上下限も desired count と同値の場合は、上下限の設定で起動台数へ調整されるため収束済みとなる。scalable target がない場合、変更 API は `UpdateService` だけを呼ぶ。desired count は起動時の設定値であり、起動後に Service Auto Scaling が変更した値を継続的に元へ戻さない。
 
 ## reconcile
 

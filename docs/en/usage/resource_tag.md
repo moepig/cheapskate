@@ -22,7 +22,11 @@ ECS has no stopped state, so cheapskate scales a service to zero and later resto
 
 All three values must satisfy `0 <= min <= desired <= max`, with or without a scalable target. Defaults apply only to absent tags; empty values are errors.
 
-With a scalable target, Stop changes only its bounds to `0/0`. Start restores min/max only when they differ, then rereads desired count and updates it only when it differs from the tag value. If the desired-count update fails after changing bounds, Start attempts to restore the previous bounds. A failure to reread desired count returns an error without restoring bounds.
+With a scalable target, Stop changes only its bounds to `0/0`. Start temporarily sets both bounds to the desired-count tag value, rereads the count, and updates it only when it differs from that value. Once the count is set successfully, Start restores the configured min/max bounds.
+
+An intermediate failure leaves the temporary bounds in place. Their difference from the configured bounds lets the next reconcile resume the start operation. When the configured bounds also equal the desired count, setting the bounds already adjusts capacity to the starting count, so the service is converged. If restoring the configured bounds succeeds but its response is lost, the next reconcile also treats the service as converged. Notifications may be lost.
+
+Updating an existing scalable target adjusts its capacity to fit the bounds. See [RegisterScalableTarget](https://docs.aws.amazon.com/autoscaling/application/APIReference/API_RegisterScalableTarget.html) for the API behavior.
 
 Without a scalable target, Stop sets desired count to zero, and Start restores the configured or default desired count. All three tag values are validated even when no scalable target exists.
 

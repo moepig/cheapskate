@@ -2,9 +2,12 @@ package state
 
 import (
 	"context"
+	"errors"
 	"maps"
 	"testing"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -39,6 +42,31 @@ func TestListGroupsQueriesEveryPageWithStrongConsistency(t *testing.T) {
 	assert.Equal(t, "b", rows[1].Name)
 	assert.Equal(t, 2, db.Calls("query"))
 	assert.True(t, db.QueryConsistentRead())
+}
+
+func TestListGroupsFailsWhenTheSecondPageQueryFails(t *testing.T) {
+	controller := gomock.NewController(t)
+	api := mocks.NewMockAPI(controller)
+	first := encodeGroup(model.GroupSpec{Name: "a", Override: model.OverrideRunning})
+	lastKey := map[string]types.AttributeValue{
+		"pk": &types.AttributeValueMemberS{Value: configPK},
+		"sk": &types.AttributeValueMemberS{Value: groupSKPrefix + "a"},
+	}
+	queryErr := errors.New("second page unavailable")
+	gomock.InOrder(
+		api.EXPECT().Query(gomock.Any(), gomock.Any()).DoAndReturn(
+			func(_ context.Context, input *dynamodb.QueryInput, _ ...func(*dynamodb.Options)) (*dynamodb.QueryOutput, error) {
+				assert.True(t, aws.ToBool(input.ConsistentRead))
+				return &dynamodb.QueryOutput{Items: []map[string]types.AttributeValue{first}, LastEvaluatedKey: lastKey}, nil
+			}),
+		api.EXPECT().Query(gomock.Any(), gomock.Any()).Return(nil, queryErr),
+	)
+
+	rows, err := New(api, "table").ListGroups(context.Background())
+
+	assert.Nil(t, rows)
+	assert.ErrorIs(t, err, queryErr)
+	assert.ErrorContains(t, err, "query group configuration")
 }
 
 func TestGetGroupUsesStrongConsistency(t *testing.T) {

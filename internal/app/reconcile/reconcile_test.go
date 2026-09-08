@@ -196,6 +196,55 @@ func TestStoppedResourceWithStopRepairIsStopped(t *testing.T) {
 	assert.Equal(t, model.ActionStop, summary.Actions[0].Action)
 }
 
+func TestConvergedTransitioningAndNotFoundResourcesCauseNoActionOrNotification(t *testing.T) {
+	store := &memoryStore{rows: []state.GroupRow{{Name: "dev", Group: model.GroupSpec{Name: "dev", Override: model.OverrideRunning}}}}
+	discoverer := porttest.NewDiscoverer()
+	discoverer.Resources = map[string]model.Resource{
+		"running":       taggedResource("running", "running", "dev"),
+		"transitioning": taggedResource("transitioning", "transitioning", "dev"),
+		"missing":       taggedResource("missing", "missing", "dev"),
+	}
+	target := porttest.NewTarget(model.TypeRdsInstance)
+	target.Observations["running"] = model.Observation{State: model.StateRunning}
+	target.Observations["transitioning"] = model.Observation{State: model.StateTransitioning}
+	target.Observations["missing"] = model.Observation{State: model.StateNotFound}
+	deps := testDeps(store, discoverer, target)
+	notifier := deps.Notifier.(*porttest.Notifier)
+
+	summary, err := Run(context.Background(), nil, deps, time.Now())
+
+	require.NoError(t, err)
+	assert.Equal(t, 3, summary.Reconciled)
+	assert.Empty(t, summary.Actions)
+	assert.Empty(t, summary.Errors)
+	assert.Empty(t, target.Started)
+	assert.Empty(t, target.Stopped)
+	assert.Empty(t, notifier.Published)
+}
+
+func TestEmptyAndInvalidMembershipTagsAreRejectedBeforeAnyOperation(t *testing.T) {
+	store := &memoryStore{rows: []state.GroupRow{{Name: "dev", Group: model.GroupSpec{Name: "dev", Override: model.OverrideStopped}}}}
+	discoverer := porttest.NewDiscoverer()
+	discoverer.Resources = map[string]model.Resource{
+		"missing": {Type: model.TypeRdsInstance, ARN: "missing", Ref: "missing", Tags: map[string]string{}},
+		"empty":   {Type: model.TypeRdsInstance, ARN: "empty", Ref: "empty", Tags: map[string]string{model.GroupTagKey: ""}},
+		"invalid": {Type: model.TypeRdsInstance, ARN: "invalid", Ref: "invalid", Tags: map[string]string{model.GroupTagKey: "bad/name"}},
+	}
+	target := porttest.NewTarget(model.TypeRdsInstance)
+	deps := testDeps(store, discoverer, target)
+	notifier := deps.Notifier.(*porttest.Notifier)
+
+	summary, err := Run(context.Background(), nil, deps, time.Now())
+
+	require.NoError(t, err)
+	assert.Zero(t, summary.Reconciled)
+	assert.Len(t, summary.Errors, 3)
+	assert.Empty(t, target.Described)
+	assert.Empty(t, target.Started)
+	assert.Empty(t, target.Stopped)
+	assert.Empty(t, notifier.Published)
+}
+
 func TestSuccessfulActionNotificationHasSlimPayload(t *testing.T) {
 	store := &memoryStore{rows: []state.GroupRow{{Name: "dev", Group: model.GroupSpec{Name: "dev", Override: model.OverrideRunning}}}}
 	discoverer := porttest.NewDiscoverer()
