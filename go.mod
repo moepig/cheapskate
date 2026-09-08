@@ -1,6 +1,6 @@
 module cheapskate
 
-go 1.26.2
+go 1.26.7
 
 require (
 	github.com/adhocore/gronx v1.20.3
