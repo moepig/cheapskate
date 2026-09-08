@@ -8,6 +8,14 @@ cheapskate は、タグ付き AWS リソースを、所属グループで決ま�
 
 reconciler は、全グループと全タグ付きリソースを読み込んでから、Describe、Start、または Stop を呼び出す。全体の読み込みに失敗した場合はサイクルを中断する。不正なグループまたはリソースは個別に処理し、他のリソースは継続する。
 
+## schedule と override
+
+schedule は、グループの通常の起動・停止時刻を cron で定める設定である。
+
+override は、グループを起動状態に保つ running、停止状態に保つ stopped、または自動制御を無効にする disabled の指定である。有効期限を設定することも、無期限にすることもできる。
+
+両方がある場合、有効な override が schedule より優先される。override は schedule を書き換えず、解除または失効すると、その時点の schedule に従う状態へ戻る。
+
 ## 望ましい状態の決定
 
 有効な override を次の優先順で処理する。
@@ -21,9 +29,51 @@ reconciler は、全グループと全タグ付きリソースを読み込んで
 
 schedule は、`DEFAULT_TIMEZONE` で解釈する 5 フィールド cron 2 個の組である。両方が存在し、過去と未来の発火時刻を取得できなければならない。グループは schedule または override の少なくとも一方を持つ。期限付き override には schedule も必要である。
 
+### 稼働時間を延長する例
+
+dev グループに所属する EC2 instance を、平日の 09:00 から 18:00 まで起動状態に保つ例を示す。時刻は DEFAULT_TIMEZONE を Asia/Tokyo に設定した場合の日本時間とする。この場合の schedule は次のとおりである。
+
+```text
+start cron: 0 9 * * 1-5
+stop cron: 0 18 * * 1-5
+```
+
+月曜日だけ 20:00 まで稼働時間を延長するため、17:00 に同日 20:00 まで有効な running override を設定した場合の望ましい状態を、以下に示す。
+
+| 時刻 | schedule による状態 | override | 望ましい状態 |
+| --- | --- | --- | --- |
+| 月曜日 09:00 | 起動 | なし | 起動 |
+| 月曜日 17:00 | 起動 | running が有効 | 起動 |
+| 月曜日 18:00 | 停止 | running が有効 | 起動 |
+| 月曜日 20:00 | 停止 | 失効済み | 停止 |
+| 火曜日 09:00 | 起動 | 失効済み | 起動 |
+
+20:00 になると、直近の stop cron の発火時刻である 18:00 に基づいて停止状態を選択する。実際の停止操作は、失効を読み取った reconciliation サイクルで行う。
+
 ## 収束と同時実行
 
+reconciliation ループは、設定から決めた望ましい状態と実際の状態を定期的に比較し、必要な起動・停止操作を繰り返す処理である。reconciler が各サイクルを実行する。自動制御が有効な各リソースに対する処理の概要を、次の図に示す。
+
+```mermaid
+flowchart TD
+    load["グループ設定とタグ付きリソースを読み込む"]
+    desired["schedule と override から望ましい状態を決定"]
+    observe["実際の状態を確認"]
+    compare{"起動・停止操作が必要か"}
+    act["Start または Stop を実行"]
+    next["次の定期サイクル"]
+    load --> desired --> observe --> compare
+    compare -->|必要| act
+    compare -->|不要・処理を見送り| next
+    act --> next
+    next --> load
+```
+
 観測した起動・停止状態が望ましい状態と異なる場合にアクションを実行する。RDS と EC2 で遷移中と判定したリソース、および見つからないリソースは、後続サイクルまで処理を見送る。
+
+例えば、上記の dev グループで月曜日の 10:00 に EC2 instance を手動停止すると、後続サイクルで停止状態を確認した reconciler が再び起動する。
+
+自動制御を一時的に止める場合は disabled override を設定する。disabled 自体はリソースを起動・停止しない。
 
 ECS は desired count、running count、pending count がすべて 0 の場合だけ停止状態とし、それ以外は起動状態とする。タスク数の不一致によって停止操作を見送ることはない。起動・停止状態が一致していても、scalable target の min/max がその状態の設定値と異なる場合は Start または Stop を再適用する。ECS の判定と復元の詳細は、[リソースタグ](resource_tag.md) を参照。
 
