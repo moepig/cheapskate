@@ -8,7 +8,7 @@
 # The reconciler is the last stage, so a bare `docker build .` builds that one.
 
 # Build on the host platform and cross-compile via GOARCH, so no emulation is needed when building arm64 images on x86 hosts (and vice versa).
-FROM --platform=$BUILDPLATFORM golang:1.26.7@sha256:dc2521c2a906db43073b8b4d99f491b6341cf15610b6ebbab187c45153f9959e AS build
+FROM --platform=$BUILDPLATFORM golang:1.27.0@sha256:4013ae0f9e7994f8535c58c811f8f863fbed38b72e0d51e6592156f758d66146 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
@@ -33,9 +33,9 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
 # console's behalf and forwards each invocation to it as an ordinary HTTP request. The pinned
 # multi-arch manifest resolves the right build for --platform. Unlike Go dependencies, the adapter
 # is not in go.mod, so its version tag and digest are maintained as a Docker dependency.
-FROM public.ecr.aws/awsguru/aws-lambda-adapter:1.1.0@sha256:3a108c4ceee9e0346a61fc0fc7085017945c664be4eaa2925855b8dd2467227b AS lambda-adapter
+FROM public.ecr.aws/awsguru/aws-lambda-adapter:1.1.0@sha256:17cfd08eff1dfea3f6a9a1e9c65fdac80aa4919b6085e746615530f43f57d2f1 AS lambda-adapter
 
-FROM public.ecr.aws/lambda/provided:al2023@sha256:8584408dac0c2536dfb4557ca91b08bc4fc727f785f3df6458b2145a10bc9978 AS webconsole
+FROM public.ecr.aws/lambda/provided:al2023@sha256:495a68b0c4fecf14b99fe152aae4cea96446e7fe5af218c5dc03642902adc20d AS webconsole
 # Lambda's init starts every executable under /opt/extensions before invoking the function.
 COPY --from=lambda-adapter /lambda-adapter /opt/extensions/lambda-adapter
 COPY --from=build-webconsole /bootstrap /var/runtime/bootstrap
@@ -49,6 +49,6 @@ ENV AWS_LWA_READINESS_CHECK_PROTOCOL=tcp
 # provided.al2023 runs /var/runtime/bootstrap; the CMD is unused but required to be non-empty by some tooling.
 CMD ["handler"]
 
-FROM public.ecr.aws/lambda/provided:al2023@sha256:8584408dac0c2536dfb4557ca91b08bc4fc727f785f3df6458b2145a10bc9978 AS reconciler
+FROM public.ecr.aws/lambda/provided:al2023@sha256:495a68b0c4fecf14b99fe152aae4cea96446e7fe5af218c5dc03642902adc20d AS reconciler
 COPY --from=build-reconciler /bootstrap /var/runtime/bootstrap
 CMD ["handler"]
