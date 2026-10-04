@@ -10,6 +10,12 @@ cheapskate:group=<グループ名>
 
 reconciler は、値を指定しない `cheapskate:group` tag filter で Resource Groups Tagging API の `GetResources` を呼び出す。1 ページあたり最大 100 リソースを要求し、全ページを読み込む。対応する RDS instance、RDS cluster、ECS service、および EC2 instance の resource type filter も指定する。所属先は、各 ARN とともに返されたタグ値だけで決定する。同じ ARN が複数回返された場合は最後のタグ一式を採用し、1 サイクルに 1 回処理する。ARN の解析に失敗した場合は探索全体が失敗する。ECS service には cluster 名を含む長形式の ARN が必要である。
 
+## EC2 の対象条件
+
+Auto Scaling グループに所属する EC2 instance は管理対象外である。`DescribeInstances` のレスポンスに `aws:autoscaling:groupName` タグが含まれる場合、`cheapskate:group` タグを設定していても、その instance をエラーとして報告し、起動・停止を実行しない。他のリソースの処理は継続する。
+
+AWS は Auto Scaling グループの所属 instance にこのタグを自動付与する。タグのライフサイクルは、[Auto Scaling グループとインスタンスにタグを付ける](https://docs.aws.amazon.com/ja_jp/autoscaling/ec2/userguide/ec2-auto-scaling-tagging.html)を参照。
+
 ## ECS の復元設定
 
 ECS には停止状態がないため、cheapskate は service を 0 まで scale in し、起動時に service 自身のタグから値を復元する。使用するタグを次の表に示す。

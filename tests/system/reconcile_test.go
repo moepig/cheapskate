@@ -12,6 +12,8 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/ecs"
 	ecstypes "github.com/aws/aws-sdk-go-v2/service/ecs/types"
 	"github.com/aws/aws-sdk-go-v2/service/resourcegroupstaggingapi"
@@ -214,4 +216,70 @@ func TestInvalidECSConfigAndDaemonNeverReachModificationAPIs(t *testing.T) {
 	assert.Equal(t, 2, summary.Reconciled)
 	assert.Len(t, summary.Errors, 2)
 	assert.Empty(t, summary.Actions)
+}
+
+// ASG 所属と単独の EC2 instance を同じグループへ登録し、reconcile による起動・停止を検証する。
+// ASG 所属はエラーとして報告し、単独の instance だけを操作・通知する。
+func TestAutoScalingInstancesNeverReachModificationAPIs(t *testing.T) {
+	cases := []struct {
+		name     string
+		override model.Override
+		state    ec2types.InstanceStateName
+		action   model.Action
+	}{
+		{"stop", model.OverrideStopped, ec2types.InstanceStateNameRunning, model.ActionStop},
+		{"start", model.OverrideRunning, ec2types.InstanceStateNameStopped, model.ActionStart},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := emutest.Config(t)
+			table := emutest.CreateStateTable(t, cfg)
+			store := state.New(dynamodb.NewFromConfig(cfg), table)
+			ctx := context.Background()
+			require.NoError(t, store.CreateGroup(ctx, model.GroupSpec{Name: "dev", Override: tc.override}))
+
+			client := computemocks.NewMockEc2API(gomock.NewController(t))
+			client.EXPECT().DescribeInstances(gomock.Any(), gomock.Any()).Times(2).DoAndReturn(
+				func(_ context.Context, input *ec2.DescribeInstancesInput, _ ...func(*ec2.Options)) (*ec2.DescribeInstancesOutput, error) {
+					instance := ec2types.Instance{State: &ec2types.InstanceState{Name: tc.state}}
+					if input.InstanceIds[0] == "i-0abc123" {
+						instance.Tags = []ec2types.Tag{{Key: aws.String("aws:autoscaling:groupName"), Value: aws.String("dev-asg")}}
+					}
+					return &ec2.DescribeInstancesOutput{Reservations: []ec2types.Reservation{{Instances: []ec2types.Instance{instance}}}}, nil
+				})
+			if tc.action == model.ActionStop {
+				client.EXPECT().StopInstances(gomock.Any(), &ec2.StopInstancesInput{InstanceIds: []string{"i-0def456"}}).
+					Return(&ec2.StopInstancesOutput{}, nil)
+			} else {
+				client.EXPECT().StartInstances(gomock.Any(), &ec2.StartInstancesInput{InstanceIds: []string{"i-0def456"}}).
+					Return(&ec2.StartInstancesOutput{}, nil)
+			}
+			discoverer := porttest.NewDiscoverer()
+			for _, ref := range []string{"i-0abc123", "i-0def456"} {
+				arn := "arn:aws:ec2:ap-northeast-1:123456789012:instance/" + ref
+				discoverer.Resources[arn] = model.Resource{
+					Type: model.TypeEc2Instance, Ref: ref, ARN: arn, Tags: map[string]string{model.GroupTagKey: "dev"},
+				}
+			}
+			notifier := &porttest.Notifier{}
+			deps := &reconcile.Deps{
+				Store: store, Discoverer: discoverer,
+				Targets:  map[model.ResourceType]port.Target{model.TypeEc2Instance: &compute.Ec2InstanceTarget{Client: client}},
+				Notifier: notifier, Location: time.UTC,
+			}
+
+			summary, err := reconcile.Run(ctx, nil, deps, time.Now())
+
+			require.NoError(t, err)
+			assert.Equal(t, 2, summary.Reconciled)
+			require.Len(t, summary.Errors, 1)
+			assert.Equal(t, "ec2-instance#i-0abc123", summary.Errors[0].ResourceID)
+			assert.Contains(t, summary.Errors[0].Error, `Auto Scaling group "dev-asg"`)
+			require.Len(t, summary.Actions, 1)
+			assert.Equal(t, "ec2-instance#i-0def456", summary.Actions[0].ResourceID)
+			assert.Equal(t, tc.action, summary.Actions[0].Action)
+			require.Len(t, notifier.Published, 1)
+			assert.Equal(t, "ec2-instance#i-0def456", notifier.Published[0].Payload["resource_id"])
+		})
+	}
 }

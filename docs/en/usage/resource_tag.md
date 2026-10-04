@@ -10,6 +10,12 @@ cheapskate:group=<group-name>
 
 The reconciler calls Resource Groups Tagging API `GetResources` with `cheapskate:group` and no value filter, requests up to 100 resources per page, and follows every page. Resource type filters also restrict discovery to supported RDS instances, RDS clusters, ECS services, and EC2 instances. Membership is determined only by the tag value returned for each ARN. Duplicate ARNs retain the last returned tag set and are processed once per cycle. An ARN parsing failure aborts all discovery. ECS service ARNs must use the long format containing the cluster name.
 
+## EC2 eligibility
+
+EC2 instances belonging to an Auto Scaling group are unsupported. If `DescribeInstances` returns an `aws:autoscaling:groupName` tag, cheapskate reports an error for that instance and performs no start or stop operation, even when it has a `cheapskate:group` tag. Other resources continue to be processed.
+
+AWS automatically adds this tag to Auto Scaling group members. See [Tag Auto Scaling groups and instances](https://docs.aws.amazon.com/autoscaling/ec2/userguide/ec2-auto-scaling-tagging.html) for the tagging lifecycle.
+
 ## ECS restoration settings
 
 ECS has no stopped state, so cheapskate scales a service to zero and later restores values from tags on that service.

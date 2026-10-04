@@ -3,7 +3,9 @@ package compute
 import (
 	"context"
 	"errors"
+	"fmt"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/smithy-go"
@@ -34,8 +36,16 @@ func (t *Ec2InstanceTarget) Describe(ctx context.Context, res model.Resource) (m
 		}
 		return model.Observation{}, err
 	}
-	for _, res := range out.Reservations {
-		for _, inst := range res.Instances {
+	for _, reservation := range out.Reservations {
+		for _, inst := range reservation.Instances {
+			// ASG 所属は AWS が自動付与するタグで判定する。
+			// https://docs.aws.amazon.com/autoscaling/ec2/userguide/ec2-auto-scaling-tagging.html
+			// "The Auto Scaling group automatically adds a tag to instances"
+			for _, tag := range inst.Tags {
+				if aws.ToString(tag.Key) == "aws:autoscaling:groupName" {
+					return model.Observation{}, fmt.Errorf("EC2 instance %s is a member of Auto Scaling group %q", res.Ref, aws.ToString(tag.Value))
+				}
+			}
 			if inst.State == nil {
 				continue
 			}

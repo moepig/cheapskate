@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/smithy-go"
@@ -23,11 +24,9 @@ func ec2State(name ec2types.InstanceStateName) *ec2.DescribeInstancesOutput {
 	}
 }
 
-// 状態の写像がこのターゲットの契約のすべてである
-// running と stopped はそのまま対応する
-// 遷移中の状態である pending、stopping、shutting-down は "transitioning" へ写像し、reconciler は次のサイクルで再試行する
-// terminated は stopped ではなく not-found へ写像し、reconciler による Start を抑止する
-// terminated のインスタンスは、終了後も 1 時間程度は Tagging API から返り続けるためである
+// ASG に所属しないインスタンスの各状態を Describe のレスポンスへ設定し、Observation の状態を検証する。
+// running と stopped はそのまま対応し、pending、stopping、shutting-down は transitioning へ写像する。
+// terminated は起動対象にしないため not-found へ写像する。
 func TestEc2DescribeStateMapping(t *testing.T) {
 	cases := []struct {
 		raw  ec2types.InstanceStateName
@@ -50,6 +49,62 @@ func TestEc2DescribeStateMapping(t *testing.T) {
 		require.NoError(t, err, tc.raw)
 		assert.Equal(t, tc.want, obs.State, tc.raw)
 	}
+}
+
+// ASG 所属タグを Describe のレスポンスへ設定し、状態やタグ値によらずエラーを返すことを検証する。
+func TestEc2DescribeRejectsAutoScalingGroupMembers(t *testing.T) {
+	cases := []struct {
+		name  string
+		state *ec2types.InstanceState
+		group *string
+	}{
+		{"running", &ec2types.InstanceState{Name: ec2types.InstanceStateNameRunning}, aws.String("dev-asg")},
+		{"stopped", &ec2types.InstanceState{Name: ec2types.InstanceStateNameStopped}, aws.String("dev-asg")},
+		{"pending", &ec2types.InstanceState{Name: ec2types.InstanceStateNamePending}, aws.String("dev-asg")},
+		{"stopping", &ec2types.InstanceState{Name: ec2types.InstanceStateNameStopping}, aws.String("dev-asg")},
+		{"shutting-down", &ec2types.InstanceState{Name: ec2types.InstanceStateNameShuttingDown}, aws.String("dev-asg")},
+		{"terminated", &ec2types.InstanceState{Name: ec2types.InstanceStateNameTerminated}, aws.String("dev-asg")},
+		{"without-state", nil, aws.String("dev-asg")},
+		{"empty-group-name", &ec2types.InstanceState{Name: ec2types.InstanceStateNameRunning}, aws.String("")},
+		{"nil-group-name", &ec2types.InstanceState{Name: ec2types.InstanceStateNameRunning}, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			client := mocks.NewMockEc2API(gomock.NewController(t))
+			client.EXPECT().DescribeInstances(gomock.Any(), &ec2.DescribeInstancesInput{InstanceIds: []string{"i-0abc123"}}).
+				Return(&ec2.DescribeInstancesOutput{Reservations: []ec2types.Reservation{{Instances: []ec2types.Instance{{
+					State: tc.state,
+					Tags: []ec2types.Tag{
+						{Key: aws.String("Name"), Value: aws.String("dev")},
+						{Key: aws.String("aws:autoscaling:groupName"), Value: tc.group},
+					},
+				}}}}}, nil)
+			target := &Ec2InstanceTarget{Client: client}
+
+			observation, err := target.Describe(context.Background(), model.Resource{Ref: "i-0abc123"})
+
+			require.ErrorContains(t, err, "i-0abc123 is a member of Auto Scaling group")
+			assert.ErrorContains(t, err, `Auto Scaling group "`+aws.ToString(tc.group)+`"`)
+			assert.Equal(t, model.Observation{}, observation)
+		})
+	}
+}
+
+// ASG 所属タグを含まないレスポンスを設定し、通常のタグや nil のキーが状態判定を妨げないことを検証する。
+func TestEc2DescribeAllowsStandaloneInstanceTags(t *testing.T) {
+	client := mocks.NewMockEc2API(gomock.NewController(t))
+	out := ec2State(ec2types.InstanceStateNameRunning)
+	out.Reservations[0].Instances[0].Tags = []ec2types.Tag{
+		{Key: nil, Value: aws.String("dev-asg")},
+		{Key: aws.String("Name"), Value: aws.String("dev")},
+	}
+	client.EXPECT().DescribeInstances(gomock.Any(), gomock.Any()).Return(out, nil)
+	target := &Ec2InstanceTarget{Client: client}
+
+	observation, err := target.Describe(context.Background(), model.Resource{Ref: "i-0abc123"})
+
+	require.NoError(t, err)
+	assert.Equal(t, model.StateRunning, observation.State)
 }
 
 // State は EC2 のレスポンスにおいてポインタであり、nil となりうる
