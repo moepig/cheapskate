@@ -39,6 +39,23 @@ text の `list` は有効なグループを stdout、不正な行を stderr へ�
 
 show はリソースごとの Describe エラーを表示しても終了コード 0 となる。JSON では該当リソースの live_error に原因を出力するため、管理終了時は終了コードだけでなく各リソースの観測結果を確認すること。CLI の失効時刻は DEFAULT_TIMEZONE によらず UTC の RFC 3339 形式で表示する。
 
+## ECS 台数上限
+
+ECS の起動を許可するには、グループアイテムに Number 型の `ecs_max_count` を登録すること。各 ECS サービスの desired count と scaling-max の両方に適用する上限であり、タグとは独立して保存する。既存の ECS 用グループにも登録が必要である。属性の制約は、[DynamoDB データモデル](../architecture/database.md)を参照。
+
+既存の dev グループに上限 4 を登録する例を、以下に示す。
+
+```sh
+aws dynamodb update-item \
+  --table-name cheapskate \
+  --key '{"pk":{"S":"CONFIG"},"sk":{"S":"GROUP#dev"}}' \
+  --update-expression 'SET ecs_max_count = :maximum' \
+  --expression-attribute-values '{":maximum":{"N":"4"}}' \
+  --condition-expression 'attribute_exists(pk)'
+```
+
+上限は DynamoDB または IaC で設定する。CLI と Web コンソールの schedule、override、および clear-override は上限を維持する。保存された上限は CLI の list/show と Web コンソールの詳細画面に表示される。
+
 ## Web コンソール
 
 Web コンソールは、グループ一覧、グループ詳細、schedule form、および override form を提供する。詳細画面は、`cheapskate:group=<グループ>`、ECS 設定タグ、および読み取り専用の現在状態を表示する。日時の表示と解釈には `DEFAULT_TIMEZONE` を使用する。書き込みの競合には HTTP 409 を返す。詳細画面の Until 欄は表示時刻の 2 時間後で初期化され、無期限の override を設定する場合は空欄にする。一覧画面の override form は無期限の override を作成する。

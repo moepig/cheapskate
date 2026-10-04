@@ -116,10 +116,11 @@ func (t ResourceType) Valid() bool {
 
 // 固定タグによって検出された AWS リソース 1 件
 type Resource struct {
-	Type ResourceType
-	Ref  string // ターゲット固有の識別子: "db1", "dev-cluster/api", "i-0abc123"
-	ARN  string
-	Tags map[string]string // 固定の所属タグを含む、リソースに付いた全タグ
+	Type        ResourceType
+	Ref         string // ターゲット固有の識別子: "db1", "dev-cluster/api", "i-0abc123"
+	ARN         string
+	Tags        map[string]string // 固定の所属タグを含む、リソースに付いた全タグ
+	EcsMaxCount int32             // 所属グループの起動台数と scaling-max の上限。0 は未登録。
 }
 
 // ログと通知で使うリソース識別子を返す。

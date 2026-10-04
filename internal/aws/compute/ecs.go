@@ -109,7 +109,7 @@ func (t *EcsServiceTarget) Stop(ctx context.Context, res model.Resource) error {
 	return err
 }
 
-// 起動台数を設定し、成功後に Auto Scaling の min/max をタグ値へ戻す。
+// 起動台数と scaling-max が所属グループの上限内であることを検証し、起動台数を設定して Auto Scaling の min/max をタグ値へ戻す。
 func (t *EcsServiceTarget) Start(ctx context.Context, res model.Resource) error {
 	cluster, service, err := splitEcsRef(res.Ref)
 	if err != nil {
@@ -118,6 +118,15 @@ func (t *EcsServiceTarget) Start(ctx context.Context, res model.Resource) error 
 	config, err := ecsConfigFromTags(res.Tags)
 	if err != nil {
 		return err
+	}
+	if res.EcsMaxCount <= 0 {
+		return fmt.Errorf("ecs service %s: group ecs_max_count must be registered before start", res.Ref)
+	}
+	if config.desired > res.EcsMaxCount {
+		return fmt.Errorf("ecs service %s: %s=%d exceeds group ecs_max_count=%d", res.Ref, model.EcsDesiredCountTagKey, config.desired, res.EcsMaxCount)
+	}
+	if config.maximum > res.EcsMaxCount {
+		return fmt.Errorf("ecs service %s: %s=%d exceeds group ecs_max_count=%d", res.Ref, model.EcsScalingMaxTagKey, config.maximum, res.EcsMaxCount)
 	}
 	scalable, err := t.scalableTarget(ctx, cluster, service)
 	if err != nil {

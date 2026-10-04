@@ -12,8 +12,11 @@ Only group items are stored. One group uses `pk=CONFIG` and `sk=GROUP#<name>`.
 | `stop_cron` | S | Stop schedule; present together with `start_cron` |
 | `override` | S | `running`, `stopped`, or `disabled` |
 | `override_expires_at` | N | Optional Unix time in seconds |
+| `ecs_max_count` | N | Optional positive int32 limit on desired count and scaling maximum for each ECS service in the group |
 
 Unknown attributes and malformed attribute types invalidate the group. Expired overrides remain valid stored data and are ignored during desired-state resolution.
+
+`ecs_max_count` applies to each ECS service, not the group's total task count. ECS Start requires this attribute and rejects missing limits or tag values above the limit before any modifying API call. Stop does not apply this limit. Zero, negative, fractional, out-of-int32-range, and non-Number values invalidate the stored configuration.
 
 All group enumeration uses a strongly consistent Query on `CONFIG`. Configuration changes first use a strongly consistent GetItem and validate attribute decoding before an operation-specific conditional write. Schedule, override, and clear-override validate the complete resulting group; remove does not validate cron expressions or cross-attribute invariants. Attribute-level updates preserve concurrent changes to unrelated attributes. A conditional failure is reported as a conflict and is not retried automatically.
 

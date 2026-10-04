@@ -24,6 +24,7 @@ import (
 	"cheapskate/internal/aws/compute/mocks"
 	"cheapskate/internal/core/model"
 	"cheapskate/internal/state"
+	statemocks "cheapskate/internal/state/mocks"
 )
 
 func TestEcsDescribeAcceptsReplicaAndRejectsDaemon(t *testing.T) {
@@ -166,7 +167,7 @@ func TestEcsStartWithFixedBoundsOrWithoutScalableTarget(t *testing.T) {
 			controller := gomock.NewController(t)
 			ecsClient := mocks.NewMockEcsAPI(controller)
 			autoScaling := mocks.NewMockAutoScalingAPI(controller)
-			resource := model.Resource{Ref: "dev/api", Tags: map[string]string{model.EcsDesiredCountTagKey: "2"}}
+			resource := model.Resource{Ref: "dev/api", EcsMaxCount: 2, Tags: map[string]string{model.EcsDesiredCountTagKey: "2"}}
 			out := &aas.DescribeScalableTargetsOutput{}
 			if scalable {
 				out.ScalableTargets = []aastypes.ScalableTarget{{MinCapacity: aws.Int32(0), MaxCapacity: aws.Int32(0)}}
@@ -326,7 +327,7 @@ func TestEcsReconcilePreservesRunningDesiredCount(t *testing.T) {
 }
 
 func ecsReconcileResource() model.Resource {
-	return model.Resource{Type: model.TypeEcsService, Ref: "dev/api", ARN: "arn:aws:ecs:ap-northeast-1:123456789012:service/dev/api", Tags: map[string]string{
+	return model.Resource{Type: model.TypeEcsService, Ref: "dev/api", ARN: "arn:aws:ecs:ap-northeast-1:123456789012:service/dev/api", EcsMaxCount: 3, Tags: map[string]string{
 		model.GroupTagKey: "dev", model.EcsDesiredCountTagKey: "2", model.EcsScalingMinTagKey: "1", model.EcsScalingMaxTagKey: "3",
 	}}
 }
@@ -334,7 +335,7 @@ func ecsReconcileResource() model.Resource {
 type ecsReconcileStore struct{}
 
 func (ecsReconcileStore) ListGroups(context.Context) ([]state.GroupRow, error) {
-	return []state.GroupRow{{Name: "dev", Group: model.GroupSpec{Name: "dev", Override: model.OverrideRunning}}}, nil
+	return []state.GroupRow{{Name: "dev", Group: model.GroupSpec{Name: "dev", Override: model.OverrideRunning, EcsMaxCount: 3}}}, nil
 }
 
 func ecsReconcileDeps(resource model.Resource, target *EcsServiceTarget, notifier *porttest.Notifier) *reconcile.Deps {
@@ -366,7 +367,7 @@ func TestEcsRejectsInvalidTagsBeforeModification(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			controller := gomock.NewController(t)
 			target := &EcsServiceTarget{Ecs: mocks.NewMockEcsAPI(controller), AutoScaling: mocks.NewMockAutoScalingAPI(controller)}
-			resource := model.Resource{Ref: "dev/api", Tags: tags}
+			resource := model.Resource{Ref: "dev/api", EcsMaxCount: 3, Tags: tags}
 			assert.Error(t, target.Start(context.Background(), resource))
 			assert.Error(t, target.Stop(context.Background(), resource))
 		})
@@ -388,4 +389,101 @@ func TestEcsConfigurationAcceptsInt32LimitAndRejectsOverflow(t *testing.T) {
 
 	_, err = ecsConfigFromTags(map[string]string{model.EcsDesiredCountTagKey: "2147483648"})
 	assert.ErrorContains(t, err, "not an integer")
+}
+
+// 登録レコードから上限を読み、上限内の起動だけが更新 API と通知へ到達することを確認する。
+// タグや探索結果に含まれる上限値は、登録レコードの上限を変更できない。
+func TestEcsReconcileEnforcesRegisteredCountLimit(t *testing.T) {
+	for name, test := range map[string]struct {
+		limit   int32
+		tags    map[string]string
+		desired int32
+		wantErr string
+	}{
+		"default count":             {limit: 1, desired: 1},
+		"at limit":                  {limit: 3, tags: map[string]string{model.EcsDesiredCountTagKey: "3"}, desired: 3},
+		"missing limit":             {wantErr: "ecs_max_count must be registered"},
+		"desired exceeds limit":     {limit: 3, tags: map[string]string{model.EcsDesiredCountTagKey: "1000"}, wantErr: "cheapskate/desired-count=1000 exceeds group ecs_max_count=3"},
+		"scaling max exceeds limit": {limit: 3, tags: map[string]string{model.EcsDesiredCountTagKey: "2", model.EcsScalingMaxTagKey: "1000"}, wantErr: "cheapskate/scaling-max=1000 exceeds group ecs_max_count=3"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			controller := gomock.NewController(t)
+			api, _ := statemocks.NewDynaStore(controller)
+			store := state.New(api, "table")
+			require.NoError(t, store.CreateGroup(ctx, model.GroupSpec{Name: "dev", Override: model.OverrideRunning, EcsMaxCount: test.limit}))
+			resource := ecsReconcileResource()
+			resource.Tags = map[string]string{model.GroupTagKey: "dev", "cheapskate/ecs_max_count": "1000"}
+			for key, value := range test.tags {
+				resource.Tags[key] = value
+			}
+			resource.EcsMaxCount = 1000
+			ecsClient := mocks.NewMockEcsAPI(controller)
+			autoScaling := mocks.NewMockAutoScalingAPI(controller)
+			reads := 1
+			if test.wantErr == "" {
+				reads = 2
+				ecsClient.EXPECT().UpdateService(gomock.Any(), gomock.Any()).DoAndReturn(
+					func(_ context.Context, input *ecs.UpdateServiceInput, _ ...func(*ecs.Options)) (*ecs.UpdateServiceOutput, error) {
+						assert.Equal(t, test.desired, aws.ToInt32(input.DesiredCount))
+						return &ecs.UpdateServiceOutput{}, nil
+					})
+			}
+			ecsClient.EXPECT().DescribeServices(gomock.Any(), gomock.Any()).Times(reads).Return(&ecs.DescribeServicesOutput{Services: []ecstypes.Service{{Status: aws.String("ACTIVE")}}}, nil)
+			autoScaling.EXPECT().DescribeScalableTargets(gomock.Any(), gomock.Any()).Times(reads).Return(&aas.DescribeScalableTargetsOutput{}, nil)
+			notifier := &porttest.Notifier{}
+			deps := ecsReconcileDeps(resource, &EcsServiceTarget{Ecs: ecsClient, AutoScaling: autoScaling}, notifier)
+			deps.Store = store
+			summary, err := reconcile.Run(ctx, nil, deps, time.Now())
+			require.NoError(t, err)
+			if test.wantErr != "" {
+				require.Len(t, summary.Errors, 1)
+				assert.Contains(t, summary.Errors[0].Error, test.wantErr)
+				assert.Empty(t, summary.Actions)
+				assert.Empty(t, notifier.Published)
+				return
+			}
+			assert.Empty(t, summary.Errors)
+			assert.Len(t, summary.Actions, 1)
+			assert.Len(t, notifier.Published, 1)
+		})
+	}
+}
+
+// 上限が未登録または負の場合、読み取りを含む AWS API を呼ばず起動を拒否する。
+func TestEcsStartRejectsMissingOrInvalidLimitBeforeAPICalls(t *testing.T) {
+	for _, limit := range []int32{0, -1} {
+		t.Run(fmt.Sprint(limit), func(t *testing.T) {
+			controller := gomock.NewController(t)
+			target := &EcsServiceTarget{Ecs: mocks.NewMockEcsAPI(controller), AutoScaling: mocks.NewMockAutoScalingAPI(controller)}
+			assert.ErrorContains(t, target.Start(context.Background(), model.Resource{Ref: "dev/api", EcsMaxCount: limit}), "ecs_max_count must be registered")
+		})
+	}
+}
+
+// 未登録または超過した上限を持つサービスでも、停止の更新値は 0 または 0/0 となる。
+func TestEcsStopAllowsCountsAboveLimit(t *testing.T) {
+	for _, limit := range []int32{0, 3} {
+		for _, scalable := range []bool{false, true} {
+			t.Run(fmt.Sprintf("limit=%d/scalable=%t", limit, scalable), func(t *testing.T) {
+				controller := gomock.NewController(t)
+				ecsClient := mocks.NewMockEcsAPI(controller)
+				autoScaling := mocks.NewMockAutoScalingAPI(controller)
+				out := &aas.DescribeScalableTargetsOutput{}
+				if scalable {
+					out.ScalableTargets = []aastypes.ScalableTarget{{MinCapacity: aws.Int32(1000), MaxCapacity: aws.Int32(1000)}}
+					autoScaling.EXPECT().RegisterScalableTarget(gomock.Any(), gomock.Any()).DoAndReturn(assertScalableBounds(t, 0, 0))
+				} else {
+					ecsClient.EXPECT().UpdateService(gomock.Any(), gomock.Any()).DoAndReturn(
+						func(_ context.Context, input *ecs.UpdateServiceInput, _ ...func(*ecs.Options)) (*ecs.UpdateServiceOutput, error) {
+							assert.Zero(t, aws.ToInt32(input.DesiredCount))
+							return &ecs.UpdateServiceOutput{}, nil
+						})
+				}
+				autoScaling.EXPECT().DescribeScalableTargets(gomock.Any(), gomock.Any()).Return(out, nil)
+				resource := model.Resource{Ref: "dev/api", EcsMaxCount: limit, Tags: map[string]string{model.EcsDesiredCountTagKey: "1000"}}
+				require.NoError(t, (&EcsServiceTarget{Ecs: ecsClient, AutoScaling: autoScaling}).Stop(context.Background(), resource))
+			})
+		}
+	}
 }

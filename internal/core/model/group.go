@@ -48,6 +48,7 @@ type GroupSpec struct {
 	StopCron          string
 	Override          Override
 	OverrideExpiresAt int64
+	EcsMaxCount       int32 // ECS サービスごとの起動台数と scaling-max の上限。0 は未登録。
 }
 
 type ScheduleSpec struct {
@@ -73,6 +74,9 @@ func ValidateGroup(g GroupSpec, reference time.Time, loc *time.Location) error {
 	}
 	if loc == nil {
 		return fmt.Errorf("group %s: timezone is required", g.Name)
+	}
+	if g.EcsMaxCount < 0 {
+		return fmt.Errorf("group %s: ecs_max_count must be positive when set", g.Name)
 	}
 	if (g.StartCron == "") != (g.StopCron == "") {
 		return fmt.Errorf("group %s: start_cron and stop_cron must both be set or both be omitted", g.Name)

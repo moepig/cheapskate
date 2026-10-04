@@ -39,6 +39,23 @@ Validation failure of a proposed group change returns exit code 1.
 
 Show returns exit code 0 even when individual resource Describe calls fail. JSON includes the cause in each affected resource’s live_error, so inspect observations rather than exit status alone before ending management. CLI expiry timestamps use UTC RFC 3339 regardless of DEFAULT_TIMEZONE.
 
+## ECS task count limit
+
+Register a Number attribute named `ecs_max_count` on the group item before allowing ECS starts. This limit applies to both desired count and scaling maximum for each ECS service and is stored independently of resource tags. Existing ECS groups also require this attribute. See [DynamoDB data model](../architecture/database.md) for its constraints.
+
+For example, register a limit of 4 on an existing dev group:
+
+```sh
+aws dynamodb update-item \
+  --table-name cheapskate \
+  --key '{"pk":{"S":"CONFIG"},"sk":{"S":"GROUP#dev"}}' \
+  --update-expression 'SET ecs_max_count = :maximum' \
+  --expression-attribute-values '{":maximum":{"N":"4"}}' \
+  --condition-expression 'attribute_exists(pk)'
+```
+
+Manage this attribute through DynamoDB or IaC. Schedule, override, and clear-override operations in the CLI and web console preserve it. CLI list/show and the web console's detail page display the saved limit.
+
 ## Web console
 
 The web console provides group list and detail pages plus schedule and override forms. Detail pages show `cheapskate:group=<group>`, ECS configuration tags, and current read-only observations. Dates are displayed and parsed in `DEFAULT_TIMEZONE`. A write conflict returns HTTP 409. The detail form initializes Until to two hours after page rendering; clear it to set an indefinite override. The index override form creates indefinite overrides.

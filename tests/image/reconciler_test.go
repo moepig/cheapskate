@@ -77,8 +77,7 @@ func TestReconcilerImageChangesECSServiceAcrossInvocations(t *testing.T) {
 	waitForImageTestResource(t, ctx, taggingClient, groupName)
 	store := state.New(dynamodb.NewFromConfig(cfg), table)
 	groupService := groups.New(store, nil, nil, time.UTC)
-	_, err := groupService.Override(ctx, groupName, model.OverrideStopped, 0, time.Now().UTC())
-	require.NoError(t, err)
+	require.NoError(t, store.CreateGroup(ctx, model.GroupSpec{Name: groupName, Override: model.OverrideStopped, EcsMaxCount: 1}))
 
 	stopped := requireSummaryResponse(t, reconciler.invoke(t, []byte("{}")))
 	require.Len(t, stopped.Actions, 1, "summary=%+v", stopped)
@@ -87,7 +86,7 @@ func TestReconcilerImageChangesECSServiceAcrossInvocations(t *testing.T) {
 		return observation.DesiredCount == 0 && observation.RunningCount == 0 && observation.PendingCount == 0
 	})
 
-	_, err = groupService.Override(ctx, groupName, model.OverrideRunning, 0, time.Now().UTC())
+	_, err := groupService.Override(ctx, groupName, model.OverrideRunning, 0, time.Now().UTC())
 	require.NoError(t, err)
 	running := requireSummaryResponse(t, reconciler.invoke(t, []byte("[]")))
 	require.Len(t, running.Actions, 1)

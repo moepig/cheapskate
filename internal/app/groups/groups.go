@@ -82,6 +82,7 @@ func (s *Service) Show(ctx context.Context, name string, now time.Time) (GroupDe
 		if resource.Tags[model.GroupTagKey] != name {
 			continue
 		}
+		resource.EcsMaxCount = group.EcsMaxCount
 		row := ResourceRow{Resource: resource}
 		if describer, ok := s.describers[resource.Type]; ok {
 			observation, describeErr := describer.Describe(ctx, resource)
@@ -112,6 +113,7 @@ func (s *Service) Schedule(ctx context.Context, name string, schedule model.Sche
 	if existing != nil {
 		next.Override = existing.Override
 		next.OverrideExpiresAt = existing.OverrideExpiresAt
+		next.EcsMaxCount = existing.EcsMaxCount
 	}
 	if err := model.ValidateGroupForWrite(next, now, s.location); err != nil {
 		return model.GroupSpec{}, err

@@ -30,7 +30,7 @@ func groupKey(name string) itemKey {
 
 func decodeGroup(raw map[string]types.AttributeValue) (model.GroupSpec, error) {
 	allowed := map[string]struct{}{
-		"pk": {}, "sk": {}, "start_cron": {}, "stop_cron": {}, "override": {}, "override_expires_at": {},
+		"pk": {}, "sk": {}, "start_cron": {}, "stop_cron": {}, "override": {}, "override_expires_at": {}, "ecs_max_count": {},
 	}
 	var unknown []string
 	for name := range raw {
@@ -82,6 +82,20 @@ func decodeGroup(raw map[string]types.AttributeValue) (model.GroupSpec, error) {
 			return model.GroupSpec{}, fmt.Errorf("attribute override_expires_at is out of range: %w", err)
 		}
 	}
+	if value, ok := raw["ecs_max_count"]; ok {
+		n, ok := value.(*types.AttributeValueMemberN)
+		if !ok {
+			return model.GroupSpec{}, fmt.Errorf("attribute ecs_max_count must be a Number")
+		}
+		if !positiveDecimal.MatchString(n.Value) {
+			return model.GroupSpec{}, fmt.Errorf("attribute ecs_max_count must be a positive decimal integer")
+		}
+		maximum, err := strconv.ParseInt(n.Value, 10, 32)
+		if err != nil {
+			return model.GroupSpec{}, fmt.Errorf("attribute ecs_max_count is out of range: %w", err)
+		}
+		g.EcsMaxCount = int32(maximum)
+	}
 	return g, nil
 }
 
@@ -114,6 +128,9 @@ func encodeGroup(g model.GroupSpec) map[string]types.AttributeValue {
 	}
 	if g.OverrideExpiresAt != 0 {
 		item["override_expires_at"] = &types.AttributeValueMemberN{Value: strconv.FormatInt(g.OverrideExpiresAt, 10)}
+	}
+	if g.EcsMaxCount != 0 {
+		item["ecs_max_count"] = &types.AttributeValueMemberN{Value: strconv.FormatInt(int64(g.EcsMaxCount), 10)}
 	}
 	return item
 }

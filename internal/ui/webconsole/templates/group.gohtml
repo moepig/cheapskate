@@ -5,6 +5,7 @@
   <tr><th>Membership tag</th><td><code>cheapskate:group={{.Detail.Group.Name}}</code></td></tr>
   <tr><th>Schedule</th><td>{{groupDesc .Detail.Group}}</td></tr>
   <tr><th>Override</th><td>{{with ovDesc .Detail.Group}}{{.}}{{else}}<span class="muted">-</span>{{end}}</td></tr>
+  <tr><th>ECS maximum task count per service</th><td>{{if .Detail.Group.EcsMaxCount}}{{.Detail.Group.EcsMaxCount}}{{else}}<span class="muted">Not configured; ECS start is blocked</span>{{end}}</td></tr>
 </table>
 
 <h2>Resources</h2>

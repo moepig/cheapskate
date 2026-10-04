@@ -26,6 +26,8 @@ ECS には停止状態がないため、cheapskate は service を 0 まで scal
 | `cheapskate/scaling-min` | いいえ。既定値は desired count | 復元する minimum capacity。0 以上の int32 |
 | `cheapskate/scaling-max` | いいえ。既定値は desired count | 復元する maximum capacity。0 以上の int32 |
 
+Start には、所属グループの登録レコードに Number 型の `ecs_max_count` が必要である。タグの既定値を適用した後の desired count と scaling-max がこの上限を超える場合、更新 API を呼ばずエラーとなる。上限が未登録の場合も Start はエラーとなる。Stop にはこの上限を適用しない。上限の登録手順は、[操作方法の ECS 台数上限](operations.md#ecs-台数上限)を参照。
+
 scalable target の有無によらず、3 個すべての値が `0 <= min <= desired <= max` を満たす必要がある。タグが存在しない場合だけ既定値を使い、空文字列はエラーにする。
 
 scalable target がある場合、Stop は上下限だけを `0/0` に変更する。Start は上下限を一時的に desired count のタグ値へ揃え、台数を再取得して、タグ値と異なる場合だけ更新する。台数の設定に成功した後、上下限を min/max のタグ値へ戻す。

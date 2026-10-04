@@ -20,6 +20,8 @@ func TestValidateGroup(t *testing.T) {
 		"indefinite override":  {group: GroupSpec{Name: "dev", Override: OverrideRunning}},
 		"timed override":       {group: GroupSpec{Name: "dev", StartCron: "0 9 * * *", StopCron: "0 20 * * *", Override: OverrideStopped, OverrideExpiresAt: now.Add(time.Hour).Unix()}},
 		"disabled override":    {group: GroupSpec{Name: "dev", Override: OverrideDisabled}},
+		"ecs limit":            {group: GroupSpec{Name: "dev", Override: OverrideRunning, EcsMaxCount: 3}},
+		"negative ecs limit":   {group: GroupSpec{Name: "dev", Override: OverrideRunning, EcsMaxCount: -1}, wantErr: "ecs_max_count must be positive"},
 		"missing stop":         {group: GroupSpec{Name: "dev", StartCron: "0 9 * * *"}, wantErr: "both be set"},
 		"empty":                {group: GroupSpec{Name: "dev"}, wantErr: "schedule or override"},
 		"unknown override":     {group: GroupSpec{Name: "dev", Override: "paused"}, wantErr: "override must"},

@@ -26,6 +26,8 @@ ECS has no stopped state, so cheapskate scales a service to zero and later resto
 | `cheapskate/scaling-min` | no; defaults to desired count | Restored minimum capacity; non-negative int32 |
 | `cheapskate/scaling-max` | no; defaults to desired count | Restored maximum capacity; non-negative int32 |
 
+Start also requires a Number attribute named `ecs_max_count` in the group's registered item. After tag defaults are applied, desired count and scaling maximum must each be no greater than this limit. Missing limits or values above the limit fail before any modifying API call. Stop does not apply this limit. See [ECS task count limit](operations.md#ecs-task-count-limit) for registration.
+
 All three values must satisfy `0 <= min <= desired <= max`, with or without a scalable target. Defaults apply only to absent tags; empty values are errors.
 
 With a scalable target, Stop changes only its bounds to `0/0`. Start temporarily sets both bounds to the desired-count tag value, rereads the count, and updates it only when it differs from that value. Once the count is set successfully, Start restores the configured min/max bounds.

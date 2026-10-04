@@ -127,6 +127,7 @@ func Run(ctx context.Context, _ json.RawMessage, deps *Deps, now time.Time) (Sum
 			logResultError(log, result)
 			continue
 		}
+		resource.EcsMaxCount = group.group.EcsMaxCount
 		summary.Reconciled++
 		observation, err := target.Describe(ctx, resource)
 		if err != nil {

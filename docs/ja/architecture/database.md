@@ -12,8 +12,11 @@ state テーブルのパーティションキーは String 型の `pk`、ソー�
 | `stop_cron` | S | 停止 schedule。`start_cron` と同時に存在する |
 | `override` | S | `running`、`stopped`、`disabled` のいずれか |
 | `override_expires_at` | N | 任意の Unix time 秒 |
+| `ecs_max_count` | N | 任意の正の int32。所属する各 ECS サービスの起動台数と scaling-max の上限 |
 
 未知属性と不正な属性型は、そのグループの設定エラーである。失効済み override は正常な保存データとして扱い、望ましい状態の決定では無視する。
+
+`ecs_max_count` はグループ全体の合計台数ではなく、ECS サービスごとの上限である。ECS の Start にはこの属性の登録が必要であり、未登録またはタグ値の超過は更新 API を呼ぶ前にエラーとなる。Stop にはこの上限を適用しない。0、負数、小数、int32 の範囲外、および Number 型以外の値は保存データの設定エラーとなる。
 
 全グループの列挙では、`CONFIG` に対する強い整合性の Query を使用する。設定変更では、最初に強い整合性の GetItem を行い、属性の復号を検証してから操作別の条件付き書き込みを行う。schedule、override、および clear-override では変更後のグループ全体を検証する。remove では cron と属性間の不変条件を検証しない。
 

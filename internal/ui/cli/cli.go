@@ -160,10 +160,11 @@ type groupJSON struct {
 	StopCron          string         `json:"stop_cron,omitempty"`
 	Override          model.Override `json:"override,omitempty"`
 	OverrideExpiresAt string         `json:"override_expires_at,omitempty"`
+	EcsMaxCount       int32          `json:"ecs_max_count,omitempty"`
 }
 
 func jsonGroup(group model.GroupSpec) groupJSON {
-	result := groupJSON{Name: group.Name, StartCron: group.StartCron, StopCron: group.StopCron, Override: group.Override}
+	result := groupJSON{Name: group.Name, StartCron: group.StartCron, StopCron: group.StopCron, Override: group.Override, EcsMaxCount: group.EcsMaxCount}
 	if group.OverrideExpiresAt != 0 {
 		result.OverrideExpiresAt = time.Unix(group.OverrideExpiresAt, 0).UTC().Format(time.RFC3339)
 	}
@@ -402,6 +403,9 @@ func writeJSON(out io.Writer, value any) error {
 
 func textGroup(group groupJSON) string {
 	parts := []string{group.Name}
+	if group.EcsMaxCount != 0 {
+		parts = append(parts, fmt.Sprintf("ecs_max_count=%d", group.EcsMaxCount))
+	}
 	if group.StartCron != "" {
 		parts = append(parts, "start="+group.StartCron, "stop="+group.StopCron)
 	}

@@ -106,7 +106,7 @@ func TestStrictDecodeRejectsUnknownAndMalformedAttributes(t *testing.T) {
 func TestScheduleAndOverrideUpdatesPreserveEachOther(t *testing.T) {
 	db, store := newFixture(t)
 	ctx := context.Background()
-	group := model.GroupSpec{Name: "dev", StartCron: "0 9 * * *", StopCron: "0 20 * * *", Override: model.OverrideRunning}
+	group := model.GroupSpec{Name: "dev", StartCron: "0 9 * * *", StopCron: "0 20 * * *", Override: model.OverrideRunning, EcsMaxCount: 3}
 	require.NoError(t, store.CreateGroup(ctx, group))
 	require.NoError(t, store.SetSchedule(ctx, "dev", model.ScheduleSpec{StartCron: "0 8 * * *", StopCron: "0 19 * * *"}))
 	require.NoError(t, store.SetOverride(ctx, "dev", model.OverrideStopped, 12345))
@@ -118,13 +118,61 @@ func TestScheduleAndOverrideUpdatesPreserveEachOther(t *testing.T) {
 	assert.Equal(t, "0 19 * * *", got.StopCron)
 	assert.Equal(t, model.OverrideStopped, got.Override)
 	assert.EqualValues(t, 12345, got.OverrideExpiresAt)
+	assert.EqualValues(t, 3, got.EcsMaxCount)
 
 	require.NoError(t, store.SetOverride(ctx, "dev", model.OverrideDisabled, 0))
 	got, err = store.GetGroup(ctx, "dev")
 	require.NoError(t, err)
 	assert.Zero(t, got.OverrideExpiresAt)
 	assert.Equal(t, "0 8 * * *", got.StartCron)
+	require.NoError(t, store.ClearOverride(ctx, "dev"))
+	got, err = store.GetGroup(ctx, "dev")
+	require.NoError(t, err)
+	assert.EqualValues(t, 3, got.EcsMaxCount)
 	assert.NotNil(t, db.Item(configPK, groupSKPrefix+"dev"))
+}
+
+// Number 型の正の int32 だけを上限として復号し、不正な登録値を設定エラーとして返す。
+func TestGroupCountLimitDecoding(t *testing.T) {
+	for name, test := range map[string]struct {
+		value   types.AttributeValue
+		want    int32
+		wantErr string
+	}{
+		"absent":        {},
+		"positive":      {value: &types.AttributeValueMemberN{Value: "3"}, want: 3},
+		"int32 maximum": {value: &types.AttributeValueMemberN{Value: "2147483647"}, want: 2147483647},
+		"string":        {value: &types.AttributeValueMemberS{Value: "3"}, wantErr: "must be a Number"},
+		"null":          {value: &types.AttributeValueMemberNULL{Value: true}, wantErr: "must be a Number"},
+		"zero":          {value: &types.AttributeValueMemberN{Value: "0"}, wantErr: "positive decimal integer"},
+		"negative":      {value: &types.AttributeValueMemberN{Value: "-1"}, wantErr: "positive decimal integer"},
+		"decimal":       {value: &types.AttributeValueMemberN{Value: "1.5"}, wantErr: "positive decimal integer"},
+		"exponent":      {value: &types.AttributeValueMemberN{Value: "1e3"}, wantErr: "positive decimal integer"},
+		"empty":         {value: &types.AttributeValueMemberN{Value: ""}, wantErr: "positive decimal integer"},
+		"overflow":      {value: &types.AttributeValueMemberN{Value: "2147483648"}, wantErr: "out of range"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			db, store := newFixture(t)
+			extra := map[string]types.AttributeValue{}
+			if test.value != nil {
+				extra["ecs_max_count"] = test.value
+			}
+			seed(db, model.GroupSpec{Name: "dev", Override: model.OverrideRunning}, extra)
+			group, err := store.GetGroup(context.Background(), "dev")
+			if test.wantErr != "" {
+				assert.ErrorIs(t, err, ErrInvalidGroup)
+				assert.ErrorContains(t, err, test.wantErr)
+				rows, err := store.ListGroups(context.Background())
+				require.NoError(t, err)
+				require.Len(t, rows, 1)
+				assert.Equal(t, "dev", rows[0].Name)
+				assert.ErrorContains(t, rows[0].Err, test.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, test.want, group.EcsMaxCount)
+		})
+	}
 }
 
 func TestStaleUpdatesDoNotRecreateDeletedGroup(t *testing.T) {

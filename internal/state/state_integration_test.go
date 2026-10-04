@@ -21,7 +21,7 @@ func TestGroupOperationsAgainstDynamoDB(t *testing.T) {
 	store := state.New(dynamodb.NewFromConfig(cfg), table)
 	ctx := context.Background()
 
-	group := model.GroupSpec{Name: "dev", StartCron: "0 9 * * *", StopCron: "0 20 * * *"}
+	group := model.GroupSpec{Name: "dev", StartCron: "0 9 * * *", StopCron: "0 20 * * *", EcsMaxCount: 3}
 	require.NoError(t, store.CreateGroup(ctx, group))
 	require.NoError(t, store.SetOverride(ctx, "dev", model.OverrideRunning, 0))
 	require.NoError(t, store.SetSchedule(ctx, "dev", model.ScheduleSpec{StartCron: "0 8 * * *", StopCron: "0 19 * * *"}))
@@ -31,8 +31,13 @@ func TestGroupOperationsAgainstDynamoDB(t *testing.T) {
 	require.NotNil(t, got)
 	assert.Equal(t, model.OverrideRunning, got.Override)
 	assert.Equal(t, "0 8 * * *", got.StartCron)
+	assert.EqualValues(t, 3, got.EcsMaxCount)
 
 	require.NoError(t, store.ClearOverride(ctx, "dev"))
+	rows, err := store.ListGroups(ctx)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.EqualValues(t, 3, rows[0].Group.EcsMaxCount)
 	require.NoError(t, store.DeleteGroup(ctx, "dev"))
 	got, err = store.GetGroup(ctx, "dev")
 	require.NoError(t, err)

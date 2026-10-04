@@ -154,3 +154,24 @@ func TestShowUsesFixedGroupTagAndSkipsDiscoveryForInvalidConfig(t *testing.T) {
 	assert.ErrorIs(t, err, ErrInvalidConfig)
 	assert.Equal(t, 1, discoverer.Calls())
 }
+
+// 登録済みの上限が schedule、override、clear-override の更新結果と保存データに維持されることを確認する。
+func TestGroupMutationsPreserveRegisteredCountLimit(t *testing.T) {
+	db, service := fixture(t)
+	db.Seed(map[string]types.AttributeValue{
+		"pk": &types.AttributeValueMemberS{Value: "CONFIG"}, "sk": &types.AttributeValueMemberS{Value: "GROUP#dev"},
+		"override": &types.AttributeValueMemberS{Value: "running"}, "ecs_max_count": &types.AttributeValueMemberN{Value: "3"},
+	})
+	ctx := context.Background()
+	now := time.Now()
+	group, err := service.Schedule(ctx, "dev", model.ScheduleSpec{StartCron: "0 9 * * *", StopCron: "0 20 * * *"}, now)
+	require.NoError(t, err)
+	assert.EqualValues(t, 3, group.EcsMaxCount)
+	group, err = service.Override(ctx, "dev", model.OverrideStopped, time.Hour, now)
+	require.NoError(t, err)
+	assert.EqualValues(t, 3, group.EcsMaxCount)
+	group, err = service.ClearOverride(ctx, "dev", now)
+	require.NoError(t, err)
+	assert.EqualValues(t, 3, group.EcsMaxCount)
+	assert.Equal(t, "3", db.Item("CONFIG", "GROUP#dev")["ecs_max_count"].(*types.AttributeValueMemberN).Value)
+}
