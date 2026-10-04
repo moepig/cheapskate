@@ -21,11 +21,14 @@ import (
 	statemocks "cheapskate/internal/state/mocks"
 )
 
-func webFixture(t *testing.T) (*statemocks.DynaStore, *porttest.Discoverer, *Server) {
+func webFixture(t *testing.T, allowedHosts ...string) (*statemocks.DynaStore, *porttest.Discoverer, *Server) {
 	t.Helper()
+	if allowedHosts == nil {
+		allowedHosts = []string{"example.com", "console.example"}
+	}
 	api, db := statemocks.NewDynaStore(gomock.NewController(t))
 	discoverer := porttest.NewDiscoverer()
-	server := New(state.New(api, "table"), discoverer, nil, "", time.UTC, nil)
+	server := New(state.New(api, "table"), discoverer, nil, "", allowedHosts, time.UTC, nil)
 	server.now = func() time.Time { return time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC) }
 	return db, discoverer, server
 }
@@ -72,7 +75,7 @@ func TestGroupDetailRendersScheduleResourcesStateAndBasePath(t *testing.T) {
 		model.TypeEcsService: porttest.Describer{Obs: model.Observation{State: model.StateRunning, Detail: "desiredCount=2"}},
 	}
 	location := time.FixedZone("JST", 9*60*60)
-	server := New(state.New(api, "table"), discoverer, describers, "/stage/", location, nil)
+	server := New(state.New(api, "table"), discoverer, describers, "/stage/", []string{"example.com"}, location, nil)
 	now := time.Date(2026, 9, 3, 12, 0, 0, 0, location)
 	server.now = func() time.Time { return now }
 	_, err := server.service.Schedule(context.Background(), "dev", model.ScheduleSpec{StartCron: "0 9 * * *", StopCron: "0 20 * * *"}, now)
@@ -130,6 +133,7 @@ func TestCrossOriginMutationIsRejected(t *testing.T) {
 	response := httptest.NewRecorder()
 	server.Handler().ServeHTTP(response, request)
 	assert.Equal(t, http.StatusForbidden, response.Code)
+	assert.Contains(t, response.Body.String(), "cross-origin form submission rejected")
 }
 
 func TestSecFetchSiteMutationIsRejected(t *testing.T) {
@@ -142,6 +146,102 @@ func TestSecFetchSiteMutationIsRejected(t *testing.T) {
 	response := httptest.NewRecorder()
 	server.Handler().ServeHTTP(response, request)
 	assert.Equal(t, http.StatusForbidden, response.Code)
+	assert.Contains(t, response.Body.String(), "cross-origin form submission rejected")
+}
+
+// 未許可の Host を各ルートと未登録ルートへ送信し、Origin の一致や転送ヘッダーによらず HTTP 403 となり、読み取りと変更が発生しないことを確認する。
+func TestUntrustedHostIsRejectedBeforeRouting(t *testing.T) {
+	for _, route := range []struct {
+		method string
+		path   string
+	}{
+		{http.MethodGet, "/"},
+		{http.MethodHead, "/"},
+		{http.MethodGet, "/group?name=dev"},
+		{http.MethodPost, "/op"},
+		{http.MethodGet, "/missing"},
+		{http.MethodGet, "/group/"},
+		{http.MethodOptions, "/op"},
+	} {
+		for _, host := range []string{"attacker.example", "attacker.example:8080", "example.com.attacker.example", "sub.example.com", "example.com:8080", ""} {
+			for _, origin := range []string{"", "http://" + host} {
+				t.Run(route.method+" "+route.path+" host="+host+" origin="+origin, func(t *testing.T) {
+					db, discoverer, server := webFixture(t)
+					request := httptest.NewRequest(route.method, route.path, strings.NewReader("action=override&group=dev&override=running"))
+					request.Host = host
+					request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+					request.Header.Set("Origin", origin)
+					request.Header.Set("Sec-Fetch-Site", "same-origin")
+					request.Header.Set("X-Forwarded-Host", "example.com")
+					request.Header.Set("Forwarded", "host=example.com")
+					response := httptest.NewRecorder()
+					server.Handler().ServeHTTP(response, request)
+
+					assert.Equal(t, http.StatusForbidden, response.Code)
+					assert.Contains(t, response.Body.String(), "request host rejected")
+					assert.NotEmpty(t, response.Header().Get("Content-Security-Policy"))
+					for _, operation := range []string{"query", "get", "put", "update", "delete"} {
+						assert.Zero(t, db.Calls(operation), operation)
+					}
+					assert.Zero(t, discoverer.Calls())
+				})
+			}
+		}
+	}
+}
+
+// 許可したホスト名、IPv4、IPv6、ポート付き Host で一覧を取得し、同じ Origin から running override を登録できることを確認する。
+func TestConfiguredHostsAllowReadsAndMutations(t *testing.T) {
+	for _, host := range []string{"localhost:8080", "127.0.0.1:8080", "[::1]:8080", "console.example", "CONSOLE.EXAMPLE", "other.example:443"} {
+		t.Run(host, func(t *testing.T) {
+			db, _, server := webFixture(t, "localhost:8080", "127.0.0.1:8080", "[::1]:8080", " console.EXAMPLE ", "other.example:443")
+			request := httptest.NewRequest(http.MethodGet, "http://"+host+"/", nil)
+			response := httptest.NewRecorder()
+			server.Handler().ServeHTTP(response, request)
+			require.Equal(t, http.StatusOK, response.Code)
+
+			request = httptest.NewRequest(http.MethodPost, "http://"+host+"/op", strings.NewReader("action=override&group=dev&override=running"))
+			request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			request.Header.Set("Origin", "http://"+host)
+			response = httptest.NewRecorder()
+			server.Handler().ServeHTTP(response, request)
+			require.Equal(t, http.StatusSeeOther, response.Code)
+			assert.Equal(t, "running", db.Item("CONFIG", "GROUP#dev")["override"].(*types.AttributeValueMemberS).Value)
+		})
+	}
+}
+
+// 許可ホストが nil、空、空白だけの場合、Origin が Host と一致しても全要求を拒否することを確認する。
+func TestEmptyAllowedHostsRejectAllRequests(t *testing.T) {
+	for _, hosts := range [][]string{nil, {}, {"", " "}} {
+		server := New(nil, nil, nil, "", hosts, time.UTC, nil)
+		for _, method := range []string{http.MethodGet, http.MethodPost} {
+			request := httptest.NewRequest(method, "/", nil)
+			request.Header.Set("Origin", "http://example.com")
+			response := httptest.NewRecorder()
+			server.Handler().ServeHTTP(response, request)
+			assert.Equal(t, http.StatusForbidden, response.Code)
+		}
+	}
+}
+
+// 生成後に渡したスライスを書き換えても、許可ホストが変更されないことを確認する。
+func TestAllowedHostsAreCopiedAtConstruction(t *testing.T) {
+	hosts := []string{"example.com"}
+	_, _, server := webFixture(t, hosts...)
+	hosts[0] = "attacker.example"
+	for _, test := range []struct {
+		host   string
+		status int
+	}{
+		{"example.com", http.StatusOK},
+		{"attacker.example", http.StatusForbidden},
+	} {
+		request := httptest.NewRequest(http.MethodGet, "http://"+test.host+"/", nil)
+		response := httptest.NewRecorder()
+		server.Handler().ServeHTTP(response, request)
+		assert.Equal(t, test.status, response.Code)
+	}
 }
 
 func TestClearOverrideAndRemoveForms(t *testing.T) {

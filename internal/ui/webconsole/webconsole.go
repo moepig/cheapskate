@@ -23,18 +23,27 @@ import (
 var templateFS embed.FS
 
 type Server struct {
-	service  *groups.Service
-	base     string
-	location *time.Location
-	log      *slog.Logger
-	index    *template.Template
-	group    *template.Template
-	now      func() time.Time
+	service      *groups.Service
+	base         string
+	allowedHosts map[string]struct{}
+	location     *time.Location
+	log          *slog.Logger
+	index        *template.Template
+	group        *template.Template
+	now          func() time.Time
 }
 
-func New(store groups.Store, discoverer port.Discoverer, describers map[model.ResourceType]port.Describer, base string, location *time.Location, log *slog.Logger) *Server {
+// 許可ホストを固定した Web コンソールを生成する。
+// allowedHosts はポートを含む Host の値を指定し、大文字と小文字を区別せず完全一致で検証する。空のリストでは全要求を拒否する。
+func New(store groups.Store, discoverer port.Discoverer, describers map[model.ResourceType]port.Describer, base string, allowedHosts []string, location *time.Location, log *slog.Logger) *Server {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
+	}
+	hosts := make(map[string]struct{}, len(allowedHosts))
+	for _, host := range allowedHosts {
+		if host = strings.ToLower(strings.TrimSpace(host)); host != "" {
+			hosts[host] = struct{}{}
+		}
 	}
 	functions := template.FuncMap{
 		"groupDesc": describeGroup,
@@ -57,7 +66,7 @@ func New(store groups.Store, discoverer port.Discoverer, describers map[model.Re
 	return &Server{
 		service: groups.New(store, discoverer, describers, location),
 		base:    strings.TrimSuffix(base, "/"), location: location, log: log,
-		index: parse("index.gohtml"), group: parse("group.gohtml"), now: time.Now,
+		allowedHosts: hosts, index: parse("index.gohtml"), group: parse("group.gohtml"), now: time.Now,
 	}
 }
 
@@ -66,7 +75,17 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /{$}", s.handleIndex)
 	mux.HandleFunc("GET /group", s.handleGroup)
 	mux.HandleFunc("POST /op", s.handleOp)
-	return securityHeaders(s.logRequests(mux))
+	return securityHeaders(s.logRequests(s.checkHost(mux)))
+}
+
+func (s *Server) checkHost(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if _, allowed := s.allowedHosts[strings.ToLower(request.Host)]; !allowed {
+			s.fail(response, request, http.StatusForbidden, "request host rejected")
+			return
+		}
+		next.ServeHTTP(response, request)
+	})
 }
 
 type view struct {

@@ -49,8 +49,9 @@ func TestWebconsoleImageServesThroughTheLambdaWebAdapter(t *testing.T) {
 	cfg := emutest.Config(t)
 	// 使い捨ての空テーブルであり、グループが 0 件の場合も一覧ページを描画できる
 	table := emutest.CreateStateTable(t, cfg)
-
-	console := startUnderRIE(t, buildImage(t, "webconsole"), emulatorEnv(t, table),
+	env := emulatorEnv(t, table)
+	env["ALLOWED_HOSTS"] = "example.com"
+	console := startUnderRIE(t, buildImage(t, "webconsole"), env,
 		proxyEvent(t, warmupSourceIP, nil))
 
 	// アダプタが拡張として起動し、イベントをループバック経由の HTTP へ変換し、応答をプロキシレスポンスへ戻すことを確かめる
@@ -77,6 +78,7 @@ func TestWebconsoleImageLifecycleThroughTheLambdaWebAdapter(t *testing.T) {
 	env := emulatorEnv(t, table)
 	env["BASE_PATH"] = "/stage"
 	env["DEFAULT_TIMEZONE"] = "Asia/Tokyo"
+	env["ALLOWED_HOSTS"] = "example.com"
 	console := startUnderRIE(t, buildImage(t, "webconsole"), env,
 		proxyEvent(t, warmupSourceIP, nil))
 
@@ -104,6 +106,25 @@ func TestWebconsoleImageLifecycleThroughTheLambdaWebAdapter(t *testing.T) {
 	assert.Contains(t, detailBody, "<h2>dev</h2>")
 	assert.Contains(t, detailBody, "All schedules and dates use Asia/Tokyo")
 	assert.Contains(t, detailBody, `action="/stage/op"`)
+
+	// 未許可の Host と一致する Origin を持つイベントを投入し、一覧取得と running override の登録が拒否されることを確認する。
+	for _, method := range []string{http.MethodGet, http.MethodPost} {
+		path, body := "/", ""
+		if method == http.MethodPost {
+			path, body = "/op", "action=override&group=dev&override=running"
+		}
+		rejected := invokeProxyResponse(t, console, proxyRequest(t, realSourceIP, method, path, body, map[string]string{
+			"Host": "attacker.example", "Origin": "http://attacker.example", "Content-Type": "application/x-www-form-urlencoded",
+			"Sec-Fetch-Site": "same-origin", "X-Forwarded-Host": "example.com",
+		}, nil))
+		assert.Equal(t, http.StatusForbidden, rejected.StatusCode)
+		assert.Contains(t, responseBody(t, rejected), "request host rejected")
+	}
+	item, err = db.GetItem(context.Background(), &dynamodb.GetItemInput{TableName: aws.String(table), Key: map[string]types.AttributeValue{
+		"pk": &types.AttributeValueMemberS{Value: "CONFIG"}, "sk": &types.AttributeValueMemberS{Value: "GROUP#dev"},
+	}})
+	require.NoError(t, err)
+	assert.Nil(t, item.Item["override"], "an untrusted Host must not change DynamoDB")
 
 	crossOrigin := post(url.Values{"action": {"override"}, "group": {"dev"}, "override": {"stopped"}}, "https://attacker.example")
 	assert.Equal(t, http.StatusForbidden, crossOrigin.StatusCode)

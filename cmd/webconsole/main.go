@@ -8,10 +8,12 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 	_ "time/tzdata"
 
@@ -52,17 +54,44 @@ func main() {
 	// BASE_PATH はブラウザから見えるパスの接頭辞であり、API Gateway のステージに対応する
 	// Lambda のプロキシイベントのパスには、この接頭辞が含まれない
 	base := os.Getenv("BASE_PATH")
-	handler := webconsole.New(s, wire.Discoverer(cfg), wire.Describers(cfg), base, loc, logger).Handler()
-
 	// コンテナでは待ち受けポートをイメージ側が決定する (Dockerfile で PORT と AWS_LWA_PORT を一致させる)
 	// アダプタはループバック経由で接続するため、バインド先は常に 127.0.0.1 とする
 	listen := *addr
 	if port := os.Getenv("PORT"); port != "" {
 		listen = net.JoinHostPort("127.0.0.1", port)
 	}
+	hosts, err := allowedHosts(os.Getenv("ALLOWED_HOSTS"), listen)
+	if err != nil {
+		fatal(logger, "invalid ALLOWED_HOSTS or listen address", "error", err.Error())
+	}
+	handler := webconsole.New(s, wire.Discoverer(cfg), wire.Describers(cfg), base, hosts, loc, logger).Handler()
 
-	logger.Info("startup", "table", table, "base_path", base, "timezone", loc.String(), "addr", listen)
+	logger.Info("startup", "table", table, "base_path", base, "timezone", loc.String(), "addr", listen, "allowed_hosts", hosts)
 	fatal(logger, "http server stopped", "error", http.ListenAndServe(listen, handler).Error())
+}
+
+func allowedHosts(raw, listen string) ([]string, error) {
+	if raw == "" {
+		_, port, err := net.SplitHostPort(listen)
+		if err != nil {
+			return nil, err
+		}
+		return []string{
+			net.JoinHostPort("localhost", port),
+			net.JoinHostPort("127.0.0.1", port),
+			net.JoinHostPort("::1", port),
+		}, nil
+	}
+	var hosts []string
+	for _, host := range strings.Split(raw, ",") {
+		if host = strings.TrimSpace(host); host != "" {
+			hosts = append(hosts, host)
+		}
+	}
+	if len(hosts) == 0 {
+		return nil, fmt.Errorf("ALLOWED_HOSTS must contain at least one host")
+	}
+	return hosts, nil
 }
 
 // 起動を継続できない失敗を 1 行記録して終了する
