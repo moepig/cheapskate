@@ -129,11 +129,11 @@ func TestShowJSONIncludesGroupAndResourceDetails(t *testing.T) {
 	discoverer.Resources = map[string]model.Resource{
 		"arn:aws:ecs:service/dev/api": {
 			Type: model.TypeEcsService, Ref: "dev/api", ARN: "arn:aws:ecs:service/dev/api",
-			Tags: map[string]string{model.GroupTagKey: "dev", model.EcsDesiredCountTagKey: "2"},
+			Tags: map[string]string{model.GroupTagKey: "dev", model.EcsDesiredCountTagKey: "2", model.EcsScheduledScalingPausedTagKey: "true"},
 		},
 	}
 	describers := map[model.ResourceType]port.Describer{
-		model.TypeEcsService: porttest.Describer{Obs: model.Observation{State: model.StateRunning, Detail: "desiredCount=2"}},
+		model.TypeEcsService: porttest.Describer{Obs: model.Observation{State: model.StateRunning, Detail: "desiredCount=2 minCapacity=1 maxCapacity=3 ScheduledScalingSuspended=true"}},
 	}
 	service := groups.New(store, discoverer, describers, time.UTC)
 	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
@@ -149,10 +149,10 @@ func TestShowJSONIncludesGroupAndResourceDetails(t *testing.T) {
 	require.Len(t, output.Resources, 1)
 	assert.Equal(t, model.TypeEcsService, output.Resources[0].Type)
 	assert.Equal(t, "dev/api", output.Resources[0].Ref)
-	assert.Equal(t, map[string]any{"desired_count": "2"}, output.Resources[0].Config)
+	assert.Equal(t, map[string]any{"desired_count": "2", "scheduled_scaling_paused": "true"}, output.Resources[0].Config)
 	require.NotNil(t, output.Resources[0].Live)
 	assert.Equal(t, model.StateRunning, output.Resources[0].Live.State)
-	assert.Equal(t, "desiredCount=2", output.Resources[0].Live.Detail)
+	assert.Equal(t, "desiredCount=2 minCapacity=1 maxCapacity=3 ScheduledScalingSuspended=true", output.Resources[0].Live.Detail)
 	assert.Empty(t, stderr.String())
 	assert.Equal(t, 2, db.Calls("get"))
 }

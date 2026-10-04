@@ -25,7 +25,9 @@ A schedule is a pair of five-field cron expressions interpreted in `DEFAULT_TIME
 
 An observed running/stopped state that differs from the desired state receives an action. RDS and EC2 observations classified as transitioning, and resources classified as not found, are skipped until a later cycle.
 
-ECS is stopped only when desired, running, and pending counts are all zero; otherwise it is running. Task-count differences do not delay Stop. Even when running/stopped state matches, differing scalable-target min/max values trigger Start or Stop again. See [Resource tags](resource_tag.md) for ECS state and restoration behavior.
+ECS is stopped only when desired, running, and pending counts are all zero; otherwise it is running. Task-count differences do not delay Stop. Even when running/stopped state matches, incomplete startup, a mismatch between the suspension request and the AWS flag, or differences in managed bounds trigger Start or Stop again. With a false suspension request during normal operation, Scheduled Scaling changes to bounds are retained. See [Resource tags](resource_tag.md) for ECS state and restoration behavior.
+
+For diagrams of each resource's operations and configuration repair, see [Resource processing flows](resource_flow.md).
 
 Invocations may overlap. A Start or Stop may therefore be delivered more than once, and invocations holding different configuration snapshots may briefly issue opposing actions. After older invocations finish, a successful later cycle converges to the latest configuration.
 

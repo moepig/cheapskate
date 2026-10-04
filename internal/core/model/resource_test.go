@@ -106,16 +106,18 @@ func TestResourceConfigReadsDeclaredTagsOnly(t *testing.T) {
 	r := Resource{
 		Type: TypeEcsService,
 		Tags: map[string]string{
-			EcsDesiredCountTagKey: "2",
-			EcsScalingMinTagKey:   "1",
-			EcsScalingMaxTagKey:   "3",
-			"unrelated":           "tag",
+			EcsDesiredCountTagKey:           "2",
+			EcsScalingMinTagKey:             "1",
+			EcsScalingMaxTagKey:             "3",
+			EcsScheduledScalingPausedTagKey: "true",
+			"unrelated":                     "tag",
 		},
 	}
 	assert.Equal(t, []ConfigValue{
 		{Name: "desired_count", Label: "desired", Value: "2"},
 		{Name: "min", Label: "scaling min", Value: "1"},
 		{Name: "max", Label: "scaling max", Value: "3"},
+		{Name: "scheduled_scaling_paused", Label: "scheduled scaling paused", Value: "true"},
 	}, r.Config(), "宣言の順に、宣言されたタグだけを返す")
 
 	assert.Empty(t, Resource{Type: TypeEcsService}.Config(), "no scaling tags set")

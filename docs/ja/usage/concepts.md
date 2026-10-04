@@ -75,7 +75,9 @@ flowchart TD
 
 自動制御を一時的に止める場合は disabled override を設定する。disabled 自体はリソースを起動・停止しない。
 
-ECS は desired count、running count、pending count がすべて 0 の場合だけ停止状態とし、それ以外は起動状態とする。タスク数の不一致によって停止操作を見送ることはない。起動・停止状態が一致していても、scalable target の min/max がその状態の設定値と異なる場合は Start または Stop を再適用する。ECS の判定と復元の詳細は、[リソースタグ](resource_tag.md) を参照。
+ECS は desired count、running count、pending count がすべて 0 の場合だけ停止状態とし、それ以外は起動状態とする。タスク数の不一致によって停止操作を見送ることはない。起動・停止状態が一致していても、起動途中の設定、一時停止要求と AWS フラグの差、または管理対象の上下限の差があれば Start または Stop を再適用する。一時停止要求が false の通常稼働中は、Scheduled Scaling による上下限変更を維持する。ECS の判定と復元の詳細は、[リソースタグ](resource_tag.md)を参照。
+
+各リソースの起動・停止と設定再適用のフロー図は、[リソースごとの処理フロー](resource_flow.md)を参照。
 
 invocation は同時に実行される場合がある。Start または Stop を複数回配送したり、異なる設定を読んだ invocation が一時的に反対のアクションを実行したりする可能性がある。古い invocation の終了後に成功したサイクルが、最新設定へ収束させる。
 

@@ -56,18 +56,40 @@ aws dynamodb update-item \
 
 Manage this attribute through DynamoDB or IaC. Schedule, override, and clear-override operations in the CLI and web console preserve it. CLI list/show and the web console's detail page display the saved limit.
 
+Scheduled action bounds do not pass through the `ecs_max_count` check. This attribute is not an absolute limit on Scheduled Scaling capacity; also review the bounds of each scheduled action.
+
+## ECS Scheduled Scaling suspension
+
+Set `cheapskate/scheduled-scaling-paused=true` on the ECS service to keep Scheduled Scaling suspended while the service is running. The request persists across service starts and stops. See [Resource tags](resource_tag.md#scheduled-scaling-suspension) for the relationship between this tag and the AWS flag.
+
+To clear a persistent suspension request:
+
+1. Set the tag to `false` or remove it.
+2. Set the desired ECS service state to `running`.
+3. After a successful reconcile, confirm `ScheduledScalingSuspended=false` using JSON `show` output or the web console's live observation.
+
+While the group desires the ECS service stopped, clearing the tag still leaves the AWS flag `true`. Resuming does not replay scheduled actions whose execution time passed during suspension; only future actions run. See [AWS resume behavior](https://docs.aws.amazon.com/autoscaling/application/userguide/application-auto-scaling-suspend-resume-scaling.html).
+
+Tag changes take effect in a successful reconcile. Invocations with an older configuration snapshot may apply older requests. The AWS flag prevents new scheduled actions from starting; it does not cancel operations already underway.
+
+Stopping execution of cheapskate itself does not change the ECS service or the AWS flag. Applied AWS settings remain, but tag changes and external AWS changes cannot be reconciled until execution resumes.
+
+To retain an existing AWS suspension, set the tag to `true` before deploying a version with suspension control; the default for an absent tag is `false`. An existing suspended positive fixed range that differs from the normal tag bounds is treated as incomplete startup. Declare that range in the normal bounds tags or verify that reinitializing startup capacity is acceptable.
+
 ## Web console
 
 The web console provides group list and detail pages plus schedule and override forms. Detail pages show `cheapskate:group=<group>`, ECS configuration tags, and current read-only observations. Dates are displayed and parsed in `DEFAULT_TIMEZONE`. A write conflict returns HTTP 409. The detail form initializes Until to two hours after page rendering; clear it to set an indefinite override. The index override form creates indefinite overrides.
 
 ## Safely ending management
 
+To exit management with ECS Scheduled Scaling enabled, clear the suspension request before this sequence and select a `running` override. To exit with a running service and Scheduled Scaling suspended, set the tag to `true`. Exiting with the ECS service stopped leaves the AWS flag `true` regardless of the tag. Disabling management, removing membership tags, or removing the group does not restore AWS flags or bounds.
+
 To leave resources in a known state:
 
 1. Set an indefinite `running` or `stopped` override.
 2. Wait at least one configured reconciler Lambda timeout after the write completes.
 3. Invoke the reconciler manually or wait for the next periodic invocation.
-4. Use `show` to confirm that every resource is stable in the selected state.
+4. Use `show` to confirm that every resource is stable in the selected state. For ECS, also inspect the AWS suspension flag and bounds in JSON live.Detail or the web console.
 5. Remove the membership tags from the resources.
 6. Remove the group.
 

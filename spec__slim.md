@@ -195,8 +195,11 @@ ECS 設定タグを、以下に示す。
 | `cheapskate/desired-count` | `1` | 正の int32 |
 | `cheapskate/scaling-min` | desired count | 0 以上の int32 |
 | `cheapskate/scaling-max` | desired count | 0 以上の int32 |
+| `cheapskate/scheduled-scaling-paused` | `false` | 小文字の `true` または `false` |
 
 3 値は `scaling-min <= desired-count <= scaling-max` を満たす必要がある。すべての値は scalable target の有無にかかわらず検証する。scaling min と scaling max を AWS API へ適用するのは、scalable target がある場合だけである。
+
+Scheduled Scaling の一時停止要求は、ECS service 自身のタグで保持する。タグが `true` の間は ECS service の起動・停止をまたいで維持し、cheapskate はタグを変更しない。要求の解除はタグを `false` に変更するか削除する操作で行う。AWS 側のフラグだけの変更は要求として取り込まない。
 
 ECS 設定タグは、リソース探索後、Application Auto Scaling または ECS の変更 API を呼ぶ前に検証する。不正な場合はリソース単位のエラーとし、停止処理を含む変更 API を呼ばない。停止後の規模を DynamoDB へ保存しないため、停止前から復元に使用できない設定であることが判明しているサービスは変更しない。
 
@@ -204,12 +207,33 @@ ECS 設定タグは、リソース探索後、Application Auto Scaling または
 
 | scalable target | 変更 API |
 | --- | --- |
-| あり | `RegisterScalableTarget(0, 0)` だけを呼ぶ |
+| あり | `RegisterScalableTarget(MinCapacity=0, MaxCapacity=0, ScheduledScalingSuspended=true)` だけを呼ぶ |
 | なし | `UpdateService(desiredCount=0)` だけを呼ぶ |
 
 既存の scalable target に `RegisterScalableTarget(0, 0)` を実行すると、現在の capacity も 0 へ変更される。この場合に `UpdateService` と rollback は実行しない。[RegisterScalableTarget](https://docs.aws.amazon.com/autoscaling/application/APIReference/API_RegisterScalableTarget.html)
 
-起動時は、scalable target がある場合に `RegisterScalableTarget` で上下限を desired count のタグ値へ一時的に揃える。台数を再取得し、タグ値と異なる場合だけ `UpdateService` で設定する。成功後に上下限を min / max のタグ値へ戻す。途中で失敗した場合は一時的な上下限を維持し、通常値との差によって次回 reconcile で起動処理を再開する。通常の上下限も desired count と同値の場合は、上下限の設定で起動台数へ調整されるため収束済みとなる。scalable target がない場合、変更 API は `UpdateService` だけを呼ぶ。desired count は起動時の設定値であり、起動後に Service Auto Scaling が変更した値を継続的に元へ戻さない。
+起動の初期設定では、scalable target がある場合に `RegisterScalableTarget` で上下限を desired count のタグ値へ固定し、Scheduled Scaling を一時停止する。台数を再取得し、タグ値と異なる場合だけ `UpdateService` で設定する。成功後に上下限を min / max のタグ値へ戻し、AWS の一時停止フラグにタグの要求を適用する。タグが `false` の場合も、起動設定の最後の更新まで一時停止を維持する。タグが `true` の場合は、一時的にも `false` を送信しない。
+
+稼働中の AWS 設定の管理範囲を、以下に示す。
+
+| グループの望ましい状態 | 一時停止要求 | AWS フラグ | 上下限 |
+| --- | --- | --- | --- |
+| `stopped` | 任意 | `true` | `0/0` |
+| `running` | `true` | `true` | 通常のタグ値を維持する |
+| `running` | `false` または未設定 | `false` | 起動の初期設定後は Scheduled Scaling による変更を許可する |
+| `disabled` | 任意 | 変更しない | 変更しない |
+
+稼働中の一時停止設定の再適用では、起動台数への `UpdateService` を行わない。要求が `true` の場合は通常のタグ範囲と一時停止を適用し、`false` の場合は上下限を指定せずフラグだけを解除する。フラグだけの更新でも、capacity が現在の範囲外にある場合は AWS が調整しうる。scheduled action の定義と、動的スケーリングの一時停止フラグは変更しない。
+
+ECS の停止状態は desired count、running count、および pending count がすべて 0 である場合だけとする。起動の初期設定は、停止状態、上下限 `0/0`、または通常のタグ範囲と異なる一時停止中の正の固定範囲から再開する。起動途中にタグが変更された場合も現在のタグで復旧する。通常の上下限も起動台数と同じ場合は、フラグの差だけで再適用を要求できる。最後の更新の応答だけが失われ、設定が一致している場合は追加操作を行わない。
+
+停止済みでも上下限が `0/0` でない、または AWS フラグが `false` の場合は停止設定を再適用する。稼働中でも起動途中の設定、一時停止フラグの差、または要求が `true` の場合の上下限の差があれば設定を再適用する。要求が `false` の通常稼働中に上下限がタグ値と異なることだけでは再適用しない。
+
+scalable target がない場合、変更 API は `UpdateService` だけを呼び、一時停止制御のための target は作成しない。desired count は起動時の設定値であり、起動後に Service Auto Scaling が変更した値を継続的に元へ戻さない。グループの望ましい状態が `running` の間にタスク数がすべて 0 になった場合は起動する。0 台を維持する時間帯は cheapskate のスケジュールまたは `stopped` override で指定する。
+
+一時停止の解除後に、実行時刻を過ぎた scheduled action は再実行されない。scheduled action の上下限は `ecs_max_count` の検証を通らず、同属性は Scheduled Scaling の絶対上限を保証しない。既存の AWS 一時停止を維持する構成では、導入前に要求タグを `true` に設定する必要がある。既存の一時停止中の固定範囲は、通常のタグ値として宣言するか、初期設定の対象として扱うことを確認する必要がある。
+
+一時停止要求は正常な reconcile で反映する。古い snapshot を持つ invocation による変更と開始済み AWS 操作の取り消しは保証しない。cheapskate 自体の実行停止は ECS service の停止要求と区別し、適用済みの AWS フラグや上下限を変更しない。`disabled` と管理終了でも AWS 設定を復元しない。
 
 ## reconcile
 

@@ -29,11 +29,9 @@ type AutoScalingAPI interface {
 	RegisterScalableTarget(ctx context.Context, in *aas.RegisterScalableTargetInput, opts ...func(*aas.Options)) (*aas.RegisterScalableTargetOutput, error)
 }
 
-// stop は desiredCount を 0 とし、start はリソース自身の model.EcsDesiredCountTagKey タグから desiredCount を取得する (未設定の場合は 1)
-//
-// サービスが Application Auto Scaling のターゲットを持つ場合、stop 時にその min/max を 0/0 とする
-// これを行わない場合、スケーリングポリシーが desiredCount の変更を取り消す
-// start 時は model.EcsScalingMinTagKey と EcsScalingMaxTagKey から書き戻す (未設定の場合は desiredCount を既定値とする)
+// ECS サービスの起動規模と Scheduled Scaling の一時停止をリソースタグから制御する。
+// 停止時は scalable target の上下限を 0/0 とし、Scheduled Scaling を一時停止する。
+// 起動の初期設定後は、一時停止要求が true の間だけタグの通常の上下限を維持する。
 type EcsServiceTarget struct {
 	Ecs         EcsAPI
 	AutoScaling AutoScalingAPI
@@ -46,38 +44,32 @@ func (t *EcsServiceTarget) Describe(ctx context.Context, res model.Resource) (mo
 	if err != nil {
 		return model.Observation{}, err
 	}
-	out, err := t.Ecs.DescribeServices(ctx, &ecs.DescribeServicesInput{Cluster: &cluster, Services: []string{service}})
+	current, err := t.service(ctx, cluster, service)
 	if err != nil {
 		return model.Observation{}, err
 	}
-	for _, s := range out.Services {
-		if s.Status != nil && *s.Status == "ACTIVE" {
-			// ECS の既定戦略は Replica であり、空値もその既定値として扱う。明示された別の戦略は拒否する。
-			if s.SchedulingStrategy != "" && s.SchedulingStrategy != ecstypes.SchedulingStrategyReplica {
-				return model.Observation{}, fmt.Errorf("ecs service %s uses unsupported scheduling strategy %q", res.Ref, s.SchedulingStrategy)
-			}
-			observation := model.Observation{
-				State:  ecsServiceState(s.DesiredCount, s.RunningCount, s.PendingCount),
-				Detail: fmt.Sprintf("desiredCount=%d runningCount=%d pendingCount=%d", s.DesiredCount, s.RunningCount, s.PendingCount),
-			}
-			config, err := ecsConfigFromTags(res.Tags)
-			if err != nil {
-				return model.Observation{}, err
-			}
-			scalable, err := t.scalableTarget(ctx, cluster, service)
-			if err != nil {
-				return model.Observation{}, err
-			}
-			if observation.State == model.StateRunning && scalable != nil {
-				observation.NeedsStart = aws.ToInt32(scalable.MinCapacity) != config.minimum || aws.ToInt32(scalable.MaxCapacity) != config.maximum
-			}
-			if observation.State == model.StateStopped && scalable != nil && (aws.ToInt32(scalable.MinCapacity) != 0 || aws.ToInt32(scalable.MaxCapacity) != 0) {
-				observation.NeedsStop = true
-			}
-			return observation, nil
-		}
+	if current == nil {
+		return model.Observation{State: model.StateNotFound}, nil
 	}
-	return model.Observation{State: model.StateNotFound}, nil
+	config, err := ecsConfigFromTags(res.Tags)
+	if err != nil {
+		return model.Observation{}, err
+	}
+	scalable, err := t.scalableTarget(ctx, cluster, service)
+	if err != nil {
+		return model.Observation{}, err
+	}
+	observation := model.Observation{
+		State:  ecsServiceState(current.DesiredCount, current.RunningCount, current.PendingCount),
+		Detail: fmt.Sprintf("desiredCount=%d runningCount=%d pendingCount=%d", current.DesiredCount, current.RunningCount, current.PendingCount),
+	}
+	if scalable != nil {
+		paused := ecsScheduledScalingPaused(scalable)
+		observation.Detail += fmt.Sprintf(" minCapacity=%d maxCapacity=%d ScheduledScalingSuspended=%t", aws.ToInt32(scalable.MinCapacity), aws.ToInt32(scalable.MaxCapacity), paused)
+		observation.NeedsStart = ecsNeedsInitialization(current, scalable, config) || paused != config.paused || (config.paused && !ecsBoundsEqual(scalable, config.minimum, config.maximum))
+		observation.NeedsStop = !ecsBoundsEqual(scalable, 0, 0) || !paused
+	}
+	return observation, nil
 }
 
 // ECS サービスの停止完了だけを stopped として判定する。
@@ -102,14 +94,14 @@ func (t *EcsServiceTarget) Stop(ctx context.Context, res model.Resource) error {
 		return err
 	}
 	if scalable != nil {
-		return t.register(ctx, cluster, service, 0, 0)
+		return t.register(ctx, cluster, service, aws.Int32(0), aws.Int32(0), true)
 	}
 	var zero int32
 	_, err = t.Ecs.UpdateService(ctx, &ecs.UpdateServiceInput{Cluster: &cluster, Service: &service, DesiredCount: &zero})
 	return err
 }
 
-// 起動台数と scaling-max が所属グループの上限内であることを検証し、起動台数を設定して Auto Scaling の min/max をタグ値へ戻す。
+// 起動規模の検証後、初期設定または稼働中の一時停止設定を適用する。
 func (t *EcsServiceTarget) Start(ctx context.Context, res model.Resource) error {
 	cluster, service, err := splitEcsRef(res.Ref)
 	if err != nil {
@@ -128,55 +120,92 @@ func (t *EcsServiceTarget) Start(ctx context.Context, res model.Resource) error 
 	if config.maximum > res.EcsMaxCount {
 		return fmt.Errorf("ecs service %s: %s=%d exceeds group ecs_max_count=%d", res.Ref, model.EcsScalingMaxTagKey, config.maximum, res.EcsMaxCount)
 	}
+	current, err := t.service(ctx, cluster, service)
+	if err != nil {
+		return err
+	}
+	if current == nil {
+		return fmt.Errorf("ecs service %s was not found", res.Ref)
+	}
 	scalable, err := t.scalableTarget(ctx, cluster, service)
 	if err != nil {
 		return err
 	}
+	if scalable != nil && !ecsNeedsInitialization(current, scalable, config) {
+		if config.paused && (!ecsScheduledScalingPaused(scalable) || !ecsBoundsEqual(scalable, config.minimum, config.maximum)) {
+			return t.register(ctx, cluster, service, &config.minimum, &config.maximum, true)
+		}
+		if !config.paused && ecsScheduledScalingPaused(scalable) {
+			return t.register(ctx, cluster, service, nil, nil, false)
+		}
+		return nil
+	}
 	if scalable != nil {
-		// 台数の設定が完了するまでは上下限を起動台数に固定する。失敗時もこの値を残し、通常の上下限との差を維持する。
-		// RegisterScalableTarget は範囲外の capacity を上下限内へ調整する: "adjusts the capacity of the scalable target to place it within these bounds"
+		// 起動設定の完了までは Scheduled Scaling を一時停止し、上下限を起動台数に固定する。
+		// RegisterScalableTarget は範囲外の capacity を調整する: "adjusts the capacity of the scalable target to place it within these bounds"
 		// https://docs.aws.amazon.com/autoscaling/application/APIReference/API_RegisterScalableTarget.html
-		if aws.ToInt32(scalable.MinCapacity) != config.desired || aws.ToInt32(scalable.MaxCapacity) != config.desired {
-			if err := t.register(ctx, cluster, service, config.desired, config.desired); err != nil {
+		if !ecsBoundsEqual(scalable, config.desired, config.desired) || !ecsScheduledScalingPaused(scalable) {
+			if err := t.register(ctx, cluster, service, &config.desired, &config.desired, true); err != nil {
 				return err
 			}
 		}
+		current, err = t.service(ctx, cluster, service)
+		if err != nil {
+			return err
+		}
+		if current == nil {
+			return fmt.Errorf("ecs service %s was not found", res.Ref)
+		}
 	}
-	currentDesired, err := t.desiredCount(ctx, cluster, service)
-	if err != nil {
-		return err
-	}
-	if currentDesired != config.desired {
+	if current.DesiredCount != config.desired {
 		if _, err := t.Ecs.UpdateService(ctx, &ecs.UpdateServiceInput{Cluster: &cluster, Service: &service, DesiredCount: &config.desired}); err != nil {
 			return err
 		}
 	}
-	if scalable != nil && (config.minimum != config.desired || config.maximum != config.desired) {
-		return t.register(ctx, cluster, service, config.minimum, config.maximum)
+	if scalable != nil && (config.minimum != config.desired || config.maximum != config.desired || !config.paused) {
+		return t.register(ctx, cluster, service, &config.minimum, &config.maximum, config.paused)
 	}
 	return nil
 }
 
-func (t *EcsServiceTarget) desiredCount(ctx context.Context, cluster, service string) (int32, error) {
+func (t *EcsServiceTarget) service(ctx context.Context, cluster, service string) (*ecstypes.Service, error) {
 	out, err := t.Ecs.DescribeServices(ctx, &ecs.DescribeServicesInput{Cluster: &cluster, Services: []string{service}})
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	for _, s := range out.Services {
 		if s.Status != nil && *s.Status == "ACTIVE" {
 			if s.SchedulingStrategy != "" && s.SchedulingStrategy != ecstypes.SchedulingStrategyReplica {
-				return 0, fmt.Errorf("ecs service %s/%s uses unsupported scheduling strategy %q", cluster, service, s.SchedulingStrategy)
+				return nil, fmt.Errorf("ecs service %s/%s uses unsupported scheduling strategy %q", cluster, service, s.SchedulingStrategy)
 			}
-			return s.DesiredCount, nil
+			return &s, nil
 		}
 	}
-	return 0, fmt.Errorf("ecs service %s/%s was not found", cluster, service)
+	return nil, nil
+}
+
+func ecsScheduledScalingPaused(scalable *aastypes.ScalableTarget) bool {
+	return scalable.SuspendedState != nil && aws.ToBool(scalable.SuspendedState.ScheduledScalingSuspended)
+}
+
+func ecsBoundsEqual(scalable *aastypes.ScalableTarget, minimum, maximum int32) bool {
+	return aws.ToInt32(scalable.MinCapacity) == minimum && aws.ToInt32(scalable.MaxCapacity) == maximum
+}
+
+// 停止状態、上下限 0/0、または通常のタグ範囲と異なる一時停止中の正の固定範囲を、起動の初期設定対象とする。
+func ecsNeedsInitialization(service *ecstypes.Service, scalable *aastypes.ScalableTarget, config ecsConfig) bool {
+	if ecsServiceState(service.DesiredCount, service.RunningCount, service.PendingCount) == model.StateStopped || ecsBoundsEqual(scalable, 0, 0) {
+		return true
+	}
+	minimum, maximum := aws.ToInt32(scalable.MinCapacity), aws.ToInt32(scalable.MaxCapacity)
+	return ecsScheduledScalingPaused(scalable) && minimum > 0 && minimum == maximum && !ecsBoundsEqual(scalable, config.minimum, config.maximum)
 }
 
 type ecsConfig struct {
 	desired int32
 	minimum int32
 	maximum int32
+	paused  bool
 }
 
 func ecsConfigFromTags(tags map[string]string) (ecsConfig, error) {
@@ -188,7 +217,17 @@ func ecsConfigFromTags(tags map[string]string) (ecsConfig, error) {
 	if err != nil {
 		return ecsConfig{}, err
 	}
-	return ecsConfig{desired: desired, minimum: minimum, maximum: maximum}, nil
+	paused := false
+	if value, present := tags[model.EcsScheduledScalingPausedTagKey]; present {
+		switch value {
+		case "true":
+			paused = true
+		case "false":
+		default:
+			return ecsConfig{}, fmt.Errorf("tag %s=%q must be true or false", model.EcsScheduledScalingPausedTagKey, value)
+		}
+	}
+	return ecsConfig{desired: desired, minimum: minimum, maximum: maximum, paused: paused}, nil
 }
 
 // ecs-service の Ref を、ECS API が個別の引数として要求する cluster と service へ分解する
@@ -282,14 +321,15 @@ func (t *EcsServiceTarget) scalableTarget(ctx context.Context, cluster, service 
 	return &out.ScalableTargets[0], nil
 }
 
-func (t *EcsServiceTarget) register(ctx context.Context, cluster, service string, minimum, maximum int32) error {
+func (t *EcsServiceTarget) register(ctx context.Context, cluster, service string, minimum, maximum *int32, paused bool) error {
 	resourceID := "service/" + cluster + "/" + service
 	_, err := t.AutoScaling.RegisterScalableTarget(ctx, &aas.RegisterScalableTargetInput{
 		ServiceNamespace:  aastypes.ServiceNamespaceEcs,
 		ResourceId:        &resourceID,
 		ScalableDimension: scalableDimension,
-		MinCapacity:       &minimum,
-		MaxCapacity:       &maximum,
+		MinCapacity:       minimum,
+		MaxCapacity:       maximum,
+		SuspendedState:    &aastypes.SuspendedState{ScheduledScalingSuspended: aws.Bool(paused)},
 	})
 	return err
 }

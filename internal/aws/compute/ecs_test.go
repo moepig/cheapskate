@@ -98,7 +98,8 @@ func TestEcsServiceStateAllowsStopBeforeTaskCountConverges(t *testing.T) {
 	assert.Equal(t, model.StateStopped, ecsServiceState(0, 0, 0))
 }
 
-func TestEcsStopWithScalableTargetOnlyClampsTarget(t *testing.T) {
+// scalable target の停止は、上下限 0/0 と Scheduled Scaling の一時停止を 1 回の更新で適用する。
+func TestEcsStopWithScalableTargetClampsAndSuspendsTarget(t *testing.T) {
 	controller := gomock.NewController(t)
 	ecsClient := mocks.NewMockEcsAPI(controller)
 	autoScaling := mocks.NewMockAutoScalingAPI(controller)
@@ -109,6 +110,10 @@ func TestEcsStopWithScalableTargetOnlyClampsTarget(t *testing.T) {
 		func(_ context.Context, input *aas.RegisterScalableTargetInput, _ ...func(*aas.Options)) (*aas.RegisterScalableTargetOutput, error) {
 			assert.EqualValues(t, 0, aws.ToInt32(input.MinCapacity))
 			assert.EqualValues(t, 0, aws.ToInt32(input.MaxCapacity))
+			require.NotNil(t, input.SuspendedState)
+			assert.Equal(t, aws.Bool(true), input.SuspendedState.ScheduledScalingSuspended)
+			assert.Nil(t, input.SuspendedState.DynamicScalingInSuspended)
+			assert.Nil(t, input.SuspendedState.DynamicScalingOutSuspended)
 			return &aas.RegisterScalableTargetOutput{}, nil
 		})
 	target := &EcsServiceTarget{Ecs: ecsClient, AutoScaling: autoScaling}
@@ -137,10 +142,11 @@ func TestEcsStartPinsBoundsUntilDesiredCountIsSet(t *testing.T) {
 			ecsClient := mocks.NewMockEcsAPI(controller)
 			autoScaling := mocks.NewMockAutoScalingAPI(controller)
 			calls := []any{
+				ecsClient.EXPECT().DescribeServices(gomock.Any(), gomock.Any()).Return(&ecs.DescribeServicesOutput{Services: []ecstypes.Service{{Status: aws.String("ACTIVE")}}}, nil),
 				autoScaling.EXPECT().DescribeScalableTargets(gomock.Any(), gomock.Any()).Return(&aas.DescribeScalableTargetsOutput{
 					ScalableTargets: []aastypes.ScalableTarget{{MinCapacity: aws.Int32(0), MaxCapacity: aws.Int32(0)}},
 				}, nil),
-				autoScaling.EXPECT().RegisterScalableTarget(gomock.Any(), gomock.Any()).DoAndReturn(assertScalableBounds(t, 2, 2)),
+				autoScaling.EXPECT().RegisterScalableTarget(gomock.Any(), gomock.Any()).DoAndReturn(assertScalableBounds(t, 2, 2, true)),
 				ecsClient.EXPECT().DescribeServices(gomock.Any(), gomock.Any()).Return(&ecs.DescribeServicesOutput{Services: []ecstypes.Service{{
 					Status: aws.String("ACTIVE"), SchedulingStrategy: ecstypes.SchedulingStrategyReplica, DesiredCount: desired,
 				}}}, nil),
@@ -152,7 +158,7 @@ func TestEcsStartPinsBoundsUntilDesiredCountIsSet(t *testing.T) {
 						return &ecs.UpdateServiceOutput{}, nil
 					}))
 			}
-			calls = append(calls, autoScaling.EXPECT().RegisterScalableTarget(gomock.Any(), gomock.Any()).DoAndReturn(assertScalableBounds(t, 1, 3)))
+			calls = append(calls, autoScaling.EXPECT().RegisterScalableTarget(gomock.Any(), gomock.Any()).DoAndReturn(assertScalableBounds(t, 1, 3, false)))
 			gomock.InOrder(calls...)
 			target := &EcsServiceTarget{Ecs: ecsClient, AutoScaling: autoScaling}
 			require.NoError(t, target.Start(context.Background(), ecsReconcileResource()))
@@ -160,7 +166,7 @@ func TestEcsStartPinsBoundsUntilDesiredCountIsSet(t *testing.T) {
 	}
 }
 
-// 固定台数の scalable target と target がないサービスについて、必要な変更 API だけを呼ぶ。
+// 固定台数の scalable target も起動設定の完了後に Scheduled Scaling を再開し、target がない場合は台数だけを設定する。
 func TestEcsStartWithFixedBoundsOrWithoutScalableTarget(t *testing.T) {
 	for _, scalable := range []bool{false, true} {
 		t.Run(fmt.Sprint(scalable), func(t *testing.T) {
@@ -172,15 +178,17 @@ func TestEcsStartWithFixedBoundsOrWithoutScalableTarget(t *testing.T) {
 			if scalable {
 				out.ScalableTargets = []aastypes.ScalableTarget{{MinCapacity: aws.Int32(0), MaxCapacity: aws.Int32(0)}}
 			}
-			calls := []any{autoScaling.EXPECT().DescribeScalableTargets(gomock.Any(), gomock.Any()).Return(out, nil)}
+			calls := []any{
+				ecsClient.EXPECT().DescribeServices(gomock.Any(), gomock.Any()).Return(&ecs.DescribeServicesOutput{Services: []ecstypes.Service{{Status: aws.String("ACTIVE")}}}, nil),
+				autoScaling.EXPECT().DescribeScalableTargets(gomock.Any(), gomock.Any()).Return(out, nil),
+			}
 			var desired int32
 			if scalable {
-				calls = append(calls, autoScaling.EXPECT().RegisterScalableTarget(gomock.Any(), gomock.Any()).DoAndReturn(assertScalableBounds(t, 2, 2)))
+				calls = append(calls, autoScaling.EXPECT().RegisterScalableTarget(gomock.Any(), gomock.Any()).DoAndReturn(assertScalableBounds(t, 2, 2, true)))
 				desired = 2
+				calls = append(calls, ecsClient.EXPECT().DescribeServices(gomock.Any(), gomock.Any()).Return(&ecs.DescribeServicesOutput{Services: []ecstypes.Service{{Status: aws.String("ACTIVE"), DesiredCount: desired}}}, nil))
+				calls = append(calls, autoScaling.EXPECT().RegisterScalableTarget(gomock.Any(), gomock.Any()).DoAndReturn(assertScalableBounds(t, 2, 2, false)))
 			}
-			calls = append(calls, ecsClient.EXPECT().DescribeServices(gomock.Any(), gomock.Any()).Return(&ecs.DescribeServicesOutput{Services: []ecstypes.Service{{
-				Status: aws.String("ACTIVE"), SchedulingStrategy: ecstypes.SchedulingStrategyReplica, DesiredCount: desired,
-			}}}, nil))
 			if !scalable {
 				calls = append(calls, ecsClient.EXPECT().UpdateService(gomock.Any(), gomock.Any()).DoAndReturn(
 					func(_ context.Context, input *ecs.UpdateServiceInput, _ ...func(*ecs.Options)) (*ecs.UpdateServiceOutput, error) {
@@ -197,19 +205,33 @@ func TestEcsStartWithFixedBoundsOrWithoutScalableTarget(t *testing.T) {
 // 各 API 境界で一度だけ失敗させ、新しい target による次回 reconcile で復旧することを確認する。
 // 応答だけが失われた場合は既存の成功結果を維持し、収束後の操作と通知を抑止する。
 func TestEcsPartialStartFailuresRecoverOnNextReconcile(t *testing.T) {
-	for _, failure := range []string{"pin", "pin response lost", "describe", "update", "release", "release response lost"} {
-		t.Run(failure, func(t *testing.T) {
+	var cases []struct {
+		failure string
+		paused  bool
+	}
+	for _, paused := range []bool{false, true} {
+		for _, failure := range []string{"pin", "pin response lost", "describe", "update", "release", "release response lost"} {
+			cases = append(cases, struct {
+				failure string
+				paused  bool
+			}{failure: failure, paused: paused})
+		}
+	}
+	for _, test := range cases {
+		failure := test.failure
+		t.Run(fmt.Sprintf("%s/paused=%t", failure, test.paused), func(t *testing.T) {
 			controller := gomock.NewController(t)
 			ecsClient := mocks.NewMockEcsAPI(controller)
 			autoScaling := mocks.NewMockAutoScalingAPI(controller)
 			var desired, minimum, maximum int32
+			paused := false
 			failed := false
 			modifications := 0
 			apiErr := errors.New("temporary " + failure + " failure")
 			autoScaling.EXPECT().DescribeScalableTargets(gomock.Any(), gomock.Any()).AnyTimes().DoAndReturn(
 				func(context.Context, *aas.DescribeScalableTargetsInput, ...func(*aas.Options)) (*aas.DescribeScalableTargetsOutput, error) {
 					return &aas.DescribeScalableTargetsOutput{ScalableTargets: []aastypes.ScalableTarget{{
-						MinCapacity: aws.Int32(minimum), MaxCapacity: aws.Int32(maximum),
+						MinCapacity: aws.Int32(minimum), MaxCapacity: aws.Int32(maximum), SuspendedState: &aastypes.SuspendedState{ScheduledScalingSuspended: aws.Bool(paused)},
 					}}}, nil
 				})
 			autoScaling.EXPECT().RegisterScalableTarget(gomock.Any(), gomock.Any()).AnyTimes().DoAndReturn(
@@ -219,16 +241,19 @@ func TestEcsPartialStartFailuresRecoverOnNextReconcile(t *testing.T) {
 					phase := "release"
 					if nextMin == 2 && nextMax == 2 {
 						phase = "pin"
+						assert.Equal(t, aws.Bool(true), input.SuspendedState.ScheduledScalingSuspended)
 					} else {
 						assert.EqualValues(t, 1, nextMin)
 						assert.EqualValues(t, 3, nextMax)
 						assert.EqualValues(t, 2, desired)
+						assert.Equal(t, aws.Bool(test.paused), input.SuspendedState.ScheduledScalingSuspended)
 					}
 					if !failed && failure == phase {
 						failed = true
 						return nil, apiErr
 					}
 					minimum, maximum = nextMin, nextMax
+					paused = aws.ToBool(input.SuspendedState.ScheduledScalingSuspended)
 					desired = min(max(desired, minimum), maximum)
 					if !failed && failure == phase+" response lost" {
 						failed = true
@@ -265,7 +290,9 @@ func TestEcsPartialStartFailuresRecoverOnNextReconcile(t *testing.T) {
 			notifier := &porttest.Notifier{}
 			cycle := func() reconcile.Summary {
 				target := &EcsServiceTarget{Ecs: ecsClient, AutoScaling: autoScaling}
-				result, err := reconcile.Run(context.Background(), nil, ecsReconcileDeps(ecsReconcileResource(), target, notifier), time.Now())
+				resource := ecsReconcileResource()
+				resource.Tags[model.EcsScheduledScalingPausedTagKey] = fmt.Sprint(test.paused)
+				result, err := reconcile.Run(context.Background(), nil, ecsReconcileDeps(resource, target, notifier), time.Now())
 				require.NoError(t, err)
 				return result
 			}
@@ -286,6 +313,7 @@ func TestEcsPartialStartFailuresRecoverOnNextReconcile(t *testing.T) {
 			assert.EqualValues(t, 2, desired)
 			assert.EqualValues(t, 1, minimum)
 			assert.EqualValues(t, 3, maximum)
+			assert.Equal(t, test.paused, paused)
 			before := modifications
 			third := cycle()
 			assert.Empty(t, third.Actions)
@@ -348,11 +376,15 @@ func ecsReconcileDeps(resource model.Resource, target *EcsServiceTarget, notifie
 	}
 }
 
-func assertScalableBounds(t *testing.T, minimum, maximum int32) func(context.Context, *aas.RegisterScalableTargetInput, ...func(*aas.Options)) (*aas.RegisterScalableTargetOutput, error) {
+func assertScalableBounds(t *testing.T, minimum, maximum int32, paused bool) func(context.Context, *aas.RegisterScalableTargetInput, ...func(*aas.Options)) (*aas.RegisterScalableTargetOutput, error) {
 	t.Helper()
 	return func(_ context.Context, input *aas.RegisterScalableTargetInput, _ ...func(*aas.Options)) (*aas.RegisterScalableTargetOutput, error) {
 		assert.Equal(t, minimum, aws.ToInt32(input.MinCapacity))
 		assert.Equal(t, maximum, aws.ToInt32(input.MaxCapacity))
+		require.NotNil(t, input.SuspendedState)
+		assert.Equal(t, aws.Bool(paused), input.SuspendedState.ScheduledScalingSuspended)
+		assert.Nil(t, input.SuspendedState.DynamicScalingInSuspended)
+		assert.Nil(t, input.SuspendedState.DynamicScalingOutSuspended)
 		return &aas.RegisterScalableTargetOutput{}, nil
 	}
 }
@@ -363,6 +395,8 @@ func TestEcsRejectsInvalidTagsBeforeModification(t *testing.T) {
 		"empty desired": {model.EcsDesiredCountTagKey: ""},
 		"negative min":  {model.EcsScalingMinTagKey: "-1"},
 		"inconsistent":  {model.EcsDesiredCountTagKey: "2", model.EcsScalingMinTagKey: "3", model.EcsScalingMaxTagKey: "4"},
+		"empty pause":   {model.EcsScheduledScalingPausedTagKey: ""},
+		"invalid pause": {model.EcsScheduledScalingPausedTagKey: "TRUE"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			controller := gomock.NewController(t)
@@ -472,7 +506,7 @@ func TestEcsStopAllowsCountsAboveLimit(t *testing.T) {
 				out := &aas.DescribeScalableTargetsOutput{}
 				if scalable {
 					out.ScalableTargets = []aastypes.ScalableTarget{{MinCapacity: aws.Int32(1000), MaxCapacity: aws.Int32(1000)}}
-					autoScaling.EXPECT().RegisterScalableTarget(gomock.Any(), gomock.Any()).DoAndReturn(assertScalableBounds(t, 0, 0))
+					autoScaling.EXPECT().RegisterScalableTarget(gomock.Any(), gomock.Any()).DoAndReturn(assertScalableBounds(t, 0, 0, true))
 				} else {
 					ecsClient.EXPECT().UpdateService(gomock.Any(), gomock.Any()).DoAndReturn(
 						func(_ context.Context, input *ecs.UpdateServiceInput, _ ...func(*ecs.Options)) (*ecs.UpdateServiceOutput, error) {

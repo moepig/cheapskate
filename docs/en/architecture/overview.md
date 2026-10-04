@@ -1,6 +1,6 @@
 # Architecture overview
 
-cheapskate is a convergent controller. It derives one desired state per configured group, associates tagged resources with those groups, observes each resource, and converges running/stopped state and ECS scaling bounds to the configuration.
+cheapskate is a convergent controller. It derives one desired state per configured group, associates tagged resources with those groups, observes each resource, and converges running/stopped state, ECS suspension requests, and managed ECS scaling bounds to the configuration.
 
 ```mermaid
 flowchart LR

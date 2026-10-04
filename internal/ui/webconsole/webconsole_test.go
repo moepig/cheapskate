@@ -68,11 +68,11 @@ func TestGroupDetailRendersScheduleResourcesStateAndBasePath(t *testing.T) {
 	discoverer.Resources = map[string]model.Resource{
 		"arn:aws:ecs:ap-northeast-1:123456789012:service/dev/api": {
 			Type: model.TypeEcsService, Ref: "dev/api", ARN: "arn:aws:ecs:ap-northeast-1:123456789012:service/dev/api",
-			Tags: map[string]string{model.GroupTagKey: "dev", model.EcsDesiredCountTagKey: "2"},
+			Tags: map[string]string{model.GroupTagKey: "dev", model.EcsDesiredCountTagKey: "2", model.EcsScheduledScalingPausedTagKey: "true"},
 		},
 	}
 	describers := map[model.ResourceType]port.Describer{
-		model.TypeEcsService: porttest.Describer{Obs: model.Observation{State: model.StateRunning, Detail: "desiredCount=2"}},
+		model.TypeEcsService: porttest.Describer{Obs: model.Observation{State: model.StateRunning, Detail: "desiredCount=2 minCapacity=1 maxCapacity=3 ScheduledScalingSuspended=true"}},
 	}
 	location := time.FixedZone("JST", 9*60*60)
 	server := New(state.New(api, "table"), discoverer, describers, "/stage/", []string{"example.com"}, location, nil)
@@ -93,7 +93,8 @@ func TestGroupDetailRendersScheduleResourcesStateAndBasePath(t *testing.T) {
 	assert.Contains(t, body, "stop: 0 20 * * *")
 	assert.Contains(t, body, "dev/api")
 	assert.Contains(t, body, "desired: 2")
-	assert.Contains(t, body, "running (desiredCount=2)")
+	assert.Contains(t, body, "scheduled scaling paused: true")
+	assert.Contains(t, body, "running (desiredCount=2 minCapacity=1 maxCapacity=3 ScheduledScalingSuspended=true)")
 	assert.Contains(t, body, `action="/stage/op"`)
 	assert.Contains(t, body, "All schedules and dates use JST")
 	assert.Equal(t, 2, db.Calls("get"))
