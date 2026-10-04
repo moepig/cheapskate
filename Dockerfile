@@ -35,7 +35,7 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
 # is not in go.mod, so its version tag and digest are maintained as a Docker dependency.
 FROM public.ecr.aws/awsguru/aws-lambda-adapter:1.1.0@sha256:17cfd08eff1dfea3f6a9a1e9c65fdac80aa4919b6085e746615530f43f57d2f1 AS lambda-adapter
 
-FROM public.ecr.aws/lambda/provided:al2023@sha256:495a68b0c4fecf14b99fe152aae4cea96446e7fe5af218c5dc03642902adc20d AS webconsole
+FROM public.ecr.aws/lambda/provided:al2023@sha256:aa71e364ea5e730a64390124ecf951d44107fbc3149cfc23e8f408ec44888828 AS webconsole
 # Lambda's init starts every executable under /opt/extensions before invoking the function.
 COPY --from=lambda-adapter /lambda-adapter /opt/extensions/lambda-adapter
 COPY --from=build-webconsole /bootstrap /var/runtime/bootstrap
@@ -49,6 +49,6 @@ ENV AWS_LWA_READINESS_CHECK_PROTOCOL=tcp
 # provided.al2023 runs /var/runtime/bootstrap; the CMD is unused but required to be non-empty by some tooling.
 CMD ["handler"]
 
-FROM public.ecr.aws/lambda/provided:al2023@sha256:495a68b0c4fecf14b99fe152aae4cea96446e7fe5af218c5dc03642902adc20d AS reconciler
+FROM public.ecr.aws/lambda/provided:al2023@sha256:aa71e364ea5e730a64390124ecf951d44107fbc3149cfc23e8f408ec44888828 AS reconciler
 COPY --from=build-reconciler /bootstrap /var/runtime/bootstrap
 CMD ["handler"]
