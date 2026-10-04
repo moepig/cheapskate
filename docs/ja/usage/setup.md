@@ -60,7 +60,7 @@ CLI と Web コンソールには、次の DynamoDB action が必要である。
 }
 ```
 
-`show` と詳細画面には、`tag:GetResources` と対応 service の読み取り専用 Describe も付与する。グループアイテムを IaC から直接管理してはならない。アイテム全体の検証と条件付き書き込みを行うため、CLI または Web コンソールを使用する。
+`show` と詳細画面には、`tag:GetResources` と対応 service の読み取り専用 Describe も付与する。グループアイテムの変更には、アイテム全体の検証と条件付き書き込みを行う CLI または Web コンソールを推奨する。Terraform から直接管理する場合の登録例と制約は、[Terraform によるレコード登録](terraform_records.md)を参照。
 
 ## 4. タグとグループの設定
 

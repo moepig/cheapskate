@@ -9,6 +9,8 @@
 - [リソースタグ](usage/resource_tag.md)
 - [リソースごとの処理フロー](usage/resource_flow.md)
 - [操作方法](usage/operations.md)
+- [CLI によるレコード登録と AWS の動作](usage/cli_records.md)
+- [Terraform によるレコード登録](usage/terraform_records.md)
 - [セットアップ](usage/setup.md)
 - [トラブルシューティング](usage/troubleshooting.md)
 

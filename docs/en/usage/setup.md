@@ -60,7 +60,7 @@ The CLI and web console require these DynamoDB actions on the table:
 }
 ```
 
-For `show` and detail pages, also grant `tag:GetResources` and the supported services' read-only Describe calls. Do not manage group items directly through infrastructure as code; use the CLI or web console so full validation and conditional writes are applied.
+For `show` and detail pages, also grant `tag:GetResources` and the supported services' read-only Describe calls. Prefer the CLI or web console for group changes so full validation and conditional writes are applied. Direct Terraform writes bypass these checks; do not modify the same item through both Terraform and the CLI or web console. See the [Terraform record examples (Japanese)](../../ja/usage/terraform_records.md) for configuration and constraints.
 
 ## 4. Tag resources and create a group
 
