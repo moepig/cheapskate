@@ -161,8 +161,17 @@ func serveExecuteDynamo(t *testing.T, responses ...dynamoResponse) {
 		server.Close()
 		assert.Equal(t, len(responses), int(calls.Load()))
 	})
-	t.Setenv("AWS_ENDPOINT_URL", server.URL)
-	t.Setenv("AWS_ENDPOINT_URL_DYNAMODB", server.URL)
+	setExecuteEnvironment(t, server.URL)
+}
+
+// AWS と CLI の設定をテストごとに分離し、AWS 接続先を指定した HTTP サーバに限定する。
+func setExecuteEnvironment(t *testing.T, endpoint string) {
+	t.Helper()
+	t.Setenv("CHEAPSKATE_CONFIG", filepath.Join(t.TempDir(), "config.json"))
+	t.Setenv("CHEAPSKATE_TABLE", "")
+	t.Setenv("STATE_TABLE_NAME", "")
+	t.Setenv("AWS_ENDPOINT_URL", endpoint)
+	t.Setenv("AWS_ENDPOINT_URL_DYNAMODB", endpoint)
 	t.Setenv("AWS_ACCESS_KEY_ID", "test")
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "test")
 	t.Setenv("AWS_SESSION_TOKEN", "")

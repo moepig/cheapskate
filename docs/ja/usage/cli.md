@@ -7,17 +7,59 @@
 全体オプションは、コマンド名より前に指定する。実行形式を、以下に示す。
 
 ```console
-cheapskate-cli [-table TABLE] [-output text|json] <command> [arguments]
+cheapskate-cli [-config PATH] [-context NAME] [-table TABLE] [-output text|json] <command> [arguments]
 ```
 
 全体オプションと接続先の決定方法を、以下に示す。
 
 | オプション | 既定値 | 用途 |
 | --- | --- | --- |
-| -table | CHEAPSKATE_TABLE、次に STATE_TABLE_NAME | DynamoDB テーブル名 |
+| -config | CHEAPSKATE_CONFIG、次に OS ごとの既定パス | CLI 設定ファイルのパス |
+| -context | 保存済みの選択中 context | 今回の実行で使う context。保存済みの選択は変更しない |
+| -table | 選択中 context、次に CHEAPSKATE_TABLE、STATE_TABLE_NAME | DynamoDB テーブル名 |
 | -output | text | text または json の出力形式 |
 
-AWS の認証情報とリージョンは AWS SDK の設定を使用する。cron の解釈には DEFAULT_TIMEZONE を使用し、未設定時は UTC とする。
+AWS profile、リージョン、およびスケジュールのタイムゾーンには、選択中 context の設定を使用する。未設定の項目については、AWS の認証情報とリージョンは AWS SDK の設定、タイムゾーンは DEFAULT_TIMEZONE を使用する。タイムゾーンの既定値は UTC である。context の設定は環境変数より優先し、-table は context のテーブル名より優先する。
+
+## context
+
+context は、接続設定を名前でまとめたものである。context と選択状態を JSON ファイルに保存し、次回以降の実行でも使用する。config コマンドはローカルで動作し、AWS の認証情報や環境変数によるテーブル名の指定を必要としない。
+
+context の管理コマンドを、以下に示す。
+
+| コマンド | 引数 | 動作 |
+| --- | --- | --- |
+| config set-context | NAME --table TABLE [--profile PROFILE] [--region REGION] [--timezone ZONE] | context を作成・更新。省略した項目は保存済みの値を保持 |
+| config use-context | NAME | 選択状態を保存。登録済みの context が必要 |
+| config get-contexts | なし | 名前順で一覧表示。選択中の context に * を付ける |
+| config current-context | なし | 保存済みの選択を表示。未選択時はエラー |
+
+新しい context には --table が必須である。任意項目は AWS 共有設定の profile 名、AWS リージョン、およびスケジュールの IANA タイムゾーンである。任意項目に空文字列を指定すると、その設定を削除する。set-context は選択状態を変更しない。認証情報は AWS SDK の設定で管理し、CLI は profile 名を保存する。
+
+context の登録・選択と、一時的に別の context を使う例を、以下に示す。
+
+```console
+cheapskate-cli config set-context dev --table cheapskate-dev --profile dev --region ap-northeast-1 --timezone Asia/Tokyo
+cheapskate-cli config set-context prod --table cheapskate-prod --profile prod --region ap-northeast-1 --timezone Asia/Tokyo
+cheapskate-cli config use-context dev
+cheapskate-cli list
+cheapskate-cli -context prod list
+cheapskate-cli config current-context
+```
+
+-context はその実行だけに適用するため、最後のコマンドは dev を表示する。スケジュールのタイムゾーンは reconciler と Web コンソールに合わせること。
+
+既定の保存先を、以下に示す。
+
+| OS | パス |
+| --- | --- |
+| Linux | $XDG_CONFIG_HOME/cheapskate/config.json。未設定時は ~/.config/cheapskate/config.json |
+| macOS | ~/Library/Application Support/cheapskate/config.json |
+| Windows | %AppData%\cheapskate\config.json |
+
+-config は CHEAPSKATE_CONFIG より優先する。ファイルが存在しない場合は保存済み context がない状態として扱い、context または選択状態の保存時に作成する。不正なファイルはエラーとなる。ファイルは current_context と、context 名をキーとする contexts オブジェクトを含む。各 context のフィールドは table、profile、region、timezone である。
+
+-output json を指定した場合、get-contexts は設定オブジェクト、set-context は name と保存済みの context のフィールド、use-context と current-context は current_context を含むオブジェクトを返す。
 
 ## コマンド
 
@@ -42,7 +84,7 @@ list の text 出力は、有効なグループを stdout、不正なグルー�
 
 show の json 出力は、group と resources を含む。各リソースの config はタグから得た設定、live は AWS の観測値、live_error は状態取得のエラーである。不正な保存済みグループの場合は、構造化された error オブジェクトを出力する。
 
-CLI の有効期限は DEFAULT_TIMEZONE にかかわらず UTC の RFC 3339 形式で表示する。
+CLI の有効期限はスケジュールのタイムゾーンにかかわらず UTC の RFC 3339 形式で表示する。
 
 ## 終了コード
 

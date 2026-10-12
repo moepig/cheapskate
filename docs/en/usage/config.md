@@ -27,7 +27,7 @@ An unparseable METRICS_ENABLED prevents startup. Empty METRICS_NAMESPACE selects
 
 ## CLI
 
-The table name comes from -table, then CHEAPSKATE_TABLE, then STATE_TABLE_NAME. DEFAULT_TIMEZONE applies to cron validation. CLI expiration output always uses UTC RFC 3339. For arguments and output formats, see [CLI reference](cli.md).
+The CLI saves named contexts and the current selection in a local JSON file. A context contains the table name and optional AWS profile, region, and schedule time zone. The table name comes from -table, then the selected context, then CHEAPSKATE_TABLE, then STATE_TABLE_NAME. A context's time zone takes precedence over DEFAULT_TIMEZONE. CLI expiration output always uses UTC RFC 3339. For context commands, file locations, arguments, and output formats, see [CLI reference](cli.md).
 
 ## Web console
 

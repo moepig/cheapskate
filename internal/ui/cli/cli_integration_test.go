@@ -5,6 +5,7 @@ package cli
 import (
 	"context"
 	"io"
+	"path/filepath"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
@@ -17,11 +18,14 @@ import (
 )
 
 func TestCLILifecycleAgainstDynamoDB(t *testing.T) {
+	t.Setenv("CHEAPSKATE_CONFIG", filepath.Join(t.TempDir(), "config.json"))
 	cfg := emutest.Config(t)
 	table := emutest.CreateStateTable(t, cfg)
 	store := state.New(dynamodb.NewFromConfig(cfg), table)
+	require.NoError(t, Run([]string{"config", "set-context", "test", "--table", table, "--region", cfg.Region, "--timezone", "UTC"}, io.Discard))
+	require.NoError(t, Run([]string{"config", "use-context", "test"}, io.Discard))
 	args := func(values ...string) []string {
-		return append([]string{"-table", table, "-output", "json"}, values...)
+		return append([]string{"-output", "json"}, values...)
 	}
 
 	require.NoError(t, Run(args("schedule", "--group", "dev", "-start", "0 9 * * *", "-stop", "0 20 * * *"), io.Discard))

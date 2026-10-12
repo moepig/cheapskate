@@ -27,7 +27,7 @@ METRICS_ENABLED を真偽値として解釈できない場合は起動に失敗�
 
 ## CLI
 
-テーブル名は、-table、CHEAPSKATE_TABLE、STATE_TABLE_NAME の順に参照する。DEFAULT_TIMEZONE は cron の検証に使う。CLI の有効期限表示は常に UTC の RFC 3339 形式である。引数と出力形式は、[CLI リファレンス](cli.md)を参照。
+CLI は、名前付きの context と選択状態をローカルの JSON ファイルに保存する。context にはテーブル名と、任意の AWS profile、リージョン、およびスケジュールのタイムゾーンを設定する。テーブル名は、-table、選択中 context、CHEAPSKATE_TABLE、STATE_TABLE_NAME の順に参照する。context のタイムゾーンは DEFAULT_TIMEZONE より優先する。CLI の有効期限表示は常に UTC の RFC 3339 形式である。context の管理コマンド、保存先、引数、および出力形式は、[CLI リファレンス](cli.md)を参照。
 
 ## Web コンソール
 

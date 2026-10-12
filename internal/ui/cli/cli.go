@@ -24,9 +24,13 @@ import (
 var Usage = `cheapskate-cli — cheapskate configuration CLI
 
 Usage:
-  cheapskate-cli [-table TABLE] [-output text|json] <command> [arguments]
+  cheapskate-cli [-config PATH] [-context NAME] [-table TABLE] [-output text|json] <command> [arguments]
 
 Commands:
+  config set-context NAME --table TABLE [--profile PROFILE] [--region REGION] [--timezone ZONE]
+  config use-context NAME
+  config get-contexts
+  config current-context
   list
   show --group NAME
   schedule --group NAME -start CRON -stop CRON
@@ -35,7 +39,9 @@ Commands:
   remove --group NAME
 
 Resources belong to a group through the fixed tag cheapskate:group=<group>.
-The table name comes from -table, CHEAPSKATE_TABLE, or STATE_TABLE_NAME.
+Contexts and the current selection are saved in the user config directory under cheapskate/config.json.
+Use -config or CHEAPSKATE_CONFIG to select another config file.
+The table name comes from -table, the selected context, CHEAPSKATE_TABLE, or STATE_TABLE_NAME.
 `
 
 type commandError struct {
@@ -79,7 +85,9 @@ func Run(args []string, out io.Writer) error {
 
 func run(args []string, stdout, stderr io.Writer) error {
 	global := newFlagSet("cheapskate-cli")
-	table := global.String("table", firstNonEmpty(os.Getenv("CHEAPSKATE_TABLE"), os.Getenv("STATE_TABLE_NAME")), "DynamoDB state table name")
+	configFile := global.String("config", "", "CLI config file path (or CHEAPSKATE_CONFIG)")
+	contextName := global.String("context", "", "context for this invocation")
+	table := global.String("table", "", "DynamoDB state table name")
 	output := global.String("output", "text", "output format: text or json")
 	if err := global.Parse(args); err != nil {
 		return err
@@ -91,30 +99,50 @@ func run(args []string, stdout, stderr io.Writer) error {
 	if len(rest) == 0 {
 		return fmt.Errorf("missing command (see: cheapskate-cli -h)")
 	}
-	if *table == "" {
-		return fmt.Errorf("state table not set (use -table, CHEAPSKATE_TABLE, or STATE_TABLE_NAME)")
+	path, err := cliConfigPath(*configFile)
+	if err != nil {
+		return err
 	}
-	timezone := os.Getenv("DEFAULT_TIMEZONE")
-	if timezone == "" {
-		timezone = "UTC"
+	saved, err := loadCLIConfig(path)
+	if err != nil {
+		return err
 	}
+	command, commandArgs := rest[0], rest[1:]
+	if command == "config" {
+		return cmdConfig(commandArgs, stdout, *output, path, saved)
+	}
+	selected, err := saved.context(firstNonEmpty(*contextName, saved.CurrentContext))
+	if err != nil {
+		return err
+	}
+	tableName := firstNonEmpty(*table, selected.Table, os.Getenv("CHEAPSKATE_TABLE"), os.Getenv("STATE_TABLE_NAME"))
+	if tableName == "" {
+		return fmt.Errorf("state table not set (use -table, a context, CHEAPSKATE_TABLE, or STATE_TABLE_NAME)")
+	}
+	timezone := firstNonEmpty(selected.Timezone, os.Getenv("DEFAULT_TIMEZONE"), "UTC")
 	location, err := time.LoadLocation(timezone)
 	if err != nil {
-		return fmt.Errorf("invalid DEFAULT_TIMEZONE %q: %w", timezone, err)
+		return fmt.Errorf("invalid timezone %q: %w", timezone, err)
 	}
 
 	ctx := context.Background()
-	cfg, err := config.LoadDefaultConfig(ctx)
+	var awsOptions []func(*config.LoadOptions) error
+	if selected.Profile != "" {
+		awsOptions = append(awsOptions, config.WithSharedConfigProfile(selected.Profile))
+	}
+	if selected.Region != "" {
+		awsOptions = append(awsOptions, config.WithRegion(selected.Region))
+	}
+	cfg, err := config.LoadDefaultConfig(ctx, awsOptions...)
 	if err != nil {
 		return fmt.Errorf("load AWS config: %w", err)
 	}
 	service := groups.New(
-		state.New(dynamodb.NewFromConfig(cfg), *table),
+		state.New(dynamodb.NewFromConfig(cfg), tableName),
 		wire.Discoverer(cfg),
 		wire.Describers(cfg),
 		location,
 	)
-	command, commandArgs := rest[0], rest[1:]
 	switch command {
 	case "list":
 		return cmdList(ctx, service, commandArgs, stdout, stderr, *output, time.Now())

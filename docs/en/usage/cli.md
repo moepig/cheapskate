@@ -7,17 +7,59 @@ This document defines cheapskate-cli commands, options, output formats, exit cod
 Place global options before the command name:
 
 ```console
-cheapskate-cli [-table TABLE] [-output text|json] <command> [arguments]
+cheapskate-cli [-config PATH] [-context NAME] [-table TABLE] [-output text|json] <command> [arguments]
 ```
 
 Global options are:
 
 | Option | Default | Purpose |
 | --- | --- | --- |
-| -table | CHEAPSKATE_TABLE, then STATE_TABLE_NAME | DynamoDB table name |
+| -config | CHEAPSKATE_CONFIG, then the OS-specific default path | CLI config file path |
+| -context | Saved current context | Context for this invocation; does not change the saved selection |
+| -table | Selected context, then CHEAPSKATE_TABLE, then STATE_TABLE_NAME | DynamoDB table name |
 | -output | text | text or json output |
 
-AWS credentials and region use AWS SDK configuration. Cron interpretation uses DEFAULT_TIMEZONE, defaulting to UTC.
+The selected context supplies AWS profile, region, and schedule time zone when configured. Otherwise, AWS credentials and region use AWS SDK configuration, and the time zone comes from DEFAULT_TIMEZONE, defaulting to UTC. Context settings take precedence over environment variables; -table overrides the context's table.
+
+## Contexts
+
+A context is a named set of connection settings. Contexts and the current selection are saved as JSON and reused on later invocations. Config commands operate locally without requiring AWS credentials or a table in the environment.
+
+The context commands are:
+
+| Command | Arguments | Behavior |
+| --- | --- | --- |
+| config set-context | NAME --table TABLE [--profile PROFILE] [--region REGION] [--timezone ZONE] | Create or update a context; omitted fields retain their saved values |
+| config use-context | NAME | Save the current selection; the context must exist |
+| config get-contexts | None | List contexts in name order; mark the current selection with * |
+| config current-context | None | Display the saved selection; fail if none is selected |
+
+New contexts require --table. Optional settings are the AWS shared config profile name, AWS region, and IANA schedule time zone. An empty optional value clears that setting. set-context does not change the current selection. Credentials remain in AWS SDK configuration; the CLI saves the profile name.
+
+To register and select a context, then temporarily use another context:
+
+```console
+cheapskate-cli config set-context dev --table cheapskate-dev --profile dev --region ap-northeast-1 --timezone Asia/Tokyo
+cheapskate-cli config set-context prod --table cheapskate-prod --profile prod --region ap-northeast-1 --timezone Asia/Tokyo
+cheapskate-cli config use-context dev
+cheapskate-cli list
+cheapskate-cli -context prod list
+cheapskate-cli config current-context
+```
+
+The final command prints dev because -context applies only to that invocation. Use the same schedule time zone as the reconciler and web console.
+
+The default file locations are:
+
+| OS | Path |
+| --- | --- |
+| Linux | $XDG_CONFIG_HOME/cheapskate/config.json, or ~/.config/cheapskate/config.json when unset |
+| macOS | ~/Library/Application Support/cheapskate/config.json |
+| Windows | %AppData%\cheapskate\config.json |
+
+-config overrides CHEAPSKATE_CONFIG. A missing file means no saved contexts; it is created when saving a context or selection. Invalid files produce an error. The file contains current_context and a contexts object keyed by name; context fields are table, profile, region, and timezone.
+
+With -output json, get-contexts returns that config object, set-context returns name and the saved context fields, and use-context and current-context return an object containing current_context.
 
 ## Commands
 
@@ -42,7 +84,7 @@ Text list writes valid groups to stdout and invalid groups to stderr. JSON list 
 
 JSON show contains group and resources. Each resource's config comes from tags; live contains AWS observations; live_error contains an inspection failure. An invalid stored group produces a structured error object.
 
-CLI expiration timestamps always use UTC RFC 3339 regardless of DEFAULT_TIMEZONE.
+CLI expiration timestamps always use UTC RFC 3339 regardless of the schedule time zone.
 
 ## Exit codes
 
