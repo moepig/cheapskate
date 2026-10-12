@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/adhocore/gronx"
+
+	"cheapskate/internal/core/cron"
 )
 
 const MaxOverrideExpiresAt int64 = 253402300799
@@ -125,10 +127,10 @@ func validateCron(label, expr string, reference time.Time) error {
 	if len(strings.Fields(expr)) != 5 || !gronx.IsValid(expr) {
 		return fmt.Errorf("invalid %s expression %q: want a valid 5-field cron", label, expr)
 	}
-	if _, err := gronx.PrevTickBefore(expr, reference, true); err != nil {
+	if _, err := cron.PrevTickBefore(expr, reference, true); err != nil {
 		return fmt.Errorf("invalid %s expression %q: no previous occurrence: %w", label, expr, err)
 	}
-	if _, err := gronx.NextTickAfter(expr, reference, true); err != nil {
+	if _, err := cron.NextTickAfter(expr, reference, true); err != nil {
 		return fmt.Errorf("invalid %s expression %q: no next occurrence: %w", label, expr, err)
 	}
 	return nil

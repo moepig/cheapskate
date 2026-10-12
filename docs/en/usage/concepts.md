@@ -21,6 +21,8 @@ An override with `override_expires_at <= now` is inactive. Its stored attributes
 
 A schedule is a pair of five-field cron expressions interpreted in `DEFAULT_TIMEZONE`. Both expressions must exist and must have reachable ticks. A group must have a schedule, an override, or both. A timed override additionally requires a schedule.
 
+When an offset change repeats a local time, each occurrence is a separate candidate tick. Nonexistent local times do not fire. The most recent start and stop are compared as absolute instants, so a backward clock change alone does not restart a stopped resource. Reachability searches are limited to 400 years in each direction.
+
 ## Convergence and concurrency
 
 An observed running/stopped state that differs from the desired state receives an action. RDS and EC2 observations classified as transitioning, and resources classified as not found, are skipped until a later cycle.

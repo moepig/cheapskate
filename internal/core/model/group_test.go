@@ -57,6 +57,27 @@ func TestValidateGroupForWriteRejectsExpiredOverride(t *testing.T) {
 	assert.ErrorContains(t, ValidateGroupForWrite(group, now, time.UTC), "later than")
 }
 
+// 起動・停止の各式が毎年の欠落時間に重なる場合、未来の発火がない設定として拒否する。
+func TestValidateGroupRejectsAnnualDaylightSavingGap(t *testing.T) {
+	location, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	for _, field := range []string{"start_cron", "stop_cron"} {
+		t.Run(field, func(t *testing.T) {
+			group := GroupSpec{Name: "dev", StartCron: "0 9 * * *", StopCron: "0 20 * * *"}
+			if field == "start_cron" {
+				group.StartCron = "30 2 * 3 SUN#2"
+			} else {
+				group.StopCron = "30 2 * 3 SUN#2"
+			}
+			err := ValidateGroup(group, now, location)
+			require.Error(t, err)
+			assert.ErrorContains(t, err, field)
+			assert.ErrorContains(t, err, "no next occurrence")
+		})
+	}
+}
+
 func TestValidGroupName(t *testing.T) {
 	require.NoError(t, ValidGroupName("A.b_c-9"))
 	require.NoError(t, ValidGroupName(strings.Repeat("a", 64)))

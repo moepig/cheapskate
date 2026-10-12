@@ -75,6 +75,77 @@ func TestResolveDesiredAtScheduleAndOverrideBoundaries(t *testing.T) {
 	assert.Equal(t, model.DesiredRunning, got)
 }
 
+// UTC の基準時刻で停止後と重複時刻の状態を確認し、時刻の巻き戻りだけでは再起動しないことを検証する。
+func TestResolveDesiredAcrossDaylightSavingTransitions(t *testing.T) {
+	tests := []struct {
+		name, zone, start, stop string
+		states                  map[string]model.DesiredState
+	}{
+		{
+			name: "stays stopped across fallback", zone: "America/New_York", start: "30 0 * * *", stop: "15 1 * * *",
+			states: map[string]model.DesiredState{
+				"2026-11-01T05:14:59Z": model.DesiredRunning,
+				"2026-11-01T05:15:00Z": model.DesiredStopped,
+				"2026-11-01T05:55:00Z": model.DesiredStopped,
+				"2026-11-01T05:59:59Z": model.DesiredStopped,
+				"2026-11-01T06:00:00Z": model.DesiredStopped,
+				"2026-11-01T06:05:00Z": model.DesiredStopped,
+				"2026-11-01T06:15:00Z": model.DesiredStopped,
+			},
+		},
+		{
+			name: "both occurrences can start and stop", zone: "America/New_York", start: "15 1 * * *", stop: "45 1 * * *",
+			states: map[string]model.DesiredState{
+				"2026-11-01T05:15:00Z": model.DesiredRunning,
+				"2026-11-01T05:45:00Z": model.DesiredStopped,
+				"2026-11-01T06:00:00Z": model.DesiredStopped,
+				"2026-11-01T06:15:00Z": model.DesiredRunning,
+				"2026-11-01T06:45:00Z": model.DesiredStopped,
+			},
+		},
+		{
+			name: "missing start does not fire", zone: "America/New_York", start: "30 2 * * *", stop: "30 3 * * *",
+			states: map[string]model.DesiredState{
+				"2026-03-08T06:59:59Z": model.DesiredStopped,
+				"2026-03-08T07:10:00Z": model.DesiredStopped,
+				"2026-03-08T07:30:00Z": model.DesiredStopped,
+				"2026-03-09T06:30:00Z": model.DesiredRunning,
+			},
+		},
+		{
+			name: "half-hour fallback", zone: "Australia/Lord_Howe", start: "30 0 * * *", stop: "45 1 * * *",
+			states: map[string]model.DesiredState{
+				"2026-04-04T14:45:00Z": model.DesiredStopped,
+				"2026-04-04T15:05:00Z": model.DesiredStopped,
+			},
+		},
+		{
+			name: "ties remain stopped across fallback", zone: "America/New_York", start: "15 1 * * *", stop: "15 1 * * *",
+			states: map[string]model.DesiredState{
+				"2026-11-01T05:15:00Z": model.DesiredStopped,
+				"2026-11-01T06:05:00Z": model.DesiredStopped,
+				"2026-11-01T06:15:00Z": model.DesiredStopped,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			location, err := time.LoadLocation(tt.zone)
+			require.NoError(t, err)
+			group := model.GroupSpec{Name: "dev", StartCron: tt.start, StopCron: tt.stop}
+			for raw, want := range tt.states {
+				t.Run(raw, func(t *testing.T) {
+					now, err := time.Parse(time.RFC3339, raw)
+					require.NoError(t, err)
+					got, err := ResolveDesired(group, now, location)
+					require.NoError(t, err)
+					assert.Equal(t, want, got)
+				})
+			}
+		})
+	}
+}
+
 func withOverride(group model.GroupSpec, override model.Override, expiresAt int64) model.GroupSpec {
 	group.Override, group.OverrideExpiresAt = override, expiresAt
 	return group

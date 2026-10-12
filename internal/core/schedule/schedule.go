@@ -4,8 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/adhocore/gronx"
-
+	"cheapskate/internal/core/cron"
 	"cheapskate/internal/core/model"
 )
 
@@ -27,11 +26,11 @@ func ResolveDesired(group model.GroupSpec, now time.Time, loc *time.Location) (m
 		return model.DesiredNone, fmt.Errorf("group %s: expired override has no schedule", group.Name)
 	}
 	localNow := now.In(loc)
-	lastStart, err := gronx.PrevTickBefore(group.StartCron, localNow, true)
+	lastStart, err := cron.PrevTickBefore(group.StartCron, localNow, true)
 	if err != nil {
 		return model.DesiredNone, fmt.Errorf("group %s: start_cron: %w", group.Name, err)
 	}
-	lastStop, err := gronx.PrevTickBefore(group.StopCron, localNow, true)
+	lastStop, err := cron.PrevTickBefore(group.StopCron, localNow, true)
 	if err != nil {
 		return model.DesiredNone, fmt.Errorf("group %s: stop_cron: %w", group.Name, err)
 	}
