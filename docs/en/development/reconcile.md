@@ -1,15 +1,31 @@
-# Reconcile boundaries
+# Reconcile implementation contracts
 
-One invocation takes two in-memory snapshots before it touches a resource: a strongly consistent Query of every group and every page of fixed-tag discovery. Failure of either global read returns an error with no resource Describe, Start, or Stop calls.
+This document defines read boundaries, failure isolation, overlapping invocation behavior, and the contracts verified by tests.
 
-Each valid resource is then processed independently. The adapter describes it, transitioning and not-found observations are skipped, and a running/stopped mismatch receives Start or Stop. One resource failure increments the summary error count but does not stop later resources.
+## Read boundary
 
-The ECS adapter reports stopped only when desired, running, and pending counts are all zero, and running otherwise. A stopped request applies bounds of 0/0 and ScheduledScalingSuspended=true, including repairs for already stopped services. A running request repairs incomplete startup, a mismatch between the suspension request and the AWS flag, and bounds differences while the request is true. During normal operation with a false request, Scheduled Scaling changes to bounds are retained.
+Each invocation takes in-memory snapshots of all groups and discovered resources before resource processing. Group reads use a strongly consistent Query of CONFIG. Discovery follows every GetResources page for supported resources with the fixed membership tag.
 
-ECS initialization resumes from a stopped service, bounds of 0/0, or a suspended positive fixed range that differs from the normal tag bounds. Scheduled Scaling stays suspended until capacity initialization succeeds; the final update applies normal bounds and the tag request. Reapplying a running suspension setting does not reset desired count to startup capacity. If normal bounds equal startup capacity, a remaining flag mismatch alone can be repaired. A lost final response requires no additional operation if settings have already converged.
+A global read or ARN parsing failure returns an error without calling adapter Describe, Start, or Stop. Duplicate ARNs use the last complete tag set and are processed once per cycle.
 
-No action history or checkpoint is persisted. Overlapping invocations can repeat an absolute-state operation or use different configuration snapshots. Tests therefore assert eventual convergence in a later cycle rather than exactly-once delivery.
+## Per-resource processing
 
-An action notification occurs after the successful resource call and receives at most two Publish attempts. Notification failure is logged but does not reverse the resource call or stop the cycle.
+Valid resources are processed in ARN order. Disabled groups skip Describe. Observation is compared with the group request; running/stopped mismatches and NeedsStart or NeedsStop select operations. Transitioning and not-found observations are skipped.
 
-For the common cycle and AWS API call order for each resource, see [Resource operation sequences](resource_sequence.md).
+Group and resource failures are collected in Summary while later resources continue. For API order and adapter decisions, see [Resource operation sequences](resource_sequence.md).
+
+## Stateless reapplication
+
+Action history, checkpoints, and startup phases are not stored. ECS Start rereads the service and scalable target to select a branch; Stop rereads the scalable target. Group configuration and tags come from the cycle's initial snapshots.
+
+Overlapping invocations can repeat absolute-state operations and apply different snapshots. Tests verify convergence in later cycles after older invocations finish, configuration stabilizes, and APIs succeed. They do not assume exactly-once operations.
+
+## Notification boundary
+
+Successful resource calls are followed by at most two Publish attempts. Notification failure is logged without reversing the resource operation or stopping the cycle. If observation after a lost response shows no further changes are needed, the operation and notification are not replayed.
+
+## Verification scope
+
+Unit tests cover global read failures before processing, isolated resource errors, failure at each API boundary, response loss, tag changes, and suppression of operations after convergence. ECS tests also cover asynchronous task-count changes and Scheduled Scaling changes to normal bounds.
+
+See [reconcile tests](../../../internal/app/reconcile/reconcile_test.go), [ECS tests](../../../internal/aws/compute/ecs_test.go), and [Scheduled Scaling tests](../../../internal/aws/compute/ecs_scheduled_scaling_test.go).

@@ -1,46 +1,62 @@
 # Troubleshooting
 
-## Start with the cycle summary
+This document lists checks and remedies for unexpected configuration, resource operations, ECS scaling, and monitoring results.
 
-Each reconciler cycle that completes both global reads finishes with a `summary` record. A global read failure returns a Lambda error without a summary record. Check `ReconciledResources`, successful actions, and group or resource error counts. When custom metrics are enabled, `ReconcileErrors` and `ReconcileAborted` provide alarm inputs, but logs contain the affected group, ARN, and cause.
+## Initial checks
 
-A configuration Query failure or global resource-discovery failure aborts the cycle before any resource Describe or change call. Check DynamoDB and `tag:GetResources` access. ARN parsing errors also abort global discovery, so inspect any ARN named in the error, including ECS short-format service ARNs. Fix the cause and invoke again.
+Use CLI show or the web console to inspect group configuration, resource membership tags, current state, and live_error. Check summary error counts and the relevant group-error or resource-error logs. For inspection, see [Logs, metrics, and notifications](monitoring.md).
 
-## Common configuration errors
+## Configuration errors
 
-| Symptom | Check |
+Common symptoms and remedies are:
+
+| Symptom | Check or remedy |
 | --- | --- |
-| Group appears in the invalid-row output | Unknown attributes, attribute types, cron field count and reachability, paired cron attributes, override value, and expiry integer/range |
-| Timed override is rejected | The group must already have both cron attributes, and the expiry must be in the future |
-| Saving a schedule after override expiry fails | Clear or replace the expired override before saving the schedule |
-| Clearing an override is rejected | Add a schedule first, or remove an override-only group |
-| HTTP 409 or CLI exit 2 during a write | Another request deleted or changed the required item state; reread and explicitly retry the intended operation |
+| Group listed as invalid | Check unknown attributes, DynamoDB types, cron pairs, override values, and expiration |
+| Timed override rejected | Register both cron fields and use a future expiration |
+| Schedule change rejected after expiration | Clear the expired override or replace it |
+| Override cannot be cleared | Add a schedule first; for override-only groups, replace the override or delete the group after ending management |
+| HTTP 409 or CLI code 2 during a write | Read again, inspect configuration, and explicitly repeat the intended change |
+| Web console returns HTTP 403 | Check forwarded Host, ALLOWED_HOSTS, and the form's Origin |
 
-Do not edit malformed items in place through an unvalidated path. If the CLI and web console cannot repair the item because full validation fails, back up the item, delete it deliberately, and recreate the group through a supported interface.
+For values and constraints, see [Group configuration](group_config.md). Back up items that cannot be repaired through the CLI or web console before deliberately deleting and recreating them. Do not concurrently delete/recreate and modify the same group.
 
-## Resource errors
+## Expected start or stop not applied
 
-The reconciler isolates these errors and continues with other resources:
+Compare group configuration and current AWS state:
 
-- empty, invalid, or unconfigured `cheapskate:group` values;
-- unsupported RDS engine or an RDS instance that belongs to a cluster;
-- ECS services that are not `REPLICA` or have invalid restoration tags;
-- missing adapter permissions or throttled service calls.
+| Check | Remedy |
+| --- | --- |
+| Active disabled override | Replace it with running/stopped or return to the schedule |
+| Unexpected scheduled state | Check DEFAULT_TIMEZONE and the most recent start/stop occurrences |
+| Resource absent from inspection | Check cheapskate:group and Resource Groups Tagging API discovery |
+| Unregistered or invalid membership | Match the tag value to the DynamoDB group name |
+| Resource inspection or operation error | Check IAM, AWS API errors, and throttling |
+| RDS or EC2 transitioning | Wait for a later cycle and inspect the AWS transition |
+| Unsupported resource configuration | Register a resource satisfying eligibility requirements |
 
-RDS and EC2 observations classified as transitioning are intentionally skipped. ECS task-count differences do not suppress Stop. A later five-minute cycle observes them again. Start and Stop delivery is at least once, so adapters and operator procedures must tolerate repeated absolute-state requests.
+For timing and eligibility, see [Start and stop behavior](resource_flow.md).
 
-## No action occurs
+## Unexpected ECS counts or suspension
 
-Confirm that the group has an active `running` or `stopped` override, or a complete schedule. An active `disabled` override suppresses Describe and change calls for the group. For schedules, confirm `DEFAULT_TIMEZONE` and compare the most recent start and stop ticks.
+ECS configuration and current state are separate values. Check according to the symptom:
 
-Verify the fixed membership tag on the resource and `tag:GetResources` output. Discovery requests contain only the tag key, so the returned tag value must exactly match the configured group name.
+| Symptom | Check or remedy |
+| --- | --- |
+| Startup or repair fails | Check ecs_max_count, tag types, count/bounds constraints, and the group limit |
+| Startup-count tag change does not change capacity | cheapskate/desired-count applies only from all-zero counts or 0/0 bounds |
+| runningCount differs from desiredCount | Task transitions are asynchronous; inspect ECS events and later cycles |
+| Resuming Scheduled Scaling changes count | Normal bounds may have adjusted an out-of-range desiredCount |
+| Bounds differ from normal tags | A false request retains Scheduled Scaling changes; use true to maintain tag bounds |
+| Suspension cannot be cleared while stopped | A stopped request maintains ScheduledScalingSuspended=true |
+| Service restarts after Scheduled Scaling sets zero | Use cheapskate's stop schedule or stopped override to remain at zero |
 
-## ECS does not restore correctly
+For values, see [Resource tags](resource_tag.md#ecs-configuration-tags) and [Group configuration](group_config.md#ecs-capacity-limit). For state progressions, see [ECS startup, shutdown, and scaling](ecs.md#configuration-and-current-state-examples).
 
-Inspect the service tags before invoking Start. Present values, together with their defaults, must satisfy `0 <= min <= desired <= max`, and desired must be positive. The same validation applies without a scalable target. Tag validation happens before a modifying call, so a tag error leaves the service unchanged.
+## Globally aborted cycles
 
-## Notifications and metrics
+When Lambda returns an error without summary, check DynamoDB reads and resource discovery. Verify dynamodb:Query and tag:GetResources permissions and connectivity, and the ARN format shown in the log. Individual resource changes do not begin in a cycle whose global reads fail.
 
-Notifications are sent only after a successful Start or Stop. A failed publish is retried once in the same invocation; a second failure is logged and does not undo the resource action. No recovery or error notification is sent.
+## Missing notifications or metrics
 
-Custom metrics require `METRICS_ENABLED=true`. cheapskate emits Embedded Metric Format records but does not create alarms or dashboards.
+Check NOTIFICATION_TOPIC_ARN, SNS permissions, and subscriptions. Notifications can fail after a successful operation. For missing or duplicate notifications and metric emission conditions, see [Logs, metrics, and notifications](monitoring.md).

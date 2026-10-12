@@ -42,7 +42,7 @@ Dockerfile はホストプラットフォームから `GOARCH` でクロスコ�
 
 Web コンソールのイメージには、Lambda Web Adapter の実行ファイルが `/opt/extensions/lambda-adapter` として入る。バージョンタグと digest は `Dockerfile` で固定してある。これは go.mod の外にある唯一の実行時依存であり、更新は Go モジュールとは別に Dependabot の docker 更新で行う。
 
-アダプタが呼び出しイベントを HTTP へ変換する仕組みと、本体側がアダプタに依存する箇所は、[../architecture/on_lambda.md](../architecture/on_lambda.md) を参照。Dependabot による更新がリリースに至る経路は、[release.md](release.md) の依存の更新を参照。
+アダプタが呼び出しイベントを HTTP へ変換する仕組みと、本体側がアダプタに依存する箇所は、[Lambda 実行](../architecture/overview.md#lambda-実行) を参照。Dependabot による更新がリリースに至る経路は、[release.md](release.md) の依存の更新を参照。
 
 ## イメージのテスト
 

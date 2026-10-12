@@ -1,8 +1,16 @@
 # Setup
 
+This document takes deployment from DynamoDB and Lambda preparation through registering the first group and enabling periodic control.
+
+## Prerequisites
+
+Prepare a reconciler Lambda, DynamoDB table, five-minute trigger, and IAM access to the managed resources. Administration uses the CLI or optional web console. Create AWS infrastructure through your IaC or AWS management tools.
+
+The reconciler and web console use separate container images. For building and publishing to ECR, see [Build](../development/build.md). For infrastructure and permissions, see [AWS resources and IAM](aws_resources.md).
+
 ## 1. Create the DynamoDB table
 
-Create a table with String partition key `pk` and String sort key `sk`. Use on-demand or provisioned capacity as appropriate. Do not enable TTL and do not create secondary indexes.
+Use String partition key pk and String sort key sk, without TTL or secondary indexes. An on-demand example is:
 
 ```console
 aws dynamodb create-table \
@@ -14,63 +22,46 @@ aws dynamodb create-table \
 
 ## 2. Deploy the reconciler
 
-Deploy the reconciler container image as a Lambda function. Set `STATE_TABLE_NAME` and optionally the other variables from [Configuration](config.md). Choose a timeout after testing a full cycle with the maximum expected tagged-resource count; Lambda permits at most 900 seconds.
+Deploy the reconciler image to Lambda. Match the image and Lambda architectures. Set STATE_TABLE_NAME to the table and DEFAULT_TIMEZONE to the schedule's time zone.
 
-Create one EventBridge Scheduler or EventBridge rule that invokes it every five minutes. Any payload is acceptable because every invocation performs a full reconcile.
+Choose a timeout that completes a full cycle at the maximum expected resource count. Each invocation processes all groups and tagged resources without checkpoints or partitioned execution. Lambda permits a maximum timeout of 900 seconds.
 
-The reconciler DynamoDB policy needs only a strongly consistent Query restricted to the `CONFIG` partition:
+Create one EventBridge Scheduler or EventBridge rule invoking Lambda every five minutes. Keep the trigger disabled until verification. No per-group triggers are needed, and any JSON payload is acceptable.
 
-```json
-{
-  "Effect": "Allow",
-  "Action": "dynamodb:Query",
-  "Resource": "arn:aws:dynamodb:REGION:ACCOUNT:table/TABLE",
-  "Condition": {
-    "ForAllValues:StringEquals": {
-      "dynamodb:LeadingKeys": ["CONFIG"]
-    }
-  }
-}
+## 3. Prepare administration
+
+Install cheapskate-cli in a trusted environment with AWS credentials and region configured. For example:
+
+```sh
+export AWS_REGION=ap-northeast-1
+export CHEAPSKATE_TABLE=cheapskate
+export DEFAULT_TIMEZONE=Asia/Tokyo
 ```
 
-Also grant `tag:GetResources`, the required read and change calls for enabled RDS, ECS, Application Auto Scaling, and EC2 adapters, CloudWatch Logs delivery, and optional `sns:Publish` to the configured topic. See [AWS resources and IAM](../architecture/aws_resources.md).
+Use the same DEFAULT_TIMEZONE in the CLI, reconciler, and web console. For web authentication and public hosts, see [Web console](web_console.md#publishing-and-access-settings). For other variables, see [Runtime configuration](config.md).
 
-## 3. Install an administration interface
+## 4. Register group configuration
 
-Run `cheapskate-cli` from a trusted operator environment, or deploy the optional web-console image behind Lambda Web Adapter and an authenticated API Gateway or equivalent ingress.
-
-The CLI and web console require these DynamoDB actions on the table:
-
-```json
-{
-  "Effect": "Allow",
-  "Action": [
-    "dynamodb:Query",
-    "dynamodb:GetItem",
-    "dynamodb:PutItem",
-    "dynamodb:UpdateItem",
-    "dynamodb:DeleteItem"
-  ],
-  "Resource": "arn:aws:dynamodb:REGION:ACCOUNT:table/TABLE",
-  "Condition": {
-    "ForAllValues:StringEquals": {
-      "dynamodb:LeadingKeys": ["CONFIG"]
-    }
-  }
-}
-```
-
-For `show` and detail pages, also grant `tag:GetResources` and the supported services' read-only Describe calls. Prefer the CLI or web console for group changes so full validation and conditional writes are applied. Direct Terraform writes bypass these checks; do not modify the same item through both Terraform and the CLI or web console. See the [Terraform record examples (Japanese)](../../ja/usage/terraform_records.md) for configuration and constraints.
-
-## 4. Tag resources and create a group
-
-Apply `cheapskate:group=<group>` to every resource, add the required ECS restoration tags where applicable, and create a schedule or override:
+Choose either CLI/web-console management or Terraform for each group. For CLI-managed weekday operation from 09:00 to 18:00, register:
 
 ```console
-cheapskate-cli -table cheapskate schedule --group dev \
-  -start '0 8 * * 1-5' -stop '0 20 * * 1-5'
+cheapskate-cli schedule --group dev -start '0 9 * * 1-5' -stop '0 18 * * 1-5'
 ```
 
-Invoke the reconciler once, inspect logs and the live observations in `show`, and then enable the five-minute schedule.
+For ECS, choose startup count and normal bounds and register ecs_max_count at least as large as the tag values. See [Registering an ECS capacity limit](operations.md#registering-an-ecs-capacity-limit).
 
-cheapskate itself does not create CloudWatch log groups, alarms, dashboards, SNS topics, or notification subscriptions.
+For Terraform-managed groups, see [Terraform group configuration](terraform_records.md). Do not modify the same group through both Terraform and the CLI or web console.
+
+## 5. Tag resources
+
+Set cheapskate:group=dev on every managed resource. For ECS, set startup count, normal bounds, and any suspension request on the service itself. For value constraints, see [Resource tags](resource_tag.md).
+
+## 6. Verify and enable periodic execution
+
+Invoke the reconciler once manually. Registration during a scheduled running period requests running; registration during a stopped period requests stopped. Inspect results with:
+
+```console
+cheapskate-cli -output json show --group dev
+```
+
+Check summary logs and current state for every resource. Enable the five-minute trigger once errors are resolved. For observation, see [Logs, metrics, and notifications](monitoring.md). For subsequent changes, see [Daily operations](operations.md).

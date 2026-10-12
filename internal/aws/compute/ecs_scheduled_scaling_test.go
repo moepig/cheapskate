@@ -31,6 +31,7 @@ type ecsScalingFixture struct {
 	autoScaling    *mocks.MockAutoScalingAPI
 	requests       []aas.RegisterScalableTargetInput
 	updates        []int32
+	convergeTasks  bool
 	beforeRegister func(*aas.RegisterScalableTargetInput) error
 	afterRegister  func(*aas.RegisterScalableTargetInput) error
 }
@@ -39,7 +40,8 @@ func newEcsScalingFixture(t *testing.T, desired, minimum, maximum int32, paused 
 	t.Helper()
 	controller := gomock.NewController(t)
 	f := &ecsScalingFixture{
-		service: ecstypes.Service{Status: aws.String("ACTIVE"), SchedulingStrategy: ecstypes.SchedulingStrategyReplica, DesiredCount: desired, RunningCount: desired},
+		convergeTasks: true,
+		service:       ecstypes.Service{Status: aws.String("ACTIVE"), SchedulingStrategy: ecstypes.SchedulingStrategyReplica, DesiredCount: desired, RunningCount: desired},
 		scalable: &aastypes.ScalableTarget{MinCapacity: aws.Int32(minimum), MaxCapacity: aws.Int32(maximum), SuspendedState: &aastypes.SuspendedState{
 			ScheduledScalingSuspended: aws.Bool(paused), DynamicScalingInSuspended: aws.Bool(true), DynamicScalingOutSuspended: aws.Bool(true),
 		}},
@@ -53,7 +55,11 @@ func newEcsScalingFixture(t *testing.T, desired, minimum, maximum int32, paused 
 		func(_ context.Context, input *ecs.UpdateServiceInput, _ ...func(*ecs.Options)) (*ecs.UpdateServiceOutput, error) {
 			require.NotNil(t, input.DesiredCount)
 			f.updates = append(f.updates, *input.DesiredCount)
-			f.service.DesiredCount, f.service.RunningCount = *input.DesiredCount, *input.DesiredCount
+			f.service.DesiredCount = *input.DesiredCount
+			if f.convergeTasks {
+				f.service.RunningCount = f.service.DesiredCount
+				f.service.PendingCount = 0
+			}
 			return &ecs.UpdateServiceOutput{}, nil
 		})
 	f.autoScaling.EXPECT().DescribeScalableTargets(gomock.Any(), gomock.Any()).AnyTimes().DoAndReturn(
@@ -91,7 +97,10 @@ func newEcsScalingFixture(t *testing.T, desired, minimum, maximum int32, paused 
 			}
 			f.scalable.SuspendedState.ScheduledScalingSuspended = input.SuspendedState.ScheduledScalingSuspended
 			f.service.DesiredCount = min(max(f.service.DesiredCount, aws.ToInt32(f.scalable.MinCapacity)), aws.ToInt32(f.scalable.MaxCapacity))
-			f.service.RunningCount = f.service.DesiredCount
+			if f.convergeTasks {
+				f.service.RunningCount = f.service.DesiredCount
+				f.service.PendingCount = 0
+			}
 			if f.afterRegister != nil {
 				if err := f.afterRegister(input); err != nil {
 					return nil, err
@@ -121,7 +130,7 @@ func (f *ecsScalingFixture) cycle(t *testing.T, resource model.Resource, overrid
 	return summary
 }
 
-// タグ要求と AWS フラグの差、停止設定の不足、起動途中の固定範囲を観測し、通常の scheduled action の変更は維持する。
+// タグ要求と AWS フラグの差および停止設定の不足を観測し、通常の scheduled action の変更は維持する。
 func TestEcsDescribeScheduledScalingRepair(t *testing.T) {
 	for _, test := range []struct {
 		name                      string
@@ -207,7 +216,7 @@ func TestEcsStopTemporarilySuspendsScheduledScaling(t *testing.T) {
 	assert.Empty(t, f.cycle(t, resource, model.OverrideRunning, at.Add(3*time.Hour)).Actions)
 }
 
-// 稼働中のタグ変更は起動台数を再設定せず、解除時には上下限も指定しない。
+// 稼働中のタグ変更と一時停止解除で通常の上下限を適用し、範囲内の現在台数を維持する。
 func TestEcsRunningPauseChangesPreserveDesiredCount(t *testing.T) {
 	f := newEcsScalingFixture(t, 3, 2, 9, false)
 	resource := ecsReconcileResource()
@@ -222,28 +231,89 @@ func TestEcsRunningPauseChangesPreserveDesiredCount(t *testing.T) {
 	resource.Tags[model.EcsScheduledScalingPausedTagKey] = "false"
 	assert.Empty(t, f.cycle(t, resource, model.OverrideRunning, at).Errors)
 	require.Len(t, f.requests, 2)
-	assert.Nil(t, f.requests[1].MinCapacity)
-	assert.Nil(t, f.requests[1].MaxCapacity)
+	assert.Equal(t, aws.Int32(1), f.requests[1].MinCapacity)
+	assert.Equal(t, aws.Int32(3), f.requests[1].MaxCapacity)
 	assert.False(t, ecsScheduledScalingPaused(f.scalable))
 	assert.EqualValues(t, 3, f.service.DesiredCount)
 	assert.Empty(t, f.updates)
 }
 
-// 起動途中の固定値が現在の起動台数と異なっても、最新のタグから初期設定を完了する。
-func TestEcsStartRecoversPinnedBoundsAfterTagChange(t *testing.T) {
+// 正の固定範囲に通常の上下限を適用し、起動台数のタグと異なる範囲内の現在台数を維持する。
+func TestEcsStartAppliesNormalBoundsWithoutResettingFixedCapacity(t *testing.T) {
 	for _, paused := range []bool{false, true} {
 		t.Run(strconv.FormatBool(paused), func(t *testing.T) {
-			f := newEcsScalingFixture(t, 3, 3, 3, true)
+			f := newEcsScalingFixture(t, 2, 2, 2, true)
 			resource := ecsReconcileResource()
+			resource.Tags[model.EcsScalingMinTagKey], resource.Tags[model.EcsScalingMaxTagKey] = "2", "2"
+			resource.Tags[model.EcsScheduledScalingPausedTagKey] = "true"
+			at := time.Now()
+			assert.Empty(t, f.cycle(t, resource, model.OverrideRunning, at).Actions)
 			resource.Tags[model.EcsDesiredCountTagKey] = "1"
+			resource.Tags[model.EcsScalingMinTagKey], resource.Tags[model.EcsScalingMaxTagKey] = "1", "3"
 			resource.Tags[model.EcsScheduledScalingPausedTagKey] = strconv.FormatBool(paused)
-			require.NoError(t, f.target().Start(context.Background(), resource))
-			assert.EqualValues(t, 1, f.service.DesiredCount)
+			assert.Empty(t, f.cycle(t, resource, model.OverrideRunning, at).Errors)
+			assert.EqualValues(t, 2, f.service.DesiredCount)
 			assert.Equal(t, aws.Int32(1), f.scalable.MinCapacity)
 			assert.Equal(t, aws.Int32(3), f.scalable.MaxCapacity)
 			assert.Equal(t, paused, ecsScheduledScalingPaused(f.scalable))
+			assert.Empty(t, f.updates)
+			assert.Empty(t, f.cycle(t, resource, model.OverrideRunning, at).Actions)
+			assert.Len(t, f.requests, 1)
 		})
 	}
+}
+
+// 台数固定の応答喪失後は、起動待ちのタスクが残っていても通常設定へ収束し、起動台数を再設定しない。
+func TestEcsLostPinResponseConvergesWhileTasksStart(t *testing.T) {
+	for _, paused := range []bool{false, true} {
+		t.Run(strconv.FormatBool(paused), func(t *testing.T) {
+			f := newEcsScalingFixture(t, 0, 0, 0, true)
+			f.convergeTasks = false
+			f.afterRegister = func(*aas.RegisterScalableTargetInput) error {
+				f.afterRegister = nil
+				f.service.PendingCount = 2
+				return errors.New("pin response lost")
+			}
+			resource := ecsReconcileResource()
+			resource.Tags[model.EcsScheduledScalingPausedTagKey] = strconv.FormatBool(paused)
+			at := time.Now()
+			require.Len(t, f.cycle(t, resource, model.OverrideRunning, at).Errors, 1)
+			assert.EqualValues(t, 2, f.service.DesiredCount)
+			assert.Zero(t, f.service.RunningCount)
+			assert.EqualValues(t, 2, f.service.PendingCount)
+			require.True(t, ecsBoundsEqual(f.scalable, 2, 2))
+			assert.Empty(t, f.cycle(t, resource, model.OverrideRunning, at).Errors)
+			assert.True(t, ecsBoundsEqual(f.scalable, 1, 3))
+			assert.Equal(t, paused, ecsScheduledScalingPaused(f.scalable))
+			assert.EqualValues(t, 2, f.service.PendingCount)
+			for running := int32(0); running <= 2; running++ {
+				f.service.RunningCount, f.service.PendingCount = running, 2-running
+				assert.Empty(t, f.cycle(t, resource, model.OverrideRunning, at).Actions)
+				assert.EqualValues(t, 2, f.service.DesiredCount)
+			}
+			assert.Len(t, f.requests, 2)
+			assert.Empty(t, f.updates)
+		})
+	}
+}
+
+// 起動待ちのタスクが残る状態でも停止要求を優先し、タスク終了後に起動設定を復元しない。
+func TestEcsStopDuringStartupPreservesStopRequest(t *testing.T) {
+	f := newEcsScalingFixture(t, 2, 2, 2, true)
+	f.convergeTasks = false
+	f.service.RunningCount, f.service.PendingCount = 1, 1
+	resource := ecsReconcileResource()
+	at := time.Now()
+	assert.Empty(t, f.cycle(t, resource, model.OverrideStopped, at).Errors)
+	assert.Zero(t, f.service.DesiredCount)
+	assert.EqualValues(t, 1, f.service.RunningCount)
+	assert.EqualValues(t, 1, f.service.PendingCount)
+	assert.True(t, ecsBoundsEqual(f.scalable, 0, 0))
+	assert.True(t, ecsScheduledScalingPaused(f.scalable))
+	f.service.RunningCount, f.service.PendingCount = 0, 0
+	assert.Empty(t, f.cycle(t, resource, model.OverrideStopped, at).Actions)
+	assert.Len(t, f.requests, 1)
+	assert.Empty(t, f.updates)
 }
 
 // 通常範囲も起動台数と同じ場合、更新失敗後の再適用で必要なフラグだけを収束させる。
@@ -285,8 +355,8 @@ func TestEcsFixedStartupBoundsRecoverSuspension(t *testing.T) {
 	}
 }
 
-// 停止済みの既存 target に不足する一時停止だけを補い、稼働中の再開では scheduled action が設定した範囲を保持する。
-func TestEcsRepairsLegacyStopAndResumesScheduledBounds(t *testing.T) {
+// 停止設定の一時停止を補い、稼働中の解除では通常範囲を適用して範囲外の設定台数を調整する。
+func TestEcsRepairsLegacyStopAndResumesWithNormalBounds(t *testing.T) {
 	resource := ecsReconcileResource()
 	f := newEcsScalingFixture(t, 0, 0, 0, false)
 	at := time.Now()
@@ -298,16 +368,22 @@ func TestEcsRepairsLegacyStopAndResumesScheduledBounds(t *testing.T) {
 	assert.Empty(t, f.updates)
 
 	f = newEcsScalingFixture(t, 5, 4, 6, true)
+	f.convergeTasks = false
 	summary = f.cycle(t, resource, model.OverrideRunning, at)
 	assert.Empty(t, summary.Errors)
 	require.Len(t, summary.Actions, 1)
 	require.Len(t, f.requests, 1)
-	assert.Nil(t, f.requests[0].MinCapacity)
-	assert.Nil(t, f.requests[0].MaxCapacity)
-	assert.EqualValues(t, 5, f.service.DesiredCount)
-	assert.True(t, ecsBoundsEqual(f.scalable, 4, 6))
+	assert.Equal(t, aws.Int32(1), f.requests[0].MinCapacity)
+	assert.Equal(t, aws.Int32(3), f.requests[0].MaxCapacity)
+	assert.EqualValues(t, 3, f.service.DesiredCount)
+	assert.EqualValues(t, 5, f.service.RunningCount)
+	assert.True(t, ecsBoundsEqual(f.scalable, 1, 3))
 	assert.False(t, ecsScheduledScalingPaused(f.scalable))
 	assert.Empty(t, f.updates)
+	assert.Empty(t, f.cycle(t, resource, model.OverrideRunning, at).Actions)
+	f.service.RunningCount = 3
+	assert.Empty(t, f.cycle(t, resource, model.OverrideRunning, at).Actions)
+	assert.Len(t, f.requests, 1)
 }
 
 // 最後の更新の応答喪失後に scheduled action が上下限を変更しても、その結果を初期値へ戻さない。
@@ -396,4 +472,23 @@ func TestEcsPauseRequestWithoutScalableTarget(t *testing.T) {
 	assert.Error(t, f.target().Start(context.Background(), resource))
 	assert.Error(t, f.target().Stop(context.Background(), resource))
 	assert.Len(t, f.updates, 2)
+}
+
+// 観測後に起動済みとなった target 未登録の service は、古い Start 呼び出しで起動台数へ戻さない。
+func TestEcsStartWithoutScalableTargetPreservesActiveService(t *testing.T) {
+	for _, service := range []ecstypes.Service{
+		{DesiredCount: 3, RunningCount: 3},
+		{DesiredCount: 2, PendingCount: 2},
+		{RunningCount: 1},
+	} {
+		t.Run(strconv.Itoa(int(service.DesiredCount))+"/"+strconv.Itoa(int(service.RunningCount)), func(t *testing.T) {
+			f := newEcsScalingFixture(t, service.DesiredCount, 0, 0, false)
+			f.scalable = nil
+			f.service.RunningCount, f.service.PendingCount = service.RunningCount, service.PendingCount
+			require.NoError(t, f.target().Start(context.Background(), ecsReconcileResource()))
+			assert.Equal(t, service.DesiredCount, f.service.DesiredCount)
+			assert.Empty(t, f.updates)
+			assert.Empty(t, f.requests)
+		})
+	}
 }

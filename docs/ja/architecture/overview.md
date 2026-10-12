@@ -1,21 +1,38 @@
-# 全体構成
+# アーキテクチャ
 
-cheapskate は、グループごとに望ましい状態を求め、固定タグで所属するリソースを特定し、観測した起動・停止状態と、ECS の一時停止要求および管理対象のスケーリング上下限を設定へ収束させる収束型コントローラーである。
+本ドキュメントは、cheapskate の実行コンポーネント、設定の入出力、および Lambda 上の実行構成を説明する。
 
-次の図に、主要コンポーネントと外部サービスの関係を示す。
+## コンポーネントとデータの流れ
+
+reconciler、CLI、および Web コンソールは独立した実行ファイルである。コンポーネントと外部サービスの関係を、次の図に示す。
 
 ```mermaid
 flowchart LR
-  C[CLI または Web コンソール] --> D[(DynamoDB グループ設定)]
-  D --> R[reconciler]
-  T[Resource Groups Tagging API] --> R
-  R --> A[RDS、ECS、EC2 API]
-  R --> L[構造化ログと任意のメトリクス]
-  R --> N[任意のアクション通知]
+    CLI["CLI"] --> Groups[("DynamoDB グループ設定")]
+    Web["Web コンソール"] --> Groups
+    Terraform["Terraform"] --> Groups
+    Groups --> Reconciler["reconciler"]
+    Tagging["Resource Groups Tagging API<br/>ARN とリソースタグ"] --> Reconciler
+    Reconciler --> Resources["RDS・ECS・Application Auto Scaling・EC2"]
+    Resources --> Reconciler
+    Reconciler --> Logs["構造化ログ・任意のメトリクス"]
+    Reconciler --> Notifications["任意の SNS 通知"]
 ```
 
-reconciler は、グループ設定の Query と `GetResources` の全ページを完了してから、リソースを Describe する。どちらかの一括読み込みに失敗した場合は、リソースを変更せずにサイクルを中断する。
+CLI と Web コンソールは、共通の設定変更処理で検証と条件付き書き込みを行う。Terraform は DynamoDB アイテムを直接管理する。reconciler は DynamoDB を読み取り、AWS リソースを観測・変更する。
 
-グループまたはリソース単位のエラーは他のリソースへ波及させず、サイクルの集計と構造化ログへ出力する。DynamoDB には実行履歴を保存しない。
+## 永続化と処理境界
 
-複数の invocation は同時に実行できる。操作回数は at-least-once であり、古い設定を読んだ invocation が終了した後の成功サイクルで、最新設定へ収束する。
+DynamoDB に保存するのはグループ設定である。リソースの現在状態は AWS API から取得し、操作履歴、checkpoint、および ECS 起動フェーズは保存しない。
+
+1 サイクルは設定と検出リソースの snapshot を読み終えてから、個別リソースの処理を始める。全体読み込みの失敗と個別処理の失敗は別の境界で扱う。同時実行を許容し、古い実行の終了後に後続サイクルが設定へ収束させる。
+
+読み込み境界、エラー分離、およびテストの契約は、[Reconcile の実装契約](../development/reconcile.md)を参照。AWS API の呼び出し順は、[リソース操作のシーケンス](../development/resource_sequence.md)を参照。
+
+## Lambda 実行
+
+reconciler イメージは Lambda handler として動作し、定期・手動のどちらの呼び出しも全体の reconcile を行う。payload の内容は解釈しない。1 invocation 内で対象を分割せず、処理を完了させる。
+
+Web コンソールのイメージは HTTP server と Lambda Web Adapter を含む。アダプタが API Gateway などの呼び出しを HTTP へ変換する。Web コンソール本体は通常の HTTP server として動作する。
+
+reserved concurrency=1 は、重複実行を抑える任意の設定である。正しさは同時実行の排除に依存しない。

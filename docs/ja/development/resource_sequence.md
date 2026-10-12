@@ -63,7 +63,7 @@ sequenceDiagram
 
 通知失敗はログへ記録し、API 操作の成功を取り消さない。Start または Stop の成功はリソースの遷移完了を意味しない。後続サイクルで再観測する。DynamoDB への履歴、checkpoint、および AWS 設定の保存は行わない。
 
-サイクル全体の失敗境界と同時実行の扱いは、[Reconcile の境界](reconcile.md)を参照。実装は、[reconciler](../../../internal/app/reconcile/reconcile.go)と[リソース探索](../../../internal/aws/tagging/tagging.go)を参照。
+サイクル全体の失敗境界と同時実行の扱いは、[Reconcile の実装契約](reconcile.md)を参照。実装は、[reconciler](../../../internal/app/reconcile/reconcile.go)と[リソース探索](../../../internal/aws/tagging/tagging.go)を参照。
 
 ## RDS DB インスタンス
 
@@ -175,16 +175,11 @@ State.Name の running と stopped を同名の観測状態へ対応づける。
 
 ## ECS service
 
-ECS は現在のタスク数に加えて scalable target の設定を観測する。設定タグは探索時の snapshot を使用し、Start と Stop でも検証する。以下のシーケンスで用いる記号を、次の表に示す。
+本節は現行実装の呼び出し順を示す。ECS は現在のタスク数に加えて scalable target の設定を観測する。設定タグは探索時の snapshot を使用し、Start と Stop でも検証する。図中のタグ値には既定値を適用する。AWS の ScheduledScalingSuspended が未取得または nil の場合は false として扱う。
 
-| 記号 | 意味 |
-| --- | --- |
-| D | desired-count タグの既定値適用後の起動台数 |
-| L / U | scaling-min / scaling-max タグの既定値適用後の通常の上下限 |
-| P | scheduled-scaling-paused タグの要求。未設定は false |
-| S | AWS の ScheduledScalingSuspended。未取得または nil は false |
+実行状態を保存しない収束設計と具体的な設定値による観測例は、[ECS の起動・停止とスケーリング](../usage/ecs.md)を参照。
 
-scalable target の識別子は ServiceNamespace=ecs、ResourceId=service/{cluster}/{service}、ScalableDimension=ecs:service:DesiredCount である。すべての RegisterScalableTarget は ScheduledScalingSuspended だけを指定し、DynamicScalingInSuspended と DynamicScalingOutSuspended は省略する。scheduled action の定義は読み書きしない。
+scalable target の識別子は ServiceNamespace=ecs、ResourceId=service/{cluster}/{service}、ScalableDimension=ecs:service:DesiredCount である。RegisterScalableTarget の SuspendedState には ScheduledScalingSuspended だけを指定し、DynamicScalingInSuspended と DynamicScalingOutSuspended は省略する。scheduled action の定義は読み書きしない。
 
 ### 状態観測
 
@@ -192,43 +187,43 @@ scalable target の識別子は ServiceNamespace=ecs、ResourceId=service/{clust
 
 ```mermaid
 sequenceDiagram
-    participant R as reconciler
-    participant A as EcsServiceTarget
-    participant E as ECS
-    participant S as Application Auto Scaling
-    R->>A: Describe(resource)
-    A->>A: Ref を cluster / service へ分割
-    A->>E: DescribeServices(cluster, service)
-    E-->>A: Services またはエラー
+    participant Reconciler as reconciler
+    participant Adapter as EcsServiceTarget
+    participant EcsAPI as ECS
+    participant AutoScaling as Application Auto Scaling
+    Reconciler->>Adapter: Describe(resource)
+    Adapter->>Adapter: Ref を cluster / service へ分割
+    Adapter->>EcsAPI: DescribeServices(cluster, service)
+    EcsAPI-->>Adapter: Services またはエラー
     alt ACTIVE service がない
-        A-->>R: State=not-found
+        Adapter-->>Reconciler: State=not-found
     else scheduling strategy が REPLICA でも空でもない
-        A-->>R: エラー
+        Adapter-->>Reconciler: エラー
     else 対応する service
-        A->>A: D、L、U、P をタグから検証
-        Note over A,S: 不正なタグの場合はここでエラーを返す
-        A->>S: DescribeScalableTargets(対象 service)
-        S-->>A: scalable target または target なし
-        A->>A: desired / running / pending がすべて 0 なら stopped、それ以外は running
+        Adapter->>Adapter: cheapskate/desired-count・cheapskate/scaling-min・<br/>cheapskate/scaling-max・cheapskate/scheduled-scaling-paused を検証
+        Note over Adapter,AutoScaling: 不正なタグの場合はここでエラーを返す
+        Adapter->>AutoScaling: DescribeScalableTargets(対象 service)
+        AutoScaling-->>Adapter: scalable target または target なし
+        Adapter->>Adapter: desiredCount・runningCount・pendingCount がすべて 0 なら stopped、それ以外は running
         opt target がある
-            A->>A: 上下限と S から NeedsStart / NeedsStop を設定
+            Adapter->>Adapter: AWS の上下限と ScheduledScalingSuspended から<br/>NeedsStart / NeedsStop を設定
         end
-        A-->>R: Observation(State, Detail, NeedsStart, NeedsStop)
+        Adapter-->>Reconciler: Observation(State, Detail, NeedsStart, NeedsStop)
     end
 ```
 
-Ref の分割または DescribeServices が失敗した場合もエラーを返す。Detail にはタスク数を含め、target がある場合は上下限と実際の S も含める。target がない場合、NeedsStart と NeedsStop は設定しない。
+Ref の分割または DescribeServices が失敗した場合もエラーを返す。Detail にはタスク数を含め、target がある場合は上下限と実際の ScheduledScalingSuspended も含める。target がない場合、NeedsStart と NeedsStop は設定しない。
 
 再適用判定を、以下に示す。両方のフラグが true になる場合も、reconciler はグループの要求に対応する判定だけを使用する。
 
 | 判定 | 条件 |
 | --- | --- |
-| NeedsStop | 上下限が 0/0 でない、または S=false |
-| NeedsStart | タスクがすべて 0、上下限が 0/0、または起動途中の固定範囲 |
-| NeedsStart | S と P が異なる |
-| NeedsStart | P=true で、上下限が L/U と異なる |
+| NeedsStop | AWS の上下限が 0/0 でない、または ScheduledScalingSuspended=false |
+| NeedsStart | desiredCount・runningCount・pendingCount がすべて 0、または上下限が 0/0 |
+| NeedsStart | AWS の ScheduledScalingSuspended と cheapskate/scheduled-scaling-paused タグが異なる |
+| NeedsStart | cheapskate/scheduled-scaling-paused=true で、AWS の上下限が cheapskate/scaling-min と cheapskate/scaling-max タグ値と異なる |
 
-起動途中の固定範囲は S=true、min=max が正の値、かつ L/U と異なる範囲である。固定値が現在の D と同じであることは条件にしない。P=false の通常稼働中は、Scheduled Scaling による上下限変更を再適用の理由にしない。
+正の固定範囲から起動途中かどうかを推測しない。cheapskate/scheduled-scaling-paused=false の通常稼働中は、Scheduled Scaling による上下限変更を再適用の理由にしない。
 
 ### 停止
 
@@ -236,141 +231,142 @@ Stop はタグを検証して target を再取得する。停止シーケンス�
 
 ```mermaid
 sequenceDiagram
-    participant R as reconciler
-    participant A as EcsServiceTarget
-    participant E as ECS
-    participant S as Application Auto Scaling
-    R->>A: Stop(resource)
-    A->>A: タグを検証し、Ref を分割
-    A->>S: DescribeScalableTargets(対象 service)
-    S-->>A: scalable target または target なし
+    participant Reconciler as reconciler
+    participant Adapter as EcsServiceTarget
+    participant EcsAPI as ECS
+    participant AutoScaling as Application Auto Scaling
+    Reconciler->>Adapter: Stop(resource)
+    Adapter->>Adapter: タグを検証し、Ref を分割
+    Adapter->>AutoScaling: DescribeScalableTargets(対象 service)
+    AutoScaling-->>Adapter: scalable target または target なし
     alt target がある
-        A->>S: RegisterScalableTarget(min=0, max=0, S=true)
-        S-->>A: 応答またはエラー
+        Adapter->>AutoScaling: RegisterScalableTarget(MinCapacity=0, MaxCapacity=0,<br/>ScheduledScalingSuspended=true)
+        AutoScaling-->>Adapter: 応答またはエラー
     else target がない
-        A->>E: UpdateService(desiredCount=0)
-        E-->>A: 応答またはエラー
+        Adapter->>EcsAPI: UpdateService(desiredCount=0)
+        EcsAPI-->>Adapter: 応答またはエラー
     end
-    A-->>R: nil またはエラー
+    Adapter-->>Reconciler: nil またはエラー
 ```
 
-P の値によらず S=true を適用し、P 自体は変更しない。ecs_max_count による停止の拒否は行わない。target がある場合は UpdateService と rollback を追加しない。
+cheapskate/scheduled-scaling-paused タグ値によらず AWS の ScheduledScalingSuspended=true を適用し、タグ自体は変更しない。ecs_max_count による停止の拒否は行わない。target がある場合は UpdateService と rollback を追加しない。
 
 ### 起動の初期設定
 
-Start は、Ref、タグ、および ecs_max_count を検証した後、service と target を再取得する。停止状態、上下限 0/0、または起動途中の固定範囲から初期設定を行うシーケンスを、次の図に示す。
+Start は、Ref、タグ、および ecs_max_count を検証した後、service と target を再取得する。desiredCount・runningCount・pendingCount がすべて 0、または上下限 0/0 から初期設定を行うシーケンスを、次の図に示す。
 
 ```mermaid
 sequenceDiagram
-    participant R as reconciler
-    participant A as EcsServiceTarget
-    participant E as ECS
-    participant S as Application Auto Scaling
-    R->>A: Start(resource)
-    A->>A: Ref、タグ、ecs_max_count を検証
-    Note over A,E: 上限が未登録、D または U が上限超過なら<br/>AWS API を呼ばずエラー
-    A->>E: DescribeServices(cluster, service)
-    E-->>A: 現在の service
-    A->>S: DescribeScalableTargets(対象 service)
-    S-->>A: scalable target または target なし
-    alt target がない
-        opt 現在の desired count が D と異なる
-            A->>E: UpdateService(desiredCount=D)
-            E-->>A: 応答
+    participant Reconciler as reconciler
+    participant Adapter as EcsServiceTarget
+    participant EcsAPI as ECS
+    participant AutoScaling as Application Auto Scaling
+    Reconciler->>Adapter: Start(resource)
+    Adapter->>Adapter: Ref、タグ、ecs_max_count を検証
+    Note over Adapter,EcsAPI: DynamoDB の ecs_max_count が未登録、または<br/>cheapskate/desired-count・cheapskate/scaling-max タグが上限超過ならエラー
+    Adapter->>EcsAPI: DescribeServices(cluster, service)
+    EcsAPI-->>Adapter: 現在の service
+    Adapter->>AutoScaling: DescribeScalableTargets(対象 service)
+    AutoScaling-->>Adapter: scalable target または target なし
+    alt target がなく、desiredCount・runningCount・pendingCount がすべて 0
+        opt AWS の desiredCount が cheapskate/desired-count タグ値と異なる
+            Adapter->>EcsAPI: UpdateService(desiredCount=cheapskate/desired-count タグ値)
+            EcsAPI-->>Adapter: 応答
         end
     else target があり、初期設定が必要
-        opt 上下限が D/D でない、または S=false
-            A->>S: RegisterScalableTarget(min=D, max=D, S=true)
-            S-->>A: 応答
+        opt AWS の上下限が cheapskate/desired-count タグ値に固定されていない、<br/>または ScheduledScalingSuspended=false
+            Adapter->>AutoScaling: RegisterScalableTarget(MinCapacity と MaxCapacity に<br/>cheapskate/desired-count タグ値、ScheduledScalingSuspended=true)
+            AutoScaling-->>Adapter: 応答
         end
-        A->>E: DescribeServices(cluster, service)
-        E-->>A: 固定後の desired count
-        opt 現在の desired count が D と異なる
-            A->>E: UpdateService(desiredCount=D)
-            E-->>A: 応答
+        Adapter->>EcsAPI: DescribeServices(cluster, service)
+        EcsAPI-->>Adapter: 固定後の desiredCount
+        opt AWS の desiredCount が cheapskate/desired-count タグ値と異なる
+            Adapter->>EcsAPI: UpdateService(desiredCount=cheapskate/desired-count タグ値)
+            EcsAPI-->>Adapter: 応答
         end
-        opt 通常範囲が D/D でない、または P=false
-            A->>S: RegisterScalableTarget(min=L, max=U, S=P)
-            S-->>A: 応答
+        opt 通常の上下限タグが cheapskate/desired-count タグ値と異なる、<br/>または cheapskate/scheduled-scaling-paused=false
+            Adapter->>AutoScaling: RegisterScalableTarget(MinCapacity=cheapskate/scaling-min タグ値、<br/>MaxCapacity=cheapskate/scaling-max タグ値、<br/>ScheduledScalingSuspended=cheapskate/scheduled-scaling-paused タグ値)
+            AutoScaling-->>Adapter: 応答
         end
     end
-    A-->>R: nil
+    Adapter-->>Reconciler: nil
 ```
 
 この図は成功経路であり、各 API が失敗した時点で後続の呼び出しを中止してエラーを返す。service が見つからない場合や REPLICA 以外の場合もエラーとなる。固定後の再観測は、RegisterScalableTarget が capacity を上下限内へ調整する動作を考慮したものである。
 
-P=false の解除は最後の RegisterScalableTarget だけで行う。P=true かつ L=U=D の場合は、最初の固定で通常設定も成立するため最後の RegisterScalableTarget を省略する。稼働中で初期設定が不要な場合は、次の設定再適用シーケンスを使用する。
+cheapskate/scheduled-scaling-paused=false による解除は最後の RegisterScalableTarget だけで行う。一時停止要求のタグが true で、通常の上下限タグがともに起動台数タグと同じ場合は、最初の固定で通常設定も成立するため最後の RegisterScalableTarget を省略する。稼働中で初期設定が不要な場合は、次の設定再適用シーケンスを使用する。
 
 ### 稼働中の設定再適用
 
-起動の初期設定が不要な service への Start は、一時停止要求だけを再適用する。シーケンスを、次の図に示す。
+起動の初期設定が不要な service への Start は、通常の上下限と一時停止要求を適用する。target がない場合は変更 API を呼ばない。target がある場合のシーケンスを、次の図に示す。
 
 ```mermaid
 sequenceDiagram
-    participant R as reconciler
-    participant A as EcsServiceTarget
-    participant E as ECS
-    participant S as Application Auto Scaling
-    R->>A: Start(resource)
-    A->>A: Ref、タグ、ecs_max_count を検証
-    A->>E: DescribeServices(cluster, service)
-    E-->>A: 現在の service
-    A->>S: DescribeScalableTargets(対象 service)
-    S-->>A: 現在の target
-    A->>A: 初期設定が不要であることを判定
-    alt P=true で、一時停止または通常範囲が未適用
-        A->>S: RegisterScalableTarget(min=L, max=U, S=true)
-        S-->>A: 応答またはエラー
-    else P=false かつ S=true
-        A->>S: RegisterScalableTarget(S=false、上下限は省略)
-        S-->>A: 応答またはエラー
+    participant Reconciler as reconciler
+    participant Adapter as EcsServiceTarget
+    participant EcsAPI as ECS
+    participant AutoScaling as Application Auto Scaling
+    Reconciler->>Adapter: Start(resource)
+    Adapter->>Adapter: Ref、タグ、ecs_max_count を検証
+    Adapter->>EcsAPI: DescribeServices(cluster, service)
+    EcsAPI-->>Adapter: 現在の service
+    Adapter->>AutoScaling: DescribeScalableTargets(対象 service)
+    AutoScaling-->>Adapter: 現在の target
+    Adapter->>Adapter: 初期設定が不要であることを判定
+    alt cheapskate/scheduled-scaling-paused=true で、一時停止または通常範囲が未適用
+        Adapter->>AutoScaling: RegisterScalableTarget(MinCapacity=cheapskate/scaling-min タグ値、<br/>MaxCapacity=cheapskate/scaling-max タグ値、ScheduledScalingSuspended=true)
+        AutoScaling-->>Adapter: 応答またはエラー
+    else cheapskate/scheduled-scaling-paused=false かつ AWS の ScheduledScalingSuspended=true
+        Adapter->>AutoScaling: RegisterScalableTarget(MinCapacity=cheapskate/scaling-min タグ値、<br/>MaxCapacity=cheapskate/scaling-max タグ値、ScheduledScalingSuspended=false)
+        AutoScaling-->>Adapter: 応答またはエラー
     else 設定が一致している
-        Note over A,S: 変更 API を呼ばない
+        Note over Adapter,AutoScaling: 変更 API を呼ばない
     end
-    A-->>R: nil またはエラー
+    Adapter-->>Reconciler: nil またはエラー
 ```
 
-UpdateService は呼ばず、起動台数へ戻さない。フラグだけの RegisterScalableTarget でも、現在の capacity が上下限の範囲外なら AWS が調整しうる。上下限が 0/0 または起動途中の固定範囲の場合は、このシーケンスではなく初期設定を行う。
+UpdateService は呼ばず、起動台数へ戻さない。RegisterScalableTarget で適用する通常範囲の外に現在の capacity がある場合は AWS が調整する。すべてのタスク数が 0、または上下限が 0/0 の場合は、このシーケンスではなく初期設定を行う。
 
 ### 部分失敗と後続サイクル
 
-通常のタグ範囲と異なる起動台数への固定後に、ECS の再観測が失敗した場合の復旧シーケンスを、次の図に示す。
+通常のタグ範囲と異なる起動台数への固定後に、ECS の再観測が失敗し、次のサイクルで正の desiredCount を観測した場合のシーケンスを、次の図に示す。
 
 ```mermaid
 sequenceDiagram
-    participant R as reconciler
-    participant A as EcsServiceTarget
-    participant E as ECS
-    participant S as Application Auto Scaling
-    Note over R,S: 最初のサイクル（初期設定の途中）
-    A->>S: RegisterScalableTarget(min=D, max=D, S=true)
-    S-->>A: 成功
-    A->>E: DescribeServices(cluster, service)
-    E-->>A: エラー
-    A-->>R: エラー（固定範囲を残す）
-    R->>R: エラーを記録（action 通知は行わない）
-    Note over R,S: 次の正常なサイクル
-    R->>A: Describe(resource、現在のタグ)
-    A->>E: DescribeServices(cluster, service)
-    E-->>A: 現在のタスク数
-    A->>S: DescribeScalableTargets(対象 service)
-    S-->>A: 正の固定範囲、S=true
-    A-->>R: Observation、NeedsStart=true
-    R->>A: Start(resource、現在のタグ)
-    Note over A,S: 起動の初期設定シーケンスを再実行<br/>必要な固定・台数変更・最終設定だけを適用
-    A-->>R: nil
-    R->>R: action を記録し、設定に応じて通知
+    participant Reconciler as reconciler
+    participant Adapter as EcsServiceTarget
+    participant EcsAPI as ECS
+    participant AutoScaling as Application Auto Scaling
+    Note over Reconciler,AutoScaling: 最初のサイクル（初期設定の途中）
+    Adapter->>AutoScaling: RegisterScalableTarget(MinCapacity と MaxCapacity に<br/>cheapskate/desired-count タグ値、ScheduledScalingSuspended=true)
+    AutoScaling-->>Adapter: 成功
+    Adapter->>EcsAPI: DescribeServices(cluster, service)
+    EcsAPI-->>Adapter: エラー
+    Adapter-->>Reconciler: エラー（固定範囲を残す）
+    Reconciler->>Reconciler: エラーを記録（action 通知は行わない）
+    Note over Reconciler,AutoScaling: 次の正常なサイクル
+    Reconciler->>Adapter: Describe(resource、現在のタグ)
+    Adapter->>EcsAPI: DescribeServices(cluster, service)
+    EcsAPI-->>Adapter: desiredCount は正、タスクは起動中または稼働中
+    Adapter->>AutoScaling: DescribeScalableTargets(対象 service)
+    AutoScaling-->>Adapter: 正の固定範囲、ScheduledScalingSuspended=true
+    Adapter-->>Reconciler: Observation、NeedsStart=true
+    Reconciler->>Adapter: Start(resource、現在のタグ)
+    Note over Adapter,AutoScaling: 稼働中の設定再適用シーケンスを実行<br/>通常の上下限と一時停止要求を適用し、起動台数へ戻さない
+    Adapter-->>Reconciler: nil
+    Reconciler->>Reconciler: action を記録し、設定に応じて通知
 ```
 
-一時停止要求が true であることだけでは初期設定途中と判定しない。主な失敗と再適用の関係を、以下に示す。
+実行フェーズは保存せず、次のサイクルの設定と観測値で処理を決める。主な失敗と再適用の関係を、以下に示す。
 
 | 残った状態 | 後続サイクル |
 | --- | --- |
-| 停止設定が未適用 | 上下限または S の差から停止を再適用する |
-| 起動途中の固定範囲 | 現在の D、L/U、P で初期設定を再開する |
-| L=U=D で S だけが要求と異なる | フラグの差を再適用する |
-| 最後の更新の応答喪失後、P=true で通常設定が一致 | 追加操作を行わない |
-| 最後の更新の応答喪失後、P=false で Scheduled Scaling が上下限を変更 | 変更された範囲を維持する |
+| 停止設定が未適用 | AWS の上下限または ScheduledScalingSuspended の差から停止を再適用する |
+| すべてのタスク数が 0、または上下限が 0/0 | 起動の初期設定を行う |
+| 正の desiredCount と一時停止中の正の固定範囲 | 通常の上下限と一時停止要求を適用する。設定台数がその範囲内なら維持する |
+| 通常の上下限タグが起動台数タグと等しく、AWS の ScheduledScalingSuspended だけが一時停止要求のタグと異なる | 通常の上下限と一時停止要求を適用する |
+| 最後の更新の応答喪失後、cheapskate/scheduled-scaling-paused=true で通常設定が一致 | 追加操作を行わない |
+| 最後の更新の応答喪失後、cheapskate/scheduled-scaling-paused=false で Scheduled Scaling が上下限を変更 | 変更された範囲を維持する |
 
 古い snapshot に基づく invocation は古い要求を適用しうる。最新の要求への収束は、その invocation の終了後に成功する後続サイクルで行う。disabled、管理終了、および cheapskate 自体の実行停止では、適用済みの AWS フラグと上下限を復元しない。
 

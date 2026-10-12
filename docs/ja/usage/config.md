@@ -1,29 +1,65 @@
 # 実行時設定
 
-各実行ファイルで使用する環境変数を次の表に示す。
+本ドキュメントは、reconciler、CLI、および Web コンソールの接続先、タイムゾーン、監視、HTTP 公開に関する設定を示す。
+
+## 共通設定
+
+AWS の認証情報、リージョン、および接続先は AWS SDK の設定を使用する。アプリケーション固有の共通変数を、以下に示す。
 
 | 変数 | 必須 | 既定値 | 用途 |
 | --- | --- | --- | --- |
-| `STATE_TABLE_NAME` | reconciler と Web コンソール | なし | DynamoDB table 名 |
-| `DEFAULT_TIMEZONE` | いいえ | `UTC` | 全 schedule と Web の日時に適用する IANA time zone |
-| `NOTIFICATION_TOPIC_ARN` | いいえ | 空 | 成功したアクションの通知先 |
-| `METRICS_ENABLED` | いいえ | `false` | `true` の場合にカスタムメトリクスを出力する |
-| `METRICS_NAMESPACE` | いいえ | `cheapskate` | カスタムメトリクスの namespace |
-| `PORT` | いいえ | image は `8000`、バイナリ単体は未設定 | Web コンソールの HTTP listen port。指定時は `-addr` より優先し、`127.0.0.1` で待ち受ける |
-| `AWS_LWA_PORT` | いいえ | image は `8000` | Lambda Web Adapter の接続先 port。`PORT` と一致させる |
-| `BASE_PATH` | いいえ | 空 | URL path prefix |
-| `ALLOWED_HOSTS` | いいえ | 待ち受けポート付きのループバックホスト | Web コンソールで許可する Host 値のカンマ区切りリスト |
+| STATE_TABLE_NAME | reconciler と Web コンソール | なし | DynamoDB テーブル名 |
+| DEFAULT_TIMEZONE | いいえ | UTC | スケジュールと Web の日時に適用する IANA タイムゾーン |
 
-reconciler と Web コンソールは、起動時に Go の time zone database で `DEFAULT_TIMEZONE` を検証する。不正な値では起動に失敗する。CLI も同じ変数を読み取り、未設定時は UTC を使用する。
+DEFAULT_TIMEZONE が不正な場合、reconciler と Web コンソールは起動に失敗する。CLI、reconciler、および Web コンソールでは同じ値を使用すること。
 
-NOTIFICATION_TOPIC_ARN、METRICS_ENABLED、および METRICS_NAMESPACE は reconciler だけが使用する。PORT、BASE_PATH、および ALLOWED_HOSTS は Web コンソールが使用する。
+## reconciler
 
-CLI の table 名は `-table` で指定できる。省略した場合は `CHEAPSKATE_TABLE`、次に `STATE_TABLE_NAME` を参照する。
+通知とメトリクスの変数を、以下に示す。
 
-`METRICS_ENABLED` を解釈できない場合は reconciler の起動に失敗する。空の `METRICS_NAMESPACE` には `cheapskate` を使用する。
+| 変数 | 既定値 | 用途 |
+| --- | --- | --- |
+| NOTIFICATION_TOPIC_ARN | 空 | 成功したアクションの SNS 通知先 |
+| METRICS_ENABLED | false | true の場合にカスタムメトリクスを出力 |
+| METRICS_NAMESPACE | cheapskate | カスタムメトリクスの namespace |
 
-Web コンソールをバイナリ単体で起動し、PORT を指定しない場合、待ち受けアドレスは -addr で指定する。既定値は 127.0.0.1:8080 である。BASE_PATH はリンク、form の送信先、およびリダイレクトへ付ける外部公開パスの接頭辞であり、受信ルートには付けない。接頭辞付きの URL を公開する場合、ingress からは接頭辞を除いたパスを転送すること。
+METRICS_ENABLED を真偽値として解釈できない場合は起動に失敗する。METRICS_NAMESPACE が空の場合は cheapskate を使う。出力内容は、[ログ・メトリクス・通知](monitoring.md)を参照。
 
-ALLOWED_HOSTS は既定の許可リストを置き換える。未設定または空の場合は、localhost、127.0.0.1、および [::1] に待ち受けポートを付けた Host を許可する。全要求で、ポートを含む Host の値がリスト内の値と大文字と小文字を区別せず完全一致することを確認する。ワイルドカードとサブドメインの一致判定には対応しない。未許可の Host には、状態の読み取りや変更を行う前に HTTP 403 を返す。空白とカンマだけの値では起動に失敗する。
+## CLI
 
-API Gateway や他の ingress を使用する場合は、Web コンソールへ転送される外部公開ホストの Host 値を ALLOWED_HOSTS に指定すること。複数ドメインの指定例は console.example,abc123.execute-api.ap-northeast-1.amazonaws.com である。ポート 8080 でのローカルアクセスの指定例は localhost:8080,127.0.0.1:8080 である。scheme と URL path は付けずに指定すること。
+テーブル名は、-table、CHEAPSKATE_TABLE、STATE_TABLE_NAME の順に参照する。DEFAULT_TIMEZONE は cron の検証に使う。CLI の有効期限表示は常に UTC の RFC 3339 形式である。引数と出力形式は、[CLI リファレンス](cli.md)を参照。
+
+## Web コンソール
+
+HTTP の待ち受けと外部公開に関する変数を、以下に示す。
+
+| 変数 | 既定値 | 用途 |
+| --- | --- | --- |
+| PORT | イメージは 8000、バイナリ単体は未設定 | 指定すると -addr より優先し、127.0.0.1 で待ち受ける |
+| AWS_LWA_PORT | イメージは 8000 | Lambda Web Adapter の接続先。PORT と一致させる |
+| BASE_PATH | 空 | 外部公開 URL のパス接頭辞 |
+| ALLOWED_HOSTS | 待ち受けポート付きのループバックホスト | 許可する Host 値のカンマ区切りリスト |
+
+### 待ち受けアドレスとパス
+
+バイナリ単体で PORT を指定しない場合は、-addr で待ち受けアドレスを指定する。既定値は 127.0.0.1:8080 である。
+
+BASE_PATH はリンク、フォーム送信先、およびリダイレクトに付ける接頭辞であり、受信ルートには付けない。接頭辞付きの URL を公開する ingress は、接頭辞を除いたパスを転送すること。
+
+### 公開ホスト
+
+ALLOWED_HOSTS は既定の許可リストを置き換える。未設定または空の場合は、localhost、127.0.0.1、および [::1] に待ち受けポートを付けた Host を許可する。空白とカンマだけの指定では起動に失敗する。
+
+要求の Host はポートを含め、大文字と小文字を区別せず完全一致で確認する。ワイルドカードとサブドメインの一致判定には対応しない。未許可の Host には、状態の読み取りや変更の前に HTTP 403 を返す。
+
+API Gateway などを使用する場合は、実際に転送される公開ホストを指定する。scheme と URL path は付けない。設定例を、以下に示す。
+
+```text
+ALLOWED_HOSTS=console.example,abc123.execute-api.ap-northeast-1.amazonaws.com
+```
+
+ポート 8080 でローカルアクセスする場合の例を、以下に示す。
+
+```text
+ALLOWED_HOSTS=localhost:8080,127.0.0.1:8080
+```

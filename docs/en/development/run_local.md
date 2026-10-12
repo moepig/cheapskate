@@ -1,5 +1,9 @@
 # Running locally
 
+This document covers the development environment using a local AWS emulator and startup of individual components.
+
+Integration and image tests use the same emulator. Adapter unit tests verify request selection and validation for control-plane behavior the emulator does not reproduce.
+
 ## Complete development environment
 
 Docker is required. The convenience target starts the emulator, creates the table, creates tagged ECS fixtures, writes a sample schedule, and runs the web console:

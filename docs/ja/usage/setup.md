@@ -1,8 +1,16 @@
 # セットアップ
 
-## 1. DynamoDB table の作成
+本ドキュメントは、DynamoDB と Lambda の準備から、最初のグループを登録して定期制御を有効にするまでの手順を示す。
 
-String 型のパーティションキー `pk` と String 型のソートキー `sk` を持つ table を作成する。用途に応じて on-demand または provisioned capacity を選択する。TTL とセカンダリインデックスは設定しない。
+## 導入前の準備
+
+reconciler 用 Lambda、DynamoDB テーブル、5 分間隔の呼び出し、および管理対象への IAM 権限が必要である。操作には CLI または任意の Web コンソールを使用する。AWS リソースは、使用する IaC または AWS の管理ツールで作成する。
+
+reconciler と Web コンソールは別々のコンテナイメージである。イメージのビルドと ECR への登録は、[ビルド](../development/build.md)を参照。必要な AWS リソースと権限は、[AWS リソースと IAM](aws_resources.md)を参照。
+
+## 1. DynamoDB テーブルの作成
+
+String 型のパーティションキー pk と String 型のソートキー sk を持つテーブルを作成する。TTL とセカンダリインデックスは設定しない。on-demand で作成する例を、以下に示す。
 
 ```console
 aws dynamodb create-table \
@@ -12,65 +20,48 @@ aws dynamodb create-table \
   --key-schema AttributeName=pk,KeyType=HASH AttributeName=sk,KeyType=RANGE
 ```
 
-## 2. reconciler のデプロイ
+## 2. reconciler の配置
 
-reconciler container image を Lambda function としてデプロイする。`STATE_TABLE_NAME` と、必要に応じて[実行時設定](config.md)の変数を設定する。想定する最大タグ付きリソース数で full reconcile を試験し、余裕を持って完了できる timeout を選択する。Lambda timeout の最大値は 900 秒である。
+reconciler イメージを Lambda に配置する。イメージと Lambda のアーキテクチャを一致させる。STATE_TABLE_NAME にテーブル名、DEFAULT_TIMEZONE にスケジュールのタイムゾーンを設定する。
 
-5 分ごとに Lambda を呼び出す EventBridge Scheduler または EventBridge rule を 1 個作成する。すべての invocation が full reconcile を行うため、payload の内容は任意である。
+想定する最大リソース数で全体の処理が完了する timeout を設定する。1 回の実行ですべてのグループとタグ付きリソースを処理し、分割実行や checkpoint は行わない。Lambda timeout の最大値は 900 秒である。
 
-reconciler の DynamoDB policy には、`CONFIG` パーティションに限定した強い整合性の Query だけが必要である。
+5 分間隔で Lambda を呼び出す EventBridge Scheduler または EventBridge rule を 1 個作成する。この段階では定期呼び出しを無効にし、確認後に有効にする。グループごとの呼び出し設定は不要であり、payload は任意の JSON でよい。
 
-```json
-{
-  "Effect": "Allow",
-  "Action": "dynamodb:Query",
-  "Resource": "arn:aws:dynamodb:REGION:ACCOUNT:table/TABLE",
-  "Condition": {
-    "ForAllValues:StringEquals": {
-      "dynamodb:LeadingKeys": ["CONFIG"]
-    }
-  }
-}
+## 3. 管理インターフェースの準備
+
+信頼できる環境に cheapskate-cli を配置し、AWS の認証情報とリージョンを設定する。CLI のテーブル名とタイムゾーンの設定例を、以下に示す。
+
+```sh
+export AWS_REGION=ap-northeast-1
+export CHEAPSKATE_TABLE=cheapskate
+export DEFAULT_TIMEZONE=Asia/Tokyo
 ```
 
-このほかに、`tag:GetResources`、有効にする RDS、ECS、Application Auto Scaling、および EC2 adapter の読み取りと変更、CloudWatch Logs への配信、ならびに任意の通知先への `sns:Publish` を付与する。詳細は、[AWS リソースと IAM](../architecture/aws_resources.md)を参照すること。
+CLI と reconciler では同じ DEFAULT_TIMEZONE を使用すること。Web コンソールを使用する場合も同じタイムゾーンにする。認証と公開ホストの設定は、[Web コンソール](web_console.md#公開とアクセス設定)を参照。その他の変数は、[実行時設定](config.md)を参照。
 
-## 3. 管理インターフェースの導入
+## 4. グループ設定の登録
 
-信頼できる運用環境で `cheapskate-cli` を実行するか、任意の Web console image を Lambda Web Adapter と認証済み API Gateway などの ingress の背後へデプロイする。
-
-CLI と Web コンソールには、次の DynamoDB action が必要である。
-
-```json
-{
-  "Effect": "Allow",
-  "Action": [
-    "dynamodb:Query",
-    "dynamodb:GetItem",
-    "dynamodb:PutItem",
-    "dynamodb:UpdateItem",
-    "dynamodb:DeleteItem"
-  ],
-  "Resource": "arn:aws:dynamodb:REGION:ACCOUNT:table/TABLE",
-  "Condition": {
-    "ForAllValues:StringEquals": {
-      "dynamodb:LeadingKeys": ["CONFIG"]
-    }
-  }
-}
-```
-
-`show` と詳細画面には、`tag:GetResources` と対応 service の読み取り専用 Describe も付与する。グループアイテムの変更には、アイテム全体の検証と条件付き書き込みを行う CLI または Web コンソールを推奨する。Terraform から直接管理する場合の登録例と制約は、[Terraform によるレコード登録](terraform_records.md)を参照。
-
-## 4. タグとグループの設定
-
-各リソースへ `cheapskate:group=<グループ>` を設定し、ECS には必要な復元タグも設定する。次の例は schedule を作成する。
+グループ設定は CLI・Web コンソールまたは Terraform のどちらかで管理する。CLI で平日 09:00～18:00 のグループを登録する例を、以下に示す。
 
 ```console
-cheapskate-cli -table cheapskate schedule --group dev \
-  -start '0 8 * * 1-5' -stop '0 20 * * 1-5'
+cheapskate-cli schedule --group dev -start '0 9 * * 1-5' -stop '0 18 * * 1-5'
 ```
 
-reconciler を 1 回手動で呼び出し、ログと `show` の現在状態を確認してから 5 分間隔の呼び出しを有効にする。
+ECS を管理する場合は、service の起動台数と通常の上限を決め、タグ値以上の ecs_max_count をグループに登録すること。登録手順は、[ECS 台数上限の登録](operations.md#ecs-台数上限の登録)を参照。
 
-cheapskate は CloudWatch log group、alarm、dashboard、SNS topic、および通知 subscription を作成しない。
+Terraform でグループを管理する場合の例は、[Terraform によるグループ設定](terraform_records.md)を参照。同じグループを Terraform と CLI・Web コンソールの両方で変更してはいけない。
+
+## 5. リソースタグの設定
+
+管理対象の各リソースに cheapskate:group=dev を設定する。ECS では service 自身に起動台数、通常の上下限、および必要な一時停止要求を設定する。値の制約は、[リソースタグ](resource_tag.md)を参照。
+
+## 6. 動作確認と定期実行の有効化
+
+reconciler を 1 回手動で呼び出す。設定登録時刻がスケジュールの稼働時間帯なら起動、停止時間帯なら停止が要求される。確認用コマンドを、以下に示す。
+
+```console
+cheapskate-cli -output json show --group dev
+```
+
+ログの summary と各リソースの現在状態を確認し、エラーがない状態で 5 分間隔の呼び出しを有効にする。状態確認は、[ログ・メトリクス・通知](monitoring.md)を参照。以降の操作は、[日常の操作](operations.md)を参照。

@@ -3,7 +3,7 @@
 // ビルド済みの webconsole イメージへ、本番で API Gateway が送信するものと同じプロキシイベントを投入する
 //
 // コンソール本体は Lambda を参照しない HTTP サーバであり、イベントとの変換はイメージへ同梱した
-// Lambda Web Adapter 拡張が行う (docs/ja/architecture/web_console.md)
+// Lambda Web Adapter 拡張が行う (docs/ja/architecture/overview.md)
 // この拡張は Lambda 側にのみ存在するため、本パッケージのみがこの経路を検証できる
 // 単体テストと統合テストはサーバのハンドラを直接呼ぶため、アダプタを経由しない
 //

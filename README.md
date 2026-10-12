@@ -1,15 +1,18 @@
 # cheapskate
 
-cheapskate keeps tagged RDS instances, Aurora clusters, ECS services, and EC2 instances in the running or stopped state selected by a schedule or an override.
+cheapskate maintains scheduled running and stopped states for tagged RDS instances, Aurora clusters, ECS services, and EC2 instances. Resources sharing a group use the same schedule. Overrides keep them running, stopped, or temporarily outside automatic control.
 
-Each resource belongs to one group through `cheapskate:group=<group>`. Group configuration is stored in DynamoDB. A five-minute full reconcile reads every group and every tagged resource before it calls any resource API.
+Group configuration is stored in DynamoDB. Resource tags define membership and ECS startup settings. A Lambda reconciler normally applies configuration every five minutes. Administration is available through cheapskate-cli and an optional web console.
 
-The project ships three executables:
+## Documentation
 
-- `reconciler`: the Lambda full-reconcile handler
-- `cheapskate-cli`: group configuration and inspection
-- `webconsole`: an optional browser interface
+The guides cover deployment, daily operations, settings, and resource behavior:
 
-Build and test commands are available through `make`. User and architecture documentation starts at [docs/en/README.md](docs/en/README.md) and [docs/ja/README.md](docs/ja/README.md).
+- [English documentation](docs/en/README.md)
+- [日本語ドキュメント](docs/ja/README.md)
+
+For a first deployment, start with [Groups and schedules](docs/en/usage/concepts.md), then follow [Setup](docs/en/usage/setup.md). For contribution and local execution, see the development section of either documentation index.
+
+## License
 
 This project is licensed under the MIT License.

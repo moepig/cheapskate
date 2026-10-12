@@ -1,5 +1,9 @@
 # ローカル実行
 
+本ドキュメントは、ローカル AWS エミュレータを使用した開発環境と、コンポーネント別の起動方法を示す。
+
+エミュレータは結合テストとイメージテストでも使用する。AWS と異なる control plane の動作は、adapter の単体テストで API request の選択と検証を確認する。
+
 ## 開発環境全体の起動
 
 Docker が必要である。次の target は emulator と table を起動し、タグ付き ECS fixture とサンプル schedule を作成して、Web コンソールを実行する。

@@ -1,4 +1,4 @@
-# Terraform によるレコード登録
+# Terraform によるグループ設定
 
 本ドキュメントは、schedule、無期限 override、および期限付き override を持つグループアイテムを、Terraform で DynamoDB に登録する例を示す。
 
@@ -131,7 +131,7 @@ cheapskate-cli -table cheapskate -output json list
 cheapskate-cli -table cheapskate -output json show --group dev-extended
 ```
 
-apply は設定の登録で完了する。AWS の起動・停止は、その設定を読んだ reconciler のサイクルで行う。反映のタイミングとリソースごとの動作は、[CLI によるレコード登録と AWS の動作](cli_records.md)を参照。
+apply は設定の登録で完了する。AWS の起動・停止は、その設定を読んだ reconciler のサイクルで行う。反映のタイミングとリソースごとの動作は、[起動・停止の挙動](resource_flow.md)を参照。
 
 ## 設定変更と削除
 
@@ -145,4 +145,4 @@ apply は設定の登録で完了する。AWS の起動・停止は、その設�
 - 失効済みの override 属性は自動削除されない。Terraform にも残っていれば、その後の apply でも失効時刻は変わらない。
 - グループを local.groups から削除して apply すると、対応するアイテムが削除される。所属する AWS リソースは削除・停止されない。
 
-グループ名、cron、属性型などの制約は、[基本概念](concepts.md)と[DynamoDB データモデル](../architecture/database.md)を参照。管理を終了する場合は、[操作方法の管理終了手順](operations.md#安全に管理を終了する手順)に従い、設定変更とグループ削除を Terraform で行う。
+グループ名、cron、属性型などの制約は、[グループ設定](group_config.md)を参照。管理を終了する場合は、[管理の終了](operations.md#管理の終了)に従い、設定変更とグループ削除を Terraform で行う。

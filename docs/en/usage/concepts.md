@@ -1,43 +1,61 @@
-# Concepts
+# Groups and schedules
 
-cheapskate periodically converges tagged AWS resources to the state selected for their group. Configuration consists of a schedule, an override, or both.
+cheapskate groups AWS resources and periodically maintains the running or stopped state selected by a schedule or override. This document explains membership, requested states, and how time determines the request.
 
-## Groups and membership
+## Groups and resource membership
 
-A resource belongs to the group named by its `cheapskate:group` tag. An empty tag, an invalid group name, or the name of an unconfigured group is a resource error. A group name contains 1–64 ASCII letters, digits, periods, underscores, or hyphens, and must start with a letter or digit.
+A group is a set of resources with shared running and stopped settings. Group configuration is stored in DynamoDB. Each resource's cheapskate:group tag names its group. A group can contain multiple supported resource types.
 
-The reconciler loads every group and every tagged resource before it makes any Describe, Start, or Stop call. A global read failure aborts the cycle. An invalid group or resource is isolated so other resources continue.
+Configuration and current state have separate sources:
 
-## Desired-state resolution
+| Information | Location | Meaning |
+| --- | --- | --- |
+| Group configuration | DynamoDB | Normal start and stop times, override, and ECS capacity limit |
+| Resource configuration | AWS resource tags | Membership and ECS startup count, normal bounds, and suspension request |
+| Current state | AWS services | Current running/stopped state or ECS task counts and scaling settings |
 
-An active override takes precedence:
+Saving configuration through the CLI or web console does not wait for AWS resources to start or stop. The reconciler is the program that periodically compares configuration with current state and applies necessary changes.
 
-1. `disabled` omits the group from reconciliation.
-2. `running` selects the running state.
-3. `stopped` selects the stopped state.
-4. Without an active override, the later of the most recent start and stop cron ticks wins. A tie selects stopped.
+## Schedules
 
-An override with `override_expires_at <= now` is inactive. Its stored attributes may remain in DynamoDB; the schedule takes over automatically.
+A schedule is a pair of five-field cron expressions: start_cron for starting and stop_cron for stopping. Both are interpreted in the DEFAULT_TIMEZONE runtime setting.
 
-A schedule is a pair of five-field cron expressions interpreted in `DEFAULT_TIMEZONE`. Both expressions must exist and must have reachable ticks. A group must have a schedule, an override, or both. A timed override additionally requires a schedule.
+Each cycle selects the state of the more recent start or stop occurrence. A tie selects stopped. Creating a group during its running period selects running in the next cycle; it does not wait for the next start occurrence.
 
-When an offset change repeats a local time, each occurrence is a separate candidate tick. Nonexistent local times do not fire. The most recent start and stop are compared as absolute instants, so a backward clock change alone does not restart a stopped resource. Reachability searches are limited to 400 years in each direction.
+For weekday operation from 09:00 to 18:00, use:
 
-## Convergence and concurrency
+```text
+start_cron: 0 9 * * 1-5
+stop_cron: 0 18 * * 1-5
+DEFAULT_TIMEZONE: Asia/Tokyo
+```
 
-An observed running/stopped state that differs from the desired state receives an action. RDS and EC2 observations classified as transitioning, and resources classified as not found, are skipped until a later cycle.
+## Overrides
 
-ECS is stopped only when desired, running, and pending counts are all zero; otherwise it is running. Task-count differences do not delay Stop. Even when running/stopped state matches, incomplete startup, a mismatch between the suspension request and the AWS flag, or differences in managed bounds trigger Start or Stop again. With a false suspension request during normal operation, Scheduled Scaling changes to bounds are retained. See [Resource tags](resource_tag.md) for ECS state and restoration behavior.
+An override takes precedence over the schedule. It can be indefinite or expire at a specified time. Available states are:
 
-For diagrams of each resource's operations and configuration repair, see [Resource processing flows](resource_flow.md).
+| Override | Behavior |
+| --- | --- |
+| running | Keep member resources running |
+| stopped | Keep member resources stopped |
+| disabled | Skip state inspection and changes for member resources |
 
-Invocations may overlap. A Start or Stop may therefore be delivered more than once, and invocations holding different configuration snapshots may briefly issue opposing actions. After older invocations finish, a successful later cycle converges to the latest configuration.
+Without an active override, the current schedule applies. Clearing or expiring an override returns to the schedule's state at that time. Setting disabled does not itself change any AWS resource.
 
-## Supported resources
+### Extending a running period
 
-- RDS DB instances that are not cluster members and do not use a `custom-*` engine
-- RDS DB clusters whose engine starts with `aurora`
-- ECS services using the `REPLICA` scheduling strategy
-- EC2 instances
+For a weekday 09:00–18:00 group, a running override set Monday at 17:00 and expiring at 20:00 produces the following requests. Times use Asia/Tokyo.
 
-See [Resource tags](resource_tag.md) for ECS restoration settings.
+| Time | Scheduled state | Override | Applied request |
+| --- | --- | --- | --- |
+| Monday 09:00 | Running | Absent | running |
+| Monday 17:00 | Running | Active running | running |
+| Monday 18:00 | Stopped | Active running | running |
+| Monday 20:00 | Stopped | Expired | stopped |
+| Tuesday 09:00 | Running | Expired | running |
+
+A cycle after 20:00 selects stopped based on the 18:00 stop occurrence. Resource operations begin in the cycle that reads that request.
+
+## Configuration and operation references
+
+For names, cron constraints, and expiration values, see [Group configuration](group_config.md). For commands, see [Daily operations](operations.md). For timing and supported resources, see [Start and stop behavior](resource_flow.md).

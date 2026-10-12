@@ -42,7 +42,7 @@ An allowlist in `.dockerignore` limits the build context to the Dockerfile, modu
 
 The web console image carries the Lambda Web Adapter executable as `/opt/extensions/lambda-adapter`, pinned by version tag and digest in the `Dockerfile`. It is the only runtime dependency outside go.mod, and it is updated through Dependabot's docker updates rather than with the Go modules.
 
-For how the adapter converts invocation events into HTTP, and where the application depends on it, see [../architecture/on_lambda.md](../architecture/on_lambda.md). For how a Dependabot update reaches a release, see the dependency updates section in [release.md](release.md).
+For how the adapter converts invocation events into HTTP, and where the application depends on it, see [Lambda runtime](../architecture/overview.md#lambda-runtime). For how a Dependabot update reaches a release, see the dependency updates section in [release.md](release.md).
 
 ## Testing the images
 

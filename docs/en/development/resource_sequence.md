@@ -63,7 +63,7 @@ sequenceDiagram
 
 Notification failure is logged without reversing a successful operation. Start or Stop success does not imply that the resource transition has completed; a later cycle observes it again. No action history, checkpoint, or AWS settings snapshot is written to DynamoDB.
 
-For global failure boundaries and overlapping invocations, see [Reconcile boundaries](reconcile.md). For the implementation, see the [reconciler](../../../internal/app/reconcile/reconcile.go) and [resource discovery](../../../internal/aws/tagging/tagging.go).
+For global failure boundaries and overlapping invocations, see [Reconcile implementation contracts](reconcile.md). For the implementation, see the [reconciler](../../../internal/app/reconcile/reconcile.go) and [resource discovery](../../../internal/aws/tagging/tagging.go).
 
 ## RDS DB instances
 
@@ -175,16 +175,9 @@ For the implementation, see the [EC2 adapter](../../../internal/aws/compute/ec2.
 
 ## ECS services
 
-ECS observes scalable-target settings as well as task counts. Configuration tags come from the discovery snapshot and are validated again by Start and Stop. The following symbols are used in the sequences:
+ECS observes scalable-target settings as well as task counts. Configuration tags come from the discovery snapshot and are validated again by Start and Stop. Tag values in the diagrams include defaults. An absent or nil AWS ScheduledScalingSuspended flag is treated as false.
 
-| Symbol | Meaning |
-| --- | --- |
-| D | Startup desired-count after tag defaults |
-| L / U | Normal scaling-min / scaling-max after tag defaults |
-| P | scheduled-scaling-paused request; absent means false |
-| S | AWS ScheduledScalingSuspended; absent or nil means false |
-
-The scalable target is identified by ServiceNamespace=ecs, ResourceId=service/{cluster}/{service}, and ScalableDimension=ecs:service:DesiredCount. Every RegisterScalableTarget specifies only ScheduledScalingSuspended and omits DynamicScalingInSuspended and DynamicScalingOutSuspended. Scheduled action definitions are neither read nor written.
+The scalable target is identified by ServiceNamespace=ecs, ResourceId=service/{cluster}/{service}, and ScalableDimension=ecs:service:DesiredCount. Every RegisterScalableTarget specifies only ScheduledScalingSuspended in SuspendedState and omits DynamicScalingInSuspended and DynamicScalingOutSuspended. Scheduled action definitions are neither read nor written.
 
 ### Observation
 
@@ -192,43 +185,43 @@ The sequence returning task state and repair requests is:
 
 ```mermaid
 sequenceDiagram
-    participant R as reconciler
-    participant A as EcsServiceTarget
-    participant E as ECS
-    participant S as Application Auto Scaling
-    R->>A: Describe(resource)
-    A->>A: Split Ref into cluster / service
-    A->>E: DescribeServices(cluster, service)
-    E-->>A: Services or error
+    participant Reconciler as reconciler
+    participant Adapter as EcsServiceTarget
+    participant EcsAPI as ECS
+    participant AutoScaling as Application Auto Scaling
+    Reconciler->>Adapter: Describe(resource)
+    Adapter->>Adapter: Split Ref into cluster / service
+    Adapter->>EcsAPI: DescribeServices(cluster, service)
+    EcsAPI-->>Adapter: Services or error
     alt No ACTIVE service
-        A-->>R: State=not-found
+        Adapter-->>Reconciler: State=not-found
     else Scheduling strategy is neither REPLICA nor empty
-        A-->>R: Error
+        Adapter-->>Reconciler: Error
     else Eligible service
-        A->>A: Parse and validate D, L, U, P from tags
-        Note over A,S: Invalid tags return an error here
-        A->>S: DescribeScalableTargets(service target)
-        S-->>A: Scalable target or no target
-        A->>A: All desired / running / pending counts zero means stopped, otherwise running
+        Adapter->>Adapter: Validate cheapskate/desired-count, cheapskate/scaling-min,<br/>cheapskate/scaling-max, and cheapskate/scheduled-scaling-paused
+        Note over Adapter,AutoScaling: Invalid tags return an error here
+        Adapter->>AutoScaling: DescribeScalableTargets(service target)
+        AutoScaling-->>Adapter: Scalable target or no target
+        Adapter->>Adapter: All desiredCount / runningCount / pendingCount zero means stopped, otherwise running
         opt Target exists
-            A->>A: Set NeedsStart / NeedsStop from bounds and S
+            Adapter->>Adapter: Set NeedsStart / NeedsStop from AWS bounds and ScheduledScalingSuspended
         end
-        A-->>R: Observation(State, Detail, NeedsStart, NeedsStop)
+        Adapter-->>Reconciler: Observation(State, Detail, NeedsStart, NeedsStop)
     end
 ```
 
-Ref splitting failures and DescribeServices failures also return errors. Detail contains task counts and, when a target exists, bounds and actual S. Without a target, neither NeedsStart nor NeedsStop is set.
+Ref splitting failures and DescribeServices failures also return errors. Detail contains task counts and, when a target exists, bounds and actual ScheduledScalingSuspended. Without a target, neither NeedsStart nor NeedsStop is set.
 
 Repair conditions are listed below. Both flags can be true; the reconciler uses only the flag corresponding to the group's desired state.
 
 | Flag | Condition |
 | --- | --- |
-| NeedsStop | Bounds differ from 0/0 or S=false |
-| NeedsStart | All task counts zero, bounds 0/0, or an incomplete startup range |
-| NeedsStart | S differs from P |
-| NeedsStart | P=true and bounds differ from L/U |
+| NeedsStop | AWS bounds differ from 0/0 or ScheduledScalingSuspended=false |
+| NeedsStart | All desiredCount / runningCount / pendingCount zero, or bounds 0/0 |
+| NeedsStart | AWS ScheduledScalingSuspended differs from the cheapskate/scheduled-scaling-paused tag |
+| NeedsStart | cheapskate/scheduled-scaling-paused=true and AWS bounds differ from the cheapskate/scaling-min and cheapskate/scaling-max tags |
 
-An incomplete startup range has S=true, positive equal minimum and maximum, and differs from L/U. The fixed value need not match current D. With P=false during normal operation, Scheduled Scaling changes to bounds do not trigger repair.
+A positive fixed range is not used to infer incomplete startup. With cheapskate/scheduled-scaling-paused=false during normal operation, Scheduled Scaling changes to bounds do not trigger repair.
 
 ### Stop
 
@@ -236,141 +229,142 @@ Stop validates tags and reads the target again. The stop sequence is:
 
 ```mermaid
 sequenceDiagram
-    participant R as reconciler
-    participant A as EcsServiceTarget
-    participant E as ECS
-    participant S as Application Auto Scaling
-    R->>A: Stop(resource)
-    A->>A: Validate tags and split Ref
-    A->>S: DescribeScalableTargets(service target)
-    S-->>A: Scalable target or no target
+    participant Reconciler as reconciler
+    participant Adapter as EcsServiceTarget
+    participant EcsAPI as ECS
+    participant AutoScaling as Application Auto Scaling
+    Reconciler->>Adapter: Stop(resource)
+    Adapter->>Adapter: Validate tags and split Ref
+    Adapter->>AutoScaling: DescribeScalableTargets(service target)
+    AutoScaling-->>Adapter: Scalable target or no target
     alt Target exists
-        A->>S: RegisterScalableTarget(min=0, max=0, S=true)
-        S-->>A: Response or error
+        Adapter->>AutoScaling: RegisterScalableTarget(MinCapacity=0, MaxCapacity=0,<br/>ScheduledScalingSuspended=true)
+        AutoScaling-->>Adapter: Response or error
     else No target
-        A->>E: UpdateService(desiredCount=0)
-        E-->>A: Response or error
+        Adapter->>EcsAPI: UpdateService(desiredCount=0)
+        EcsAPI-->>Adapter: Response or error
     end
-    A-->>R: nil or error
+    Adapter-->>Reconciler: nil or error
 ```
 
-Stop applies S=true regardless of P and never changes P. It does not reject stopping based on ecs_max_count. With a target, there is no additional UpdateService or rollback.
+Stop applies AWS ScheduledScalingSuspended=true regardless of the cheapskate/scheduled-scaling-paused tag and never changes the tag. It does not reject stopping based on ecs_max_count. With a target, there is no additional UpdateService or rollback.
 
 ### Startup initialization
 
-Start validates Ref, tags, and ecs_max_count before rereading the service and target. The sequence for a stopped service, bounds of 0/0, or an incomplete startup range is:
+Start validates Ref, tags, and ecs_max_count before rereading the service and target. The sequence for all-zero desiredCount / runningCount / pendingCount or bounds of 0/0 is:
 
 ```mermaid
 sequenceDiagram
-    participant R as reconciler
-    participant A as EcsServiceTarget
-    participant E as ECS
-    participant S as Application Auto Scaling
-    R->>A: Start(resource)
-    A->>A: Validate Ref, tags, and ecs_max_count
-    Note over A,E: Missing limit, or D or U above the limit,<br/>returns an error before Start calls AWS
-    A->>E: DescribeServices(cluster, service)
-    E-->>A: Current service
-    A->>S: DescribeScalableTargets(service target)
-    S-->>A: Scalable target or no target
-    alt No target
-        opt Current desired count differs from D
-            A->>E: UpdateService(desiredCount=D)
-            E-->>A: Response
+    participant Reconciler as reconciler
+    participant Adapter as EcsServiceTarget
+    participant EcsAPI as ECS
+    participant AutoScaling as Application Auto Scaling
+    Reconciler->>Adapter: Start(resource)
+    Adapter->>Adapter: Validate Ref, tags, and ecs_max_count
+    Note over Adapter,EcsAPI: Missing DynamoDB ecs_max_count, or cheapskate/desired-count<br/>or cheapskate/scaling-max above that limit, returns an error
+    Adapter->>EcsAPI: DescribeServices(cluster, service)
+    EcsAPI-->>Adapter: Current service
+    Adapter->>AutoScaling: DescribeScalableTargets(service target)
+    AutoScaling-->>Adapter: Scalable target or no target
+    alt No target and all desiredCount / runningCount / pendingCount zero
+        opt Current desiredCount differs from the cheapskate/desired-count tag
+            Adapter->>EcsAPI: UpdateService(desiredCount=cheapskate/desired-count tag value)
+            EcsAPI-->>Adapter: Response
         end
     else Target exists and initialization is required
-        opt Bounds differ from D/D or S=false
-            A->>S: RegisterScalableTarget(min=D, max=D, S=true)
-            S-->>A: Response
+        opt Bounds not pinned to cheapskate/desired-count,<br/>or ScheduledScalingSuspended=false
+            Adapter->>AutoScaling: RegisterScalableTarget(MinCapacity and MaxCapacity set to<br/>cheapskate/desired-count tag value, ScheduledScalingSuspended=true)
+            AutoScaling-->>Adapter: Response
         end
-        A->>E: DescribeServices(cluster, service)
-        E-->>A: Desired count after pinning
-        opt Current desired count differs from D
-            A->>E: UpdateService(desiredCount=D)
-            E-->>A: Response
+        Adapter->>EcsAPI: DescribeServices(cluster, service)
+        EcsAPI-->>Adapter: desiredCount after pinning
+        opt Current desiredCount differs from the cheapskate/desired-count tag
+            Adapter->>EcsAPI: UpdateService(desiredCount=cheapskate/desired-count tag value)
+            EcsAPI-->>Adapter: Response
         end
-        opt Normal bounds differ from D/D or P=false
-            A->>S: RegisterScalableTarget(min=L, max=U, S=P)
-            S-->>A: Response
+        opt Normal bounds tags differ from cheapskate/desired-count,<br/>or cheapskate/scheduled-scaling-paused=false
+            Adapter->>AutoScaling: RegisterScalableTarget(MinCapacity=cheapskate/scaling-min tag value,<br/>MaxCapacity=cheapskate/scaling-max tag value,<br/>ScheduledScalingSuspended=cheapskate/scheduled-scaling-paused tag value)
+            AutoScaling-->>Adapter: Response
         end
     end
-    A-->>R: nil
+    Adapter-->>Reconciler: nil
 ```
 
 This diagram shows the successful path. Any API failure stops subsequent calls and returns an error. A missing service or unsupported strategy also returns an error. The second observation accounts for RegisterScalableTarget adjusting capacity to fit its bounds.
 
-P=false resumes only in the final RegisterScalableTarget. If P=true and L=U=D, the initial pin also satisfies normal configuration, so the final RegisterScalableTarget is omitted. For running services that need no initialization, Start uses the following repair sequence.
+cheapskate/scheduled-scaling-paused=false resumes only in the final RegisterScalableTarget. If the tag is true and both normal bounds tags equal the startup-count tag, the initial pin also satisfies normal configuration, so the final RegisterScalableTarget is omitted. For running services that need no initialization, Start uses the following repair sequence.
 
 ### Running configuration repair
 
-For a service that needs no startup initialization, Start reapplies only suspension configuration. The sequence is:
+For a service that needs no startup initialization, Start applies normal bounds and suspension configuration. Without a target it makes no modifying API call. With a target, the sequence is:
 
 ```mermaid
 sequenceDiagram
-    participant R as reconciler
-    participant A as EcsServiceTarget
-    participant E as ECS
-    participant S as Application Auto Scaling
-    R->>A: Start(resource)
-    A->>A: Validate Ref, tags, and ecs_max_count
-    A->>E: DescribeServices(cluster, service)
-    E-->>A: Current service
-    A->>S: DescribeScalableTargets(service target)
-    S-->>A: Current target
-    A->>A: Confirm initialization is unnecessary
-    alt P=true and suspension or normal bounds need repair
-        A->>S: RegisterScalableTarget(min=L, max=U, S=true)
-        S-->>A: Response or error
-    else P=false and S=true
-        A->>S: RegisterScalableTarget(S=false, bounds omitted)
-        S-->>A: Response or error
+    participant Reconciler as reconciler
+    participant Adapter as EcsServiceTarget
+    participant EcsAPI as ECS
+    participant AutoScaling as Application Auto Scaling
+    Reconciler->>Adapter: Start(resource)
+    Adapter->>Adapter: Validate Ref, tags, and ecs_max_count
+    Adapter->>EcsAPI: DescribeServices(cluster, service)
+    EcsAPI-->>Adapter: Current service
+    Adapter->>AutoScaling: DescribeScalableTargets(service target)
+    AutoScaling-->>Adapter: Current target
+    Adapter->>Adapter: Confirm initialization is unnecessary
+    alt cheapskate/scheduled-scaling-paused=true and suspension or normal bounds need repair
+        Adapter->>AutoScaling: RegisterScalableTarget(MinCapacity=cheapskate/scaling-min tag value,<br/>MaxCapacity=cheapskate/scaling-max tag value, ScheduledScalingSuspended=true)
+        AutoScaling-->>Adapter: Response or error
+    else cheapskate/scheduled-scaling-paused=false and AWS ScheduledScalingSuspended=true
+        Adapter->>AutoScaling: RegisterScalableTarget(MinCapacity=cheapskate/scaling-min tag value,<br/>MaxCapacity=cheapskate/scaling-max tag value, ScheduledScalingSuspended=false)
+        AutoScaling-->>Adapter: Response or error
     else Settings already match
-        Note over A,S: No modifying API call
+        Note over Adapter,AutoScaling: No modifying API call
     end
-    A-->>R: nil or error
+    Adapter-->>Reconciler: nil or error
 ```
 
-UpdateService is not called, and desired count is not reset to startup capacity. A flag-only RegisterScalableTarget can still adjust capacity if it is outside current bounds. Bounds of 0/0 or an incomplete startup range select initialization instead of this sequence.
+UpdateService is not called, and desired count is not reset to startup capacity. Applying normal bounds through RegisterScalableTarget adjusts capacity outside that range. All-zero task counts or bounds of 0/0 select initialization instead of this sequence.
 
 ### Partial failures and later cycles
 
-When startup pinning produces a range different from the normal tag bounds and the following ECS observation fails, recovery follows this sequence:
+When startup pinning produces a range different from the normal tag bounds, the following ECS observation fails, and the next cycle observes positive desiredCount, processing follows this sequence:
 
 ```mermaid
 sequenceDiagram
-    participant R as reconciler
-    participant A as EcsServiceTarget
-    participant E as ECS
-    participant S as Application Auto Scaling
-    Note over R,S: First cycle (initialization in progress)
-    A->>S: RegisterScalableTarget(min=D, max=D, S=true)
-    S-->>A: Success
-    A->>E: DescribeServices(cluster, service)
-    E-->>A: Error
-    A-->>R: Error (pinned range retained)
-    R->>R: Record error (no action notification)
-    Note over R,S: Next successful cycle
-    R->>A: Describe(resource with current tags)
-    A->>E: DescribeServices(cluster, service)
-    E-->>A: Current task counts
-    A->>S: DescribeScalableTargets(service target)
-    S-->>A: Positive fixed range, S=true
-    A-->>R: Observation with NeedsStart=true
-    R->>A: Start(resource with current tags)
-    Note over A,S: Repeat startup initialization sequence<br/>Apply only necessary pinning, count, and final settings
-    A-->>R: nil
-    R->>R: Record action and notify if configured
+    participant Reconciler as reconciler
+    participant Adapter as EcsServiceTarget
+    participant EcsAPI as ECS
+    participant AutoScaling as Application Auto Scaling
+    Note over Reconciler,AutoScaling: First cycle (initialization in progress)
+    Adapter->>AutoScaling: RegisterScalableTarget(MinCapacity and MaxCapacity set to<br/>cheapskate/desired-count tag value, ScheduledScalingSuspended=true)
+    AutoScaling-->>Adapter: Success
+    Adapter->>EcsAPI: DescribeServices(cluster, service)
+    EcsAPI-->>Adapter: Error
+    Adapter-->>Reconciler: Error (pinned range retained)
+    Reconciler->>Reconciler: Record error (no action notification)
+    Note over Reconciler,AutoScaling: Next successful cycle
+    Reconciler->>Adapter: Describe(resource with current tags)
+    Adapter->>EcsAPI: DescribeServices(cluster, service)
+    EcsAPI-->>Adapter: Positive desiredCount, tasks starting or running
+    Adapter->>AutoScaling: DescribeScalableTargets(service target)
+    AutoScaling-->>Adapter: Positive fixed range, ScheduledScalingSuspended=true
+    Adapter-->>Reconciler: Observation with NeedsStart=true
+    Reconciler->>Adapter: Start(resource with current tags)
+    Note over Adapter,AutoScaling: Run configuration repair<br/>Apply normal bounds and suspension request without resetting startup capacity
+    Adapter-->>Reconciler: nil
+    Reconciler->>Reconciler: Record action and notify if configured
 ```
 
-A true suspension request alone is not evidence of incomplete startup. Failure states and subsequent repairs are:
+No execution phase is stored. Each cycle chooses operations from configuration and observations. Failure states and subsequent repairs are:
 
 | Remaining state | Later cycle |
 | --- | --- |
-| Stop configuration not applied | Repair bounds or S differences |
-| Incomplete startup range | Initialize using current D, L/U, and P |
-| L=U=D with only S differing from the request | Repair the flag difference |
-| Final response lost, P=true, normal settings match | No additional operation |
-| Final response lost, P=false, Scheduled Scaling subsequently changed bounds | Preserve the changed range |
+| Stop configuration not applied | Repair AWS bounds or ScheduledScalingSuspended differences |
+| All task counts zero or bounds 0/0 | Run startup initialization |
+| Positive desiredCount and a suspended positive fixed range | Apply normal bounds and suspension request; retain applied capacity within those bounds |
+| Normal bounds equal startup count, with only the suspension flag differing | Apply normal bounds and suspension request |
+| Final response lost, cheapskate/scheduled-scaling-paused=true, normal settings match | No additional operation |
+| Final response lost, cheapskate/scheduled-scaling-paused=false, Scheduled Scaling subsequently changed bounds | Preserve the changed range |
 
 An invocation holding an old snapshot can apply an old request. A successful later cycle converges to the latest request after the old invocation finishes. Disabling management, exiting management, and stopping execution of cheapskate itself do not restore applied AWS flags or bounds.
 

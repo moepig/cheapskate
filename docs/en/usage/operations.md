@@ -1,49 +1,81 @@
-# Operations
+# Daily operations
 
-`cheapskate-cli` and the web console use the same validation and conditional-write service.
+This document provides procedures for checking configuration and current state, changing schedules, temporarily starting or stopping resources, changing ECS settings, and ending management.
 
-## CLI
+## Inspecting configuration and current state
 
-The global options are `-table <name>` and `-output text|json`.
+Set the CLI table and time zone, then inspect configuration and resources:
 
-```console
+```sh
+export CHEAPSKATE_TABLE=cheapskate
+export DEFAULT_TIMEZONE=Asia/Tokyo
 cheapskate-cli list
-cheapskate-cli show --group dev
-cheapskate-cli schedule --group dev -start '0 8 * * 1-5' -stop '0 20 * * 1-5'
-cheapskate-cli override --group dev running
-cheapskate-cli override --group dev stopped -for 2h
-cheapskate-cli override --group dev disabled
-cheapskate-cli clear-override --group dev
-cheapskate-cli remove --group dev
+cheapskate-cli -output json show --group dev
 ```
 
-`schedule` creates a group when absent or changes only its two cron attributes. An indefinite `override` can also create a group and changes only override attributes. A timed override requires an existing schedule. `clear-override` also requires a schedule. `remove` conditionally deletes the complete group item.
+List displays stored configuration. Show displays member configuration tags and current AWS state without changing resources or waiting for transitions. A resource with live_error failed inspection.
 
-Every change first performs a strongly consistent read and checks unknown attributes and attribute types. Schedule, override, and clear-override validate the complete resulting group. Remove deletes a decodable item without validating cron expressions or cross-attribute invariants. A schedule change is rejected while an expired override remains because the resulting expiry is in the past; clear or replace that override first.
+For browser operations, see [Web console](web_console.md). For arguments and output formats, see [CLI reference](cli.md).
 
-A conditional-write conflict is returned without an automatic retry. Changes to schedule and override attributes preserve each other; two writes to the same attribute use DynamoDB's last-applied value.
+## Registering or changing a schedule
 
-Do not delete and recreate a group under the same name concurrently with another configuration change. Write conditions check attribute existence only, so a stale request can change or delete the recreated group.
+For weekday operation from 09:00 to 18:00, use:
 
-Exit codes are:
+```console
+cheapskate-cli schedule --group dev -start '0 9 * * 1-5' -stop '0 18 * * 1-5'
+```
 
-| Code | Meaning |
-| --- | --- |
-| `0` | Success |
-| `1` | Arguments, AWS, DynamoDB, or internal failure |
-| `2` | Invalid stored group or conditional-write conflict |
+This creates an absent group. Existing overrides remain and take precedence while active. Clear or replace an expired override before changing the schedule.
 
-Text `list` writes valid groups to stdout and invalid rows to stderr. When the list read succeeds, JSON list writes one complete object containing groups and errors to stdout. A failure of the read itself goes to stderr and returns exit code 1. Either form exits with code 2 when an invalid row exists. JSON `show` emits a structured error object for invalid stored data and returns code 2.
+## Temporary changes with overrides
 
-Validation failure of a proposed group change returns exit code 1.
+An override changes the running/stopped request or pauses control while retaining the schedule.
 
-Show returns exit code 0 even when individual resource Describe calls fail. JSON includes the cause in each affected resource’s live_error, so inspect observations rather than exit status alone before ending management. CLI expiry timestamps use UTC RFC 3339 regardless of DEFAULT_TIMEZONE.
+### Extending a running period
 
-## ECS task count limit
+To keep a scheduled dev group running for two hours:
 
-Register a Number attribute named `ecs_max_count` on the group item before allowing ECS starts. This limit applies to both desired count and scaling maximum for each ECS service and is stored independently of resource tags. Existing ECS groups also require this attribute. See [DynamoDB data model](../architecture/database.md) for its constraints.
+```console
+cheapskate-cli override --group dev running -for 2h
+```
 
-For example, register a limit of 4 on an existing dev group:
+At expiration, the schedule's state at that time takes over. Timed overrides require a schedule.
+
+### Keeping resources stopped
+
+To request an indefinite stop:
+
+```console
+cheapskate-cli override --group dev stopped
+```
+
+### Pausing automatic control
+
+To allow manual resource changes without automatic control:
+
+```console
+cheapskate-cli override --group dev disabled
+```
+
+Disabled does not itself change AWS resources; it suppresses subsequent inspection and changes.
+
+### Returning to the schedule
+
+To clear the override:
+
+```console
+cheapskate-cli clear-override --group dev
+```
+
+An override-only group cannot clear its override. Add a schedule first or replace the override. For stored-item examples, see [CLI group configuration examples](cli_records.md).
+
+## ECS configuration changes
+
+ECS settings are split between a group limit in DynamoDB and tags on the service. For meanings and application timing, see [ECS startup, shutdown, and scaling](ecs.md).
+
+### Registering an ECS capacity limit
+
+Before allowing startup, register a Number ecs_max_count on the group item. To set a limit of 4 on an existing dev group:
 
 ```sh
 aws dynamodb update-item \
@@ -54,43 +86,33 @@ aws dynamodb update-item \
   --condition-expression 'attribute_exists(pk)'
 ```
 
-Manage this attribute through DynamoDB or IaC. Schedule, override, and clear-override operations in the CLI and web console preserve it. CLI list/show and the web console's detail page display the saved limit.
+CLI and web-console schedule and override operations retain this value. For constraints, see [Group configuration](group_config.md#ecs-capacity-limit).
 
-Scheduled action bounds do not pass through the `ecs_max_count` check. This attribute is not an absolute limit on Scheduled Scaling capacity; also review the bounds of each scheduled action.
+### Suspending and resuming Scheduled Scaling
 
-## ECS Scheduled Scaling suspension
+To suspend, set the service's cheapskate/scheduled-scaling-paused tag to true and confirm ScheduledScalingSuspended=true after a successful cycle.
 
-Set `cheapskate/scheduled-scaling-paused=true` on the ECS service to keep Scheduled Scaling suspended while the service is running. The request persists across service starts and stops. See [Resource tags](resource_tag.md#scheduled-scaling-suspension) for the relationship between this tag and the AWS flag.
+Before resuming, confirm that cheapskate/scaling-min and cheapskate/scaling-max specify the intended normal range. Resuming applies those bounds, and AWS adjusts capacity outside the range. To resume:
 
-To clear a persistent suspension request:
+1. Set cheapskate/scheduled-scaling-paused to false or remove it.
+2. Set the group's request to running.
+3. After a successful cycle, inspect show or the web console for ScheduledScalingSuspended=false and normal bounds.
 
-1. Set the tag to `false` or remove it.
-2. Set the desired ECS service state to `running`.
-3. After a successful reconcile, confirm `ScheduledScalingSuspended=false` using JSON `show` output or the web console's live observation.
+A stopped request keeps AWS suspension enabled even after clearing the tag. Scheduled actions whose execution time passed during suspension are not replayed.
 
-While the group desires the ECS service stopped, clearing the tag still leaves the AWS flag `true`. Resuming does not replay scheduled actions whose execution time passed during suspension; only future actions run. See [AWS resume behavior](https://docs.aws.amazon.com/autoscaling/application/userguide/application-auto-scaling-suspend-resume-scaling.html).
+## Ending management
 
-Tag changes take effect in a successful reconcile. Invocations with an older configuration snapshot may apply older requests. The AWS flag prevents new scheduled actions from starting; it does not cancel operations already underway.
+First choose the running/stopped state and ECS Scheduled Scaling state to retain. For a running ECS service, set the intended normal bounds in tags and request false suspension to enable Scheduled Scaling, or true to keep it suspended. A stopped service retains bounds 0/0 and suspension.
 
-Stopping execution of cheapskate itself does not change the ECS service or the AWS flag. Applied AWS settings remain, but tag changes and external AWS changes cannot be reconciled until execution resumes.
+To end management:
 
-To retain an existing AWS suspension, set the tag to `true` before deploying a version with suspension control; the default for an absent tag is `false`. An existing suspended positive fixed range that differs from the normal tag bounds is treated as incomplete startup. Declare that range in the normal bounds tags or verify that reinitializing startup capacity is acceptable.
-
-## Web console
-
-The web console provides group list and detail pages plus schedule and override forms. Detail pages show `cheapskate:group=<group>`, ECS configuration tags, and current read-only observations. Dates are displayed and parsed in `DEFAULT_TIMEZONE`. A write conflict returns HTTP 409. The detail form initializes Until to two hours after page rendering; clear it to set an indefinite override. The index override form creates indefinite overrides.
-
-## Safely ending management
-
-To exit management with ECS Scheduled Scaling enabled, clear the suspension request before this sequence and select a `running` override. To exit with a running service and Scheduled Scaling suspended, set the tag to `true`. Exiting with the ECS service stopped leaves the AWS flag `true` regardless of the tag. Disabling management, removing membership tags, or removing the group does not restore AWS flags or bounds.
-
-To leave resources in a known state:
-
-1. Set an indefinite `running` or `stopped` override.
+1. Set an indefinite running or stopped override.
 2. Wait at least one configured reconciler Lambda timeout after the write completes.
 3. Invoke the reconciler manually or wait for the next periodic invocation.
-4. Use `show` to confirm that every resource is stable in the selected state. For ECS, also inspect the AWS suspension flag and bounds in JSON live.Detail or the web console.
-5. Remove the membership tags from the resources.
-6. Remove the group.
+4. Use show to confirm every resource is stable in the selected state. For ECS, also inspect bounds and ScheduledScalingSuspended in live.Detail.
+5. Remove cheapskate:group from the resources.
+6. Delete the group with cheapskate-cli remove --group <group-name>.
 
-Do not change that group again during this sequence. Waiting lets invocations that read older configuration finish before management ends.
+Do not change the group during this sequence. Waiting allows invocations holding older configuration to finish before confirming the final state. Deleting a group does not itself change AWS resources.
+
+For Terraform-managed groups, change and delete configuration through Terraform. See [Terraform group configuration](terraform_records.md).

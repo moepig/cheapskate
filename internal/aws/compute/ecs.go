@@ -31,7 +31,7 @@ type AutoScalingAPI interface {
 
 // ECS サービスの起動規模と Scheduled Scaling の一時停止をリソースタグから制御する。
 // 停止時は scalable target の上下限を 0/0 とし、Scheduled Scaling を一時停止する。
-// 起動の初期設定後は、一時停止要求が true の間だけタグの通常の上下限を維持する。
+// 起動の初期設定と一時停止解除で通常の上下限を適用し、一時停止要求が true の間はその範囲を維持する。
 type EcsServiceTarget struct {
 	Ecs         EcsAPI
 	AutoScaling AutoScalingAPI
@@ -66,7 +66,7 @@ func (t *EcsServiceTarget) Describe(ctx context.Context, res model.Resource) (mo
 	if scalable != nil {
 		paused := ecsScheduledScalingPaused(scalable)
 		observation.Detail += fmt.Sprintf(" minCapacity=%d maxCapacity=%d ScheduledScalingSuspended=%t", aws.ToInt32(scalable.MinCapacity), aws.ToInt32(scalable.MaxCapacity), paused)
-		observation.NeedsStart = ecsNeedsInitialization(current, scalable, config) || paused != config.paused || (config.paused && !ecsBoundsEqual(scalable, config.minimum, config.maximum))
+		observation.NeedsStart = ecsNeedsInitialization(current, scalable) || paused != config.paused || (config.paused && !ecsBoundsEqual(scalable, config.minimum, config.maximum))
 		observation.NeedsStop = !ecsBoundsEqual(scalable, 0, 0) || !paused
 	}
 	return observation, nil
@@ -131,12 +131,15 @@ func (t *EcsServiceTarget) Start(ctx context.Context, res model.Resource) error 
 	if err != nil {
 		return err
 	}
-	if scalable != nil && !ecsNeedsInitialization(current, scalable, config) {
+	if !ecsNeedsInitialization(current, scalable) {
+		if scalable == nil {
+			return nil
+		}
 		if config.paused && (!ecsScheduledScalingPaused(scalable) || !ecsBoundsEqual(scalable, config.minimum, config.maximum)) {
 			return t.register(ctx, cluster, service, &config.minimum, &config.maximum, true)
 		}
 		if !config.paused && ecsScheduledScalingPaused(scalable) {
-			return t.register(ctx, cluster, service, nil, nil, false)
+			return t.register(ctx, cluster, service, &config.minimum, &config.maximum, false)
 		}
 		return nil
 	}
@@ -192,13 +195,10 @@ func ecsBoundsEqual(scalable *aastypes.ScalableTarget, minimum, maximum int32) b
 	return aws.ToInt32(scalable.MinCapacity) == minimum && aws.ToInt32(scalable.MaxCapacity) == maximum
 }
 
-// 停止状態、上下限 0/0、または通常のタグ範囲と異なる一時停止中の正の固定範囲を、起動の初期設定対象とする。
-func ecsNeedsInitialization(service *ecstypes.Service, scalable *aastypes.ScalableTarget, config ecsConfig) bool {
-	if ecsServiceState(service.DesiredCount, service.RunningCount, service.PendingCount) == model.StateStopped || ecsBoundsEqual(scalable, 0, 0) {
-		return true
-	}
-	minimum, maximum := aws.ToInt32(scalable.MinCapacity), aws.ToInt32(scalable.MaxCapacity)
-	return ecsScheduledScalingPaused(scalable) && minimum > 0 && minimum == maximum && !ecsBoundsEqual(scalable, config.minimum, config.maximum)
+// 停止状態または上下限 0/0 を、起動台数の初期設定対象とする。
+func ecsNeedsInitialization(service *ecstypes.Service, scalable *aastypes.ScalableTarget) bool {
+	return ecsServiceState(service.DesiredCount, service.RunningCount, service.PendingCount) == model.StateStopped ||
+		(scalable != nil && ecsBoundsEqual(scalable, 0, 0))
 }
 
 type ecsConfig struct {
