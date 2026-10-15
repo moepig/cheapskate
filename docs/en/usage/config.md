@@ -15,13 +15,16 @@ An invalid DEFAULT_TIMEZONE prevents the reconciler and web console from startin
 
 ## Reconciler
 
-Notification and metrics settings are:
+Logging, notification, and metrics settings are:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
+| LOG_LEVEL | info | Minimum log level: debug, info, warn, or error |
 | NOTIFICATION_TOPIC_ARN | Empty | SNS destination for successful actions |
 | METRICS_ENABLED | false | Emit custom metrics when true |
 | METRICS_NAMESPACE | cheapskate | Custom metric namespace |
+
+LOG_LEVEL is case-insensitive and defaults to info when empty. An unparseable value prevents startup.
 
 An unparseable METRICS_ENABLED prevents startup. Empty METRICS_NAMESPACE selects cheapskate. For emitted data, see [Logs, metrics, and notifications](monitoring.md).
 

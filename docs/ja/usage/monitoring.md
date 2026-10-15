@@ -16,16 +16,22 @@ cheapskate-cli -table cheapskate -output json show --group dev
 
 reconciler と Web コンソールは構造化ログを stderr に出力する。reconciler の主なレコードを、以下に示す。
 
-| レコード | 内容 |
-| --- | --- |
-| summary | 状態確認に到達したリソース数、成功した操作数、グループ・リソースのエラー数 |
-| action | 成功した起動・停止または ECS 設定の修復 |
-| group-error | グループ設定のエラー |
-| resource-error | 個別リソースの状態確認・操作エラー |
+| レコード | レベル | 内容 |
+| --- | --- | --- |
+| step-started | debug | step で識別する処理の開始 |
+| step-finished | debug | 処理の終了。success と、失敗時の error を含む |
+| resource-discovered | debug | 検索で検出されたリソースの group、resource_id、resource_arn、resource_type |
+| summary | info | 状態確認に到達したリソース数、成功した操作数、グループ・リソースのエラー数 |
+| action-started | info | 起動・停止または ECS 設定の修復を要求する直前のリソース、action、desired、observed |
+| action | info | 成功した起動・停止または ECS 設定の修復 |
+| group-error | error | グループ設定のエラー |
+| resource-error | error | 個別リソースの状態確認・操作エラー |
 
-該当するレコードには group、resource_id、desired、action、error を含む。DynamoDB に操作・エラー履歴を保存しないため、継続的な記録にはログを使用する。
+LOG_LEVEL=debug を指定すると、サイクル全体、グループ設定の読み込み、要求状態の解決、リソース検索、リソース処理全体、状態確認、操作判定、操作適用、および通知の開始・終了を出力する。通知は試行ごとに attempt を含む。リソース検索の終了には検出件数 resources を含み、0 件の場合も記録する。resource-discovered は ARN 順に出力し、無効なグループや disabled のために処理対象から外れるリソースも含む。
 
-全グループとタグ付きリソースの読み込みを完了したサイクルは、最後に summary を出力する。全体の読み込みに失敗した場合は summary を出力せず、Lambda 呼び出しがエラーとなる。個別グループやリソースの失敗では Lambda 呼び出し自体は成功するため、summary のエラー数も確認すること。
+該当するレコードには group、resource_id、desired、action、error を含む。action-started と action は resource_arn と resource_type も含む。操作に失敗した場合も action-started は残るが、action は出力しない。DynamoDB に操作・エラー履歴を保存しないため、継続的な記録にはログを使用する。
+
+全グループとタグ付きリソースの読み込みを完了したサイクルは、リソース処理後に summary を出力する。全体の読み込みに失敗した場合は summary を出力せず、Lambda 呼び出しがエラーとなる。個別グループやリソースの失敗では Lambda 呼び出し自体は成功するため、summary のエラー数も確認すること。
 
 ## CloudWatch メトリクス
 

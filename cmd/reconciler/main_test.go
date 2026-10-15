@@ -36,3 +36,34 @@ func TestInvalidMetricsSettingIsRejected(t *testing.T) {
 
 	assert.ErrorContains(t, err, "invalid METRICS_ENABLED")
 }
+
+func TestLogLevel(t *testing.T) {
+	for _, test := range []struct {
+		value string
+		want  slog.Level
+	}{
+		{"", slog.LevelInfo},
+		{"debug", slog.LevelDebug},
+		{"DEBUG", slog.LevelDebug},
+		{"info", slog.LevelInfo},
+		{"warn", slog.LevelWarn},
+		{"error", slog.LevelError},
+	} {
+		t.Run("level="+test.value, func(t *testing.T) {
+			t.Setenv("LOG_LEVEL", test.value)
+
+			level, err := logLevel()
+
+			assert.NoError(t, err)
+			assert.Equal(t, test.want, level)
+		})
+	}
+}
+
+func TestInvalidLogLevelIsRejected(t *testing.T) {
+	t.Setenv("LOG_LEVEL", "verbose")
+
+	_, err := logLevel()
+
+	assert.ErrorContains(t, err, "invalid LOG_LEVEL")
+}

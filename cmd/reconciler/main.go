@@ -52,6 +52,16 @@ func metricsEmitter(logger *slog.Logger) (cloudwatch.Emitter, error) {
 	return cloudwatch.Emitter{Log: logger, Namespace: namespace, Enabled: enabled}, nil
 }
 
+func logLevel() (slog.Level, error) {
+	level := slog.LevelInfo
+	if raw := os.Getenv("LOG_LEVEL"); raw != "" {
+		if err := level.UnmarshalText([]byte(raw)); err != nil {
+			return level, fmt.Errorf("invalid LOG_LEVEL %q: %w", raw, err)
+		}
+	}
+	return level, nil
+}
+
 func main() {
 	cfg, err := config.LoadDefaultConfig(context.Background())
 	if err != nil {
@@ -71,7 +81,11 @@ func main() {
 		log.Fatalf("invalid DEFAULT_TIMEZONE %q: %v", defaultTimezone, err)
 	}
 
-	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	level, err := logLevel()
+	if err != nil {
+		log.Fatal(err)
+	}
+	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
 	metrics, err := metricsEmitter(logger)
 	if err != nil {
 		log.Fatal(err)

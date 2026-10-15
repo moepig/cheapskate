@@ -46,23 +46,29 @@ type Summary struct {
 const maxNotificationAttempts = 2
 
 // Run は payload の内容にかかわらず full reconcile を実行する。
-func Run(ctx context.Context, _ json.RawMessage, deps *Deps, now time.Time) (Summary, error) {
+func Run(ctx context.Context, _ json.RawMessage, deps *Deps, now time.Time) (summary Summary, runErr error) {
 	log := deps.Log
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
+	finishRun := startStep(ctx, log, "reconcile")
+	defer func() { finishRun(runErr) }()
+
+	finishLoadGroups := startStep(ctx, log, "load-groups")
 	rows, err := deps.Store.ListGroups(ctx)
+	finishLoadGroups(err, "groups", len(rows))
 	if err != nil {
 		return Summary{}, err
 	}
 
+	finishResolveDesired := startStep(ctx, log, "resolve-desired")
 	type resolvedGroup struct {
 		group   model.GroupSpec
 		desired model.DesiredState
 		err     error
 	}
 	groups := make(map[string]resolvedGroup, len(rows))
-	summary := Summary{Actions: []Result{}, Errors: []Result{}}
+	summary = Summary{Actions: []Result{}, Errors: []Result{}}
 	for _, row := range rows {
 		resolved := resolvedGroup{group: row.Group, err: row.Err}
 		if resolved.err == nil {
@@ -75,9 +81,12 @@ func Run(ctx context.Context, _ json.RawMessage, deps *Deps, now time.Time) (Sum
 			log.Error("group-error", "group", row.Name, "error", resolved.err.Error())
 		}
 	}
+	finishResolveDesired(nil, "groups", len(groups), "errors", len(summary.Errors))
 
+	finishDiscovery := startStep(ctx, log, "discover-resources")
 	discovered, err := deps.Discoverer.Discover(ctx)
 	if err != nil {
+		finishDiscovery(err)
 		return Summary{}, fmt.Errorf("discover resources: %w", err)
 	}
 	resources := make([]model.Resource, 0, len(discovered))
@@ -85,10 +94,16 @@ func Run(ctx context.Context, _ json.RawMessage, deps *Deps, now time.Time) (Sum
 		resources = append(resources, resource)
 	}
 	sort.Slice(resources, func(i, j int) bool { return resources[i].ARN < resources[j].ARN })
+	for _, resource := range resources {
+		log.DebugContext(ctx, "resource-discovered", "group", resource.Tags[model.GroupTagKey], "resource_id", resource.ID(), "resource_arn", resource.ARN, "resource_type", resource.Type)
+	}
+	finishDiscovery(nil, "resources", len(resources))
 
+	finishResources := startStep(ctx, log, "reconcile-resources")
 	for _, resource := range resources {
 		groupName := resource.Tags[model.GroupTagKey]
 		result := Result{Group: groupName, ResourceID: resource.ID()}
+		resourceLog := log.With("group", groupName, "resource_id", result.ResourceID, "resource_arn", resource.ARN, "resource_type", resource.Type)
 		if groupName == "" {
 			result.Error = fmt.Sprintf("resource %s has an empty %s tag", resource.ARN, model.GroupTagKey)
 			summary.Errors = append(summary.Errors, result)
@@ -129,7 +144,9 @@ func Run(ctx context.Context, _ json.RawMessage, deps *Deps, now time.Time) (Sum
 		}
 		resource.EcsMaxCount = group.group.EcsMaxCount
 		summary.Reconciled++
+		finishDescribe := startStep(ctx, resourceLog, "describe-resource")
 		observation, err := target.Describe(ctx, resource)
+		finishDescribe(err, "observed", observation.State, "needs_start", observation.NeedsStart, "needs_stop", observation.NeedsStop, "detail", observation.Detail)
 		if err != nil {
 			result.Error = fmt.Sprintf("resource %s: describe: %v", resource.ARN, err)
 			summary.Errors = append(summary.Errors, result)
@@ -138,6 +155,7 @@ func Run(ctx context.Context, _ json.RawMessage, deps *Deps, now time.Time) (Sum
 		}
 		result.Desired = group.desired
 		result.Observed = observation.State
+		finishDecision := startStep(ctx, resourceLog, "decide-action", "desired", group.desired, "observed", observation.State)
 		action := model.DecideAction(group.desired, observation.State)
 		if action == model.ActionNone && group.desired == model.DesiredRunning && observation.NeedsStart {
 			action = model.ActionStart
@@ -145,6 +163,7 @@ func Run(ctx context.Context, _ json.RawMessage, deps *Deps, now time.Time) (Sum
 		if action == model.ActionNone && group.desired == model.DesiredStopped && observation.NeedsStop {
 			action = model.ActionStop
 		}
+		finishDecision(nil, "action", action)
 		if action == model.ActionNone {
 			if observation.State == model.StateTransitioning || observation.State == model.StateNotFound {
 				result.Skipped = string(observation.State)
@@ -152,7 +171,11 @@ func Run(ctx context.Context, _ json.RawMessage, deps *Deps, now time.Time) (Sum
 			}
 			continue
 		}
-		if err := performAction(ctx, resource, action, target); err != nil {
+		finishAction := startStep(ctx, resourceLog, "apply-action", "action", action)
+		resourceLog.InfoContext(ctx, "action-started", "action", action, "desired", group.desired, "observed", observation.State)
+		err = performAction(ctx, resource, action, target)
+		finishAction(err)
+		if err != nil {
 			result.Error = fmt.Sprintf("resource %s: %s: %v", resource.ARN, action, err)
 			summary.Errors = append(summary.Errors, result)
 			logResultError(log, result)
@@ -161,12 +184,25 @@ func Run(ctx context.Context, _ json.RawMessage, deps *Deps, now time.Time) (Sum
 		result.Action = action
 		summary.Actions = append(summary.Actions, result)
 		at := now.UTC().Format(time.RFC3339)
-		log.Info("action", "group", groupName, "resource_id", result.ResourceID, "action", action, "desired", group.desired, "at", at)
+		resourceLog.InfoContext(ctx, "action", "action", action, "desired", group.desired, "at", at)
 		deliverActionNotification(ctx, deps.Notifier, log, groupName, result.ResourceID, action, group.desired, at)
 	}
+	finishResources(nil, "reconciled", summary.Reconciled, "actions", len(summary.Actions), "errors", len(summary.Errors))
 
 	log.Info("summary", "reconciled", summary.Reconciled, "actions", len(summary.Actions), "errors", len(summary.Errors))
 	return summary, nil
+}
+
+func startStep(ctx context.Context, log *slog.Logger, step string, args ...any) func(error, ...any) {
+	stepLog := log.With("step", step).With(args...)
+	stepLog.DebugContext(ctx, "step-started")
+	return func(err error, args ...any) {
+		args = append(args, "success", err == nil)
+		if err != nil {
+			args = append(args, "error", err.Error())
+		}
+		stepLog.DebugContext(ctx, "step-finished", args...)
+	}
 }
 
 func performAction(ctx context.Context, resource model.Resource, action model.Action, target port.Target) error {
@@ -189,7 +225,10 @@ func deliverActionNotification(ctx context.Context, notifier port.Notifier, log 
 	}
 	subject := fmt.Sprintf("[cheapskate] %s: %s/%s", action, group, resourceID)
 	for attempt := 1; attempt <= maxNotificationAttempts; attempt++ {
-		if err := notifier.Publish(ctx, subject, payload); err == nil {
+		finishNotification := startStep(ctx, log, "notify-action", "group", group, "resource_id", resourceID, "action", action, "attempt", attempt)
+		err := notifier.Publish(ctx, subject, payload)
+		finishNotification(err)
+		if err == nil {
 			return
 		} else {
 			log.Error("action-notify-failed", "group", group, "resource_id", resourceID, "attempt", attempt, "error", err.Error())

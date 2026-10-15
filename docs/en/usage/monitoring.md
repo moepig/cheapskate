@@ -16,16 +16,22 @@ cheapskate-cli -table cheapskate -output json show --group dev
 
 The reconciler and web console emit structured logs to stderr. Principal reconciler records are:
 
-| Record | Content |
-| --- | --- |
-| summary | Resources inspected, successful operations, and group/resource error counts |
-| action | Successful start, stop, or ECS configuration repair |
-| group-error | Group configuration failure |
-| resource-error | Resource inspection or operation failure |
+| Record | Level | Content |
+| --- | --- | --- |
+| step-started | debug | Start of the operation identified by step |
+| step-finished | debug | End of the operation, including success and error on failure |
+| resource-discovered | debug | Discovered resource's group, resource_id, resource_arn, and resource_type |
+| summary | info | Resources inspected, successful operations, and group/resource error counts |
+| action-started | info | Resource, action, desired, and observed immediately before requesting a start, stop, or ECS configuration repair |
+| action | info | Successful start, stop, or ECS configuration repair |
+| group-error | error | Group configuration failure |
+| resource-error | error | Resource inspection or operation failure |
 
-Records include group, resource_id, desired, action, and error where applicable. Logs provide the ongoing operational record; DynamoDB stores no operation or error history.
+Set LOG_LEVEL=debug to log the start and end of the cycle, group reads, desired-state resolution, resource discovery, overall resource processing, resource inspection, action decisions, action application, and notifications. Notifications include attempt for each publish attempt. Discovery completion includes the resources count, even when zero. resource-discovered records appear in ARN order and include resources excluded from processing because of invalid or disabled groups.
 
-A cycle that completes group reads and resource discovery ends with summary. A global read failure returns a Lambda error without summary. Individual group and resource failures do not fail the Lambda invocation, so inspect summary error counts as well.
+Records include group, resource_id, desired, action, and error where applicable. action-started and action also include resource_arn and resource_type. Failed operations retain action-started without emitting action. Logs provide the ongoing operational record; DynamoDB stores no operation or error history.
+
+A cycle that completes group reads and resource discovery emits summary after resource processing. A global read failure returns a Lambda error without summary. Individual group and resource failures do not fail the Lambda invocation, so inspect summary error counts as well.
 
 ## CloudWatch metrics
 

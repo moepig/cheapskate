@@ -15,13 +15,16 @@ DEFAULT_TIMEZONE が不正な場合、reconciler と Web コンソールは起�
 
 ## reconciler
 
-通知とメトリクスの変数を、以下に示す。
+ログ、通知、およびメトリクスの変数を、以下に示す。
 
 | 変数 | 既定値 | 用途 |
 | --- | --- | --- |
+| LOG_LEVEL | info | 最低ログレベル。debug、info、warn、error を指定可能 |
 | NOTIFICATION_TOPIC_ARN | 空 | 成功したアクションの SNS 通知先 |
 | METRICS_ENABLED | false | true の場合にカスタムメトリクスを出力 |
 | METRICS_NAMESPACE | cheapskate | カスタムメトリクスの namespace |
+
+LOG_LEVEL は大文字と小文字を区別せず、空の場合は info を使う。解釈できない値では起動に失敗する。
 
 METRICS_ENABLED を真偽値として解釈できない場合は起動に失敗する。METRICS_NAMESPACE が空の場合は cheapskate を使う。出力内容は、[ログ・メトリクス・通知](monitoring.md)を参照。
 
