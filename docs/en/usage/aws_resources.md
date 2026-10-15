@@ -21,11 +21,11 @@ cheapskate does not provision these resources automatically. For deployment step
 
 ## Policy prerequisites
 
-The examples manage existing resources in one account and Region. The actions, resource types, and condition keys were checked against the AWS Service Authorization Reference on 2026-10-15. Use deployment permissions to provision resources, publish images, and assign tags.
+The examples are identity policies for roles that manage existing resources in one account and Region. Use deployment permissions to provision resources, publish images, and assign tags.
 
 Replace PARTITION, REGION, and ACCOUNT with deployment values. The standard AWS partition is aws. TABLE is STATE_TABLE_NAME; GROUP is an allowed membership tag value. DB_INSTANCE, DB_CLUSTER, CLUSTER, SERVICE, and INSTANCE_ID are actual resource identifiers. SCALABLE_TARGET_ID is the suffix of an existing scalable target ARN. Replace FUNCTION_NAME and TOPIC with the Lambda function name and notification topic name.
 
-Enumerate the target ARNs in Resource, using an array for multiple resources. Enumerate allowed group names in the membership tag's StringEquals condition. Statements with a membership tag condition require both the ARN and tag value to match. Use separate statements when different groups must be restricted to different ARNs.
+Enumerate the target ARNs in Resource, using an array for multiple resources. Enumerate allowed group names in the membership tag's StringEquals condition. Statements with a membership tag condition stop allowing access when the tag is removed or changed to an unlisted group, even if the ARN still matches. Use separate statements when different groups must be restricted to different ARNs.
 
 Combine permissions by role as follows. Each complete JSON policy can be attached separately. Add examples containing a single statement to the appropriate role policy's Statement array.
 
@@ -45,13 +45,13 @@ The following table maps runtime actions to restrictions used in this deployment
 
 | Service | IAM actions and official references | Resource portion of the ARN | Condition or restriction used here |
 | --- | --- | --- | --- |
-| DynamoDB | [dynamodb:Query](https://docs.aws.amazon.com/service-authorization/latest/reference/list_dynamodb.html#list_dynamodb-action-Query), [dynamodb:GetItem](https://docs.aws.amazon.com/service-authorization/latest/reference/list_dynamodb.html#list_dynamodb-action-GetItem), [dynamodb:PutItem](https://docs.aws.amazon.com/service-authorization/latest/reference/list_dynamodb.html#list_dynamodb-action-PutItem), [dynamodb:UpdateItem](https://docs.aws.amazon.com/service-authorization/latest/reference/list_dynamodb.html#list_dynamodb-action-UpdateItem), [dynamodb:DeleteItem](https://docs.aws.amazon.com/service-authorization/latest/reference/list_dynamodb.html#list_dynamodb-action-DeleteItem) | table/TABLE | dynamodb:LeadingKeys=CONFIG, Null=false |
+| DynamoDB | [dynamodb:Query](https://docs.aws.amazon.com/service-authorization/latest/reference/list_dynamodb.html#list_dynamodb-action-Query), [dynamodb:GetItem](https://docs.aws.amazon.com/service-authorization/latest/reference/list_dynamodb.html#list_dynamodb-action-GetItem), [dynamodb:PutItem](https://docs.aws.amazon.com/service-authorization/latest/reference/list_dynamodb.html#list_dynamodb-action-PutItem), [dynamodb:UpdateItem](https://docs.aws.amazon.com/service-authorization/latest/reference/list_dynamodb.html#list_dynamodb-action-UpdateItem), [dynamodb:DeleteItem](https://docs.aws.amazon.com/service-authorization/latest/reference/list_dynamodb.html#list_dynamodb-action-DeleteItem) | table/TABLE | dynamodb:LeadingKeys=CONFIG |
 | Resource Groups Tagging API | [tag:GetResources](https://docs.aws.amazon.com/service-authorization/latest/reference/list_resourcegroupstaggingapi.html#list_resourcegroupstaggingapi-action-GetResources) | * | aws:RequestedRegion |
 | RDS DB instance | [rds:DescribeDBInstances](https://docs.aws.amazon.com/service-authorization/latest/reference/list_rds.html#list_rds-action-DescribeDBInstances), [rds:StartDBInstance](https://docs.aws.amazon.com/service-authorization/latest/reference/list_rds.html#list_rds-action-StartDBInstance), [rds:StopDBInstance](https://docs.aws.amazon.com/service-authorization/latest/reference/list_rds.html#list_rds-action-StopDBInstance) | db:DB_INSTANCE | aws:ResourceTag/cheapskate:group |
 | RDS DB cluster | [rds:DescribeDBClusters](https://docs.aws.amazon.com/service-authorization/latest/reference/list_rds.html#list_rds-action-DescribeDBClusters), [rds:StartDBCluster](https://docs.aws.amazon.com/service-authorization/latest/reference/list_rds.html#list_rds-action-StartDBCluster), [rds:StopDBCluster](https://docs.aws.amazon.com/service-authorization/latest/reference/list_rds.html#list_rds-action-StopDBCluster) | cluster:DB_CLUSTER | aws:ResourceTag/cheapskate:group |
-| ECS | [ecs:DescribeServices](https://docs.aws.amazon.com/service-authorization/latest/reference/list_ecs.html#list_ecs-action-DescribeServices), [ecs:UpdateService](https://docs.aws.amazon.com/service-authorization/latest/reference/list_ecs.html#list_ecs-action-UpdateService) | service/CLUSTER/SERVICE | aws:ResourceTag/cheapskate:group, ecs:cluster |
+| ECS | [ecs:DescribeServices](https://docs.aws.amazon.com/service-authorization/latest/reference/list_ecs.html#list_ecs-action-DescribeServices), [ecs:UpdateService](https://docs.aws.amazon.com/service-authorization/latest/reference/list_ecs.html#list_ecs-action-UpdateService) | service/CLUSTER/SERVICE | aws:ResourceTag/cheapskate:group |
 | Application Auto Scaling | [application-autoscaling:DescribeScalableTargets](https://docs.aws.amazon.com/service-authorization/latest/reference/list_application-autoscaling.html#list_application-autoscaling-action-DescribeScalableTargets) | * | aws:RequestedRegion |
-| Application Auto Scaling | [application-autoscaling:RegisterScalableTarget](https://docs.aws.amazon.com/service-authorization/latest/reference/list_application-autoscaling.html#list_application-autoscaling-action-RegisterScalableTarget) | scalable-target/SCALABLE_TARGET_ID | application-autoscaling:service-namespace, application-autoscaling:scalable-dimension |
+| Application Auto Scaling | [application-autoscaling:RegisterScalableTarget](https://docs.aws.amazon.com/service-authorization/latest/reference/list_application-autoscaling.html#list_application-autoscaling-action-RegisterScalableTarget) | scalable-target/SCALABLE_TARGET_ID | Exact scalable target ARN |
 | EC2 | [ec2:DescribeInstances](https://docs.aws.amazon.com/service-authorization/latest/reference/list_ec2.html#list_ec2-action-DescribeInstances) | * | aws:RequestedRegion |
 | EC2 | [ec2:StartInstances](https://docs.aws.amazon.com/service-authorization/latest/reference/list_ec2.html#list_ec2-action-StartInstances), [ec2:StopInstances](https://docs.aws.amazon.com/service-authorization/latest/reference/list_ec2.html#list_ec2-action-StopInstances) | instance/INSTANCE_ID | aws:ResourceTag/cheapskate:group |
 | SNS | [sns:Publish](https://docs.aws.amazon.com/service-authorization/latest/reference/list_sns.html#list_sns-action-Publish) | TOPIC | Exact topic ARN |
@@ -112,9 +112,6 @@ Attach this inspection policy to the reconciler, CLI credentials used for show, 
       "Action": "ecs:DescribeServices",
       "Resource": "arn:PARTITION:ecs:REGION:ACCOUNT:service/CLUSTER/SERVICE",
       "Condition": {
-        "ArnEquals": {
-          "ecs:cluster": "arn:PARTITION:ecs:REGION:ACCOUNT:cluster/CLUSTER"
-        },
         "StringEquals": {
           "aws:ResourceTag/cheapskate:group": [
             "GROUP"
@@ -126,11 +123,11 @@ Attach this inspection policy to the reconciler, CLI credentials used for show, 
 }
 ```
 
-tag:GetResources cannot be restricted by resource ARN or resource tags. The TagFilters and ResourceTypeFilters sent by cheapskate are query filters, not IAM restrictions. ec2:DescribeInstances also cannot be restricted by instance ARN or tags. application-autoscaling:DescribeScalableTargets does not support the namespace or dimension condition keys; do not copy the update operation's conditions onto this action.
+tag:GetResources cannot be restricted by resource ARN or resource tags. The TagFilters and ResourceTypeFilters sent by cheapskate are query filters, not IAM restrictions. ec2:DescribeInstances also cannot be restricted by instance ARN or tags. application-autoscaling:DescribeScalableTargets does not support the namespace or dimension condition keys either.
 
-For these three actions, aws:RequestedRegion restricts the API endpoint Region. They can still expose information about unmanaged resources in that Region. This key generally limits the endpoint called, rather than the scope of an operation's effects. See [aws:RequestedRegion](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_condition-keys.html#condition-keys-requestedregion).
+For these three actions, aws:RequestedRegion restricts the API endpoint Region. They can still expose information about unmanaged resources in that Region. See [aws:RequestedRegion](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_condition-keys.html#condition-keys-requestedregion).
 
-RDS Describe requests specify a DB identifier in this deployment, allowing restriction by ARN and membership tag. ECS inspection and updates use the long service ARN and the service's own tags; ecs:cluster takes the cluster ARN. Cluster tags do not substitute for service tags.
+RDS Describe requests specify a DB identifier in this deployment, allowing restriction by ARN and membership tag. ECS inspection and updates identify the cluster and service through the long service ARN and require a matching membership tag on the service itself.
 
 ## Reconciler permissions
 
@@ -150,9 +147,6 @@ Add this policy for configuration reads and resource updates alongside shared re
           "dynamodb:LeadingKeys": [
             "CONFIG"
           ]
-        },
-        "Null": {
-          "dynamodb:LeadingKeys": "false"
         }
       }
     },
@@ -194,9 +188,6 @@ Add this policy for configuration reads and resource updates alongside shared re
       "Action": "ecs:UpdateService",
       "Resource": "arn:PARTITION:ecs:REGION:ACCOUNT:service/CLUSTER/SERVICE",
       "Condition": {
-        "ArnEquals": {
-          "ecs:cluster": "arn:PARTITION:ecs:REGION:ACCOUNT:cluster/CLUSTER"
-        },
         "StringEquals": {
           "aws:ResourceTag/cheapskate:group": [
             "GROUP"
@@ -208,13 +199,7 @@ Add this policy for configuration reads and resource updates alongside shared re
       "Sid": "UpdateManagedScalableTargets",
       "Effect": "Allow",
       "Action": "application-autoscaling:RegisterScalableTarget",
-      "Resource": "arn:PARTITION:application-autoscaling:REGION:ACCOUNT:scalable-target/SCALABLE_TARGET_ID",
-      "Condition": {
-        "StringEquals": {
-          "application-autoscaling:service-namespace": "ecs",
-          "application-autoscaling:scalable-dimension": "ecs:service:DesiredCount"
-        }
-      }
+      "Resource": "arn:PARTITION:application-autoscaling:REGION:ACCOUNT:scalable-target/SCALABLE_TARGET_ID"
     },
     {
       "Sid": "ControlManagedEc2Instances",
@@ -240,9 +225,9 @@ Add this policy for configuration reads and resource updates alongside shared re
 
 The reconciler queries only the CONFIG partition of the table. It needs no index ARN, Scan permission, or write permission.
 
-dynamodb:LeadingKeys is multivalued and requires ForAllValues:StringEquals. Null=false prevents ForAllValues from allowing a request when the key is absent. See [DynamoDB condition keys](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/specifying-conditions.html) and [IAM set operators](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_elements_condition_operators.html#Conditions_String).
+dynamodb:LeadingKeys is multivalued, so ForAllValues:StringEquals limits access to the CONFIG partition. The Query, GetItem, PutItem, UpdateItem, and DeleteItem operations allowed here all require a partition key. See [DynamoDB condition keys](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/specifying-conditions.html) and [Query key conditions](https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_Query.html).
 
-LeadingKeys restricts pk, not sk=GROUP#.... All groups share the CONFIG partition, so this condition cannot isolate individual groups. Query and GetItem read all attributes; requiring dynamodb:Select=SPECIFIC_ATTRIBUTES would be incompatible with current reads.
+LeadingKeys restricts pk, not sk=GROUP#.... All groups share the CONFIG partition, so this condition cannot isolate individual groups.
 
 ### RDS and EC2
 
@@ -264,7 +249,7 @@ aws application-autoscaling describe-scalable-targets \
   --output text
 ```
 
-Require service-namespace=ecs and scalable-dimension=ecs:service:DesiredCount for updates. Update the policy if recreating a scalable target changes its ARN. For an additional tag restriction, tag the scalable target itself with cheapskate:group, then add allowed aws:ResourceTag/cheapskate:group values to the same StringEquals condition. The ECS service's tag alone does not satisfy that condition. See [Application Auto Scaling tag access control](https://docs.aws.amazon.com/autoscaling/application/userguide/resource-tagging-support.html).
+A scalable target is uniquely identified by ResourceId, ServiceNamespace, and ScalableDimension. Setting Resource to the ARN returned by this command restricts updates to the scalable target for that service's desired count. Update the policy if recreating a scalable target changes its ARN.
 
 Provision scalable targets and AWSServiceRoleForApplicationAutoScaling_ECSService during deployment. The reconciler updates existing targets without sending RoleARN or Tags, so this use does not need iam:PassRole, iam:CreateServiceLinkedRole, or application-autoscaling:TagResource. See [RegisterScalableTarget parameters](https://docs.aws.amazon.com/autoscaling/application/APIReference/API_RegisterScalableTarget.html) and [Application Auto Scaling service-linked roles](https://docs.aws.amazon.com/autoscaling/application/userguide/application-auto-scaling-service-linked-roles.html).
 
@@ -294,9 +279,6 @@ Use this policy for configuration reads and writes. Add shared resource inspecti
           "dynamodb:LeadingKeys": [
             "CONFIG"
           ]
-        },
-        "Null": {
-          "dynamodb:LeadingKeys": "false"
         }
       }
     }
@@ -345,7 +327,7 @@ When NOTIFICATION_TOPIC_ARN is set, add this statement to the reconciler role:
 }
 ```
 
-Resource must match NOTIFICATION_TOPIC_ARN. The sns:Endpoint and sns:Protocol condition keys do not apply to Publish. Omit this statement when notifications are disabled.
+Resource must match NOTIFICATION_TOPIC_ARN. Omit this statement when notifications are disabled.
 
 ### SNS encryption
 
@@ -363,7 +345,6 @@ Publishing to an encrypted topic requires [kms:GenerateDataKey](https://docs.aws
   "Condition": {
     "StringEquals": {
       "kms:ViaService": "sns.REGION.amazonaws.com",
-      "kms:CallerAccount": "ACCOUNT",
       "kms:EncryptionContext:aws:sns:topicArn": "arn:PARTITION:sns:REGION:ACCOUNT:TOPIC"
     }
   }
@@ -374,7 +355,7 @@ For permissions and encryption context, see [SNS key management](https://docs.aw
 
 ### Starting instances with encrypted EBS volumes
 
-Starting EC2 instances with encrypted EBS volumes also requires [kms:CreateGrant](https://docs.aws.amazon.com/service-authorization/latest/reference/list_kms.html#list_kms-action-CreateGrant) on the keys in use. Set EBS_KEY_ID to the volume's key ID. This statement permits grants for decrypting existing volumes:
+Starting EC2 instances with encrypted EBS volumes also requires [kms:CreateGrant](https://docs.aws.amazon.com/service-authorization/latest/reference/list_kms.html#list_kms-action-CreateGrant) on the keys in use. Set EBS_KEY_ID to the volume's key ID and EBS_VOLUME_ID to its volume ID, including the vol- prefix. This statement permits EBS to create grants for decrypting the specified volumes:
 
 ```json
 {
@@ -385,28 +366,22 @@ Starting EC2 instances with encrypted EBS volumes also requires [kms:CreateGrant
   "Condition": {
     "StringEquals": {
       "kms:ViaService": "ec2.REGION.amazonaws.com",
-      "kms:CallerAccount": "ACCOUNT"
-    },
-    "Bool": {
-      "kms:GrantIsForAWSResource": "true"
+      "kms:EncryptionContext:aws:ebs:id": [
+        "EBS_VOLUME_ID"
+      ]
     },
     "ForAllValues:StringEquals": {
       "kms:GrantOperations": [
         "Decrypt"
-      ],
-      "kms:EncryptionContextKeys": [
-        "aws:ebs:id"
       ]
-    },
-    "Null": {
-      "kms:GrantOperations": "false",
-      "kms:EncryptionContextKeys": "false"
     }
   }
 }
 ```
 
-Only grants created through EC2 for AWS resources are allowed, with Decrypt as the grant operation and aws:ebs:id as the encryption context key. Null=false guards the multivalued conditions. These restrictions follow the [AWS Instance Scheduler example for encrypted EBS volumes](https://docs.aws.amazon.com/solutions/latest/instance-scheduler-on-aws/security-1.html#encrypted-ec2-ebs-volumes).
+The kms:ViaService value ec2.REGION.amazonaws.com identifies KMS calls through EBS. kms:GrantOperations allows only Decrypt, and kms:EncryptionContext:aws:ebs:id restricts the allowed volume IDs. This statement does not allow grants for other volumes encrypted with the same key. For multiple volumes, use a separate statement for each key and enumerate the managed volume IDs that use it. Update this list when adding or replacing volumes.
+
+CreateGrant requires Operations and rejects an empty operation list. See [kms:GrantOperations](https://docs.aws.amazon.com/kms/latest/developerguide/conditions-kms.html#conditions-kms-grant-operations), [EBS encryption context](https://docs.aws.amazon.com/kms/latest/developerguide/services-ebs.html), and the [EBS grant creation example](https://docs.aws.amazon.com/kms/latest/developerguide/ct-ec2two.html).
 
 ## Execution-role trust and periodic invocation
 
@@ -416,7 +391,9 @@ Configure role trust and Lambda invocation separately from resource operation pe
 | --- | --- | --- |
 | Reconciler / web Lambda execution-role trust policy | sts:AssumeRole for Principal.Service=lambda.amazonaws.com | Use a dedicated execution role for each function |
 | EventBridge Scheduler invocation role | lambda:InvokeFunction | Resource is the exact ARN of the reconciler function or alias being invoked |
-| Scheduler invocation-role trust policy | sts:AssumeRole for Principal.Service=scheduler.amazonaws.com | StringEquals aws:SourceAccount=ACCOUNT and ArnEquals aws:SourceArn=arn:PARTITION:scheduler:REGION:ACCOUNT:schedule-group/SCHEDULE_GROUP |
-| Lambda resource policy when using an EventBridge rule | lambda:InvokeFunction for Principal.Service=events.amazonaws.com | Exact function ARN; ArnLike aws:SourceArn to the rule ARN without wildcards and StringEquals aws:SourceAccount to ACCOUNT |
+| Scheduler invocation-role trust policy | sts:AssumeRole for Principal.Service=scheduler.amazonaws.com | ArnEquals aws:SourceArn=arn:PARTITION:scheduler:REGION:ACCOUNT:schedule-group/SCHEDULE_GROUP |
+| Lambda resource policy when using an EventBridge rule | lambda:InvokeFunction for Principal.Service=events.amazonaws.com | Exact function ARN; ArnLike aws:SourceArn=arn:PARTITION:events:REGION:ACCOUNT:rule/RULE_NAME |
+
+Set aws:SourceArn to a complete ARN including the account ID. This also restricts the source account. See [aws:SourceArn](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_condition-keys.html#condition-keys-sourcearn).
 
 For Scheduler, aws:SourceArn must be the schedule group ARN, rather than an individual schedule ARN. See [Scheduler trust policy conditions](https://docs.aws.amazon.com/scheduler/latest/UserGuide/cross-service-confused-deputy-prevention.html). For EventBridge rules and Lambda execution-role setup, see [EventBridge Lambda invocation permissions](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-use-resource-based.html#eb-lambda-permissions) and [Lambda execution roles](https://docs.aws.amazon.com/lambda/latest/dg/lambda-intro-execution-role.html).

@@ -22,7 +22,7 @@ aws dynamodb create-table \
 
 ## 2. Deploy the reconciler
 
-Precreate the Lambda log group and grant the execution role permissions scoped by resource ARN and Condition. If using ECS Auto Scaling, also provision the scalable targets and service-linked role first. For policy examples and scalable target ARN lookup, see [AWS resources and IAM](aws_resources.md).
+Precreate the Lambda log group and grant the execution role permissions for the managed resources and enabled features. If using ECS Auto Scaling, also provision the scalable targets and service-linked role first. For policy examples and scalable target ARN lookup, see [AWS resources and IAM](aws_resources.md).
 
 Deploy the reconciler image to Lambda. Match the image and Lambda architectures. Set STATE_TABLE_NAME to the table and DEFAULT_TIMEZONE to the schedule's time zone.
 

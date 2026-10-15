@@ -21,11 +21,11 @@ cheapskate は、これらのリソースを自動作成しない。配置手順
 
 ## ポリシー例の前提
 
-以下は、同一アカウント・同一リージョンの既存リソースを管理するためのポリシー例である。AWS Service Authorization Reference の各アクション、対応リソース、および条件キーを 2026-10-15 に確認した。リソースの作成、イメージの登録、およびタグの付与は配置時の権限で行う。
+以下は、同一アカウント・同一リージョンの既存リソースを管理するロールに付与するポリシー例である。リソースの作成、イメージの登録、およびタグの付与は配置時の権限で行う。
 
 PARTITION、REGION、ACCOUNT は配置先に置き換える。通常の AWS パーティションは aws である。TABLE は STATE_TABLE_NAME、GROUP は許可する所属タグ値とする。DB_INSTANCE、DB_CLUSTER、CLUSTER、SERVICE、INSTANCE_ID は実際の識別子、SCALABLE_TARGET_ID は登録済み scalable target の ARN の末尾である。FUNCTION_NAME と TOPIC は対象の Lambda 関数名と通知先 topic 名に置き換える。
 
-Resource には対象 ARN を列挙する。複数ある場合は配列にする。所属タグの StringEquals には許可するグループ名を列挙する。所属タグ条件を持つ Statement では、ARN とタグ値の両方を満たすリソースだけが許可される。異なるグループに異なる ARN を許可する場合は Statement を分ける。
+Resource には対象 ARN を列挙する。複数ある場合は配列にする。所属タグの StringEquals には許可するグループ名を列挙する。所属タグ条件を持つ Statement では、ARN が一致してもタグが削除されたり許可外のグループへ変更されたりするとアクセスを許可しない。異なるグループに異なる ARN を許可する場合は Statement を分ける。
 
 役割ごとに組み合わせる権限を、以下に示す。JSON 全体の例はそれぞれ単独のポリシーとして使用できる。Statement 単体の例は、対象ロールのポリシーの Statement 配列へ追加する。
 
@@ -45,13 +45,13 @@ Resource には対象 ARN を列挙する。複数ある場合は配列にする
 
 | サービス | IAM アクションと公式リファレンス | Resource のリソース部 | 例で使用する Condition または制限 |
 | --- | --- | --- | --- |
-| DynamoDB | [dynamodb:Query](https://docs.aws.amazon.com/service-authorization/latest/reference/list_dynamodb.html#list_dynamodb-action-Query)、[dynamodb:GetItem](https://docs.aws.amazon.com/service-authorization/latest/reference/list_dynamodb.html#list_dynamodb-action-GetItem)、[dynamodb:PutItem](https://docs.aws.amazon.com/service-authorization/latest/reference/list_dynamodb.html#list_dynamodb-action-PutItem)、[dynamodb:UpdateItem](https://docs.aws.amazon.com/service-authorization/latest/reference/list_dynamodb.html#list_dynamodb-action-UpdateItem)、[dynamodb:DeleteItem](https://docs.aws.amazon.com/service-authorization/latest/reference/list_dynamodb.html#list_dynamodb-action-DeleteItem) | table/TABLE | dynamodb:LeadingKeys=CONFIG、Null=false |
+| DynamoDB | [dynamodb:Query](https://docs.aws.amazon.com/service-authorization/latest/reference/list_dynamodb.html#list_dynamodb-action-Query)、[dynamodb:GetItem](https://docs.aws.amazon.com/service-authorization/latest/reference/list_dynamodb.html#list_dynamodb-action-GetItem)、[dynamodb:PutItem](https://docs.aws.amazon.com/service-authorization/latest/reference/list_dynamodb.html#list_dynamodb-action-PutItem)、[dynamodb:UpdateItem](https://docs.aws.amazon.com/service-authorization/latest/reference/list_dynamodb.html#list_dynamodb-action-UpdateItem)、[dynamodb:DeleteItem](https://docs.aws.amazon.com/service-authorization/latest/reference/list_dynamodb.html#list_dynamodb-action-DeleteItem) | table/TABLE | dynamodb:LeadingKeys=CONFIG |
 | Resource Groups Tagging API | [tag:GetResources](https://docs.aws.amazon.com/service-authorization/latest/reference/list_resourcegroupstaggingapi.html#list_resourcegroupstaggingapi-action-GetResources) | * | aws:RequestedRegion |
 | RDS DB instance | [rds:DescribeDBInstances](https://docs.aws.amazon.com/service-authorization/latest/reference/list_rds.html#list_rds-action-DescribeDBInstances)、[rds:StartDBInstance](https://docs.aws.amazon.com/service-authorization/latest/reference/list_rds.html#list_rds-action-StartDBInstance)、[rds:StopDBInstance](https://docs.aws.amazon.com/service-authorization/latest/reference/list_rds.html#list_rds-action-StopDBInstance) | db:DB_INSTANCE | aws:ResourceTag/cheapskate:group |
 | RDS DB cluster | [rds:DescribeDBClusters](https://docs.aws.amazon.com/service-authorization/latest/reference/list_rds.html#list_rds-action-DescribeDBClusters)、[rds:StartDBCluster](https://docs.aws.amazon.com/service-authorization/latest/reference/list_rds.html#list_rds-action-StartDBCluster)、[rds:StopDBCluster](https://docs.aws.amazon.com/service-authorization/latest/reference/list_rds.html#list_rds-action-StopDBCluster) | cluster:DB_CLUSTER | aws:ResourceTag/cheapskate:group |
-| ECS | [ecs:DescribeServices](https://docs.aws.amazon.com/service-authorization/latest/reference/list_ecs.html#list_ecs-action-DescribeServices)、[ecs:UpdateService](https://docs.aws.amazon.com/service-authorization/latest/reference/list_ecs.html#list_ecs-action-UpdateService) | service/CLUSTER/SERVICE | aws:ResourceTag/cheapskate:group、ecs:cluster |
+| ECS | [ecs:DescribeServices](https://docs.aws.amazon.com/service-authorization/latest/reference/list_ecs.html#list_ecs-action-DescribeServices)、[ecs:UpdateService](https://docs.aws.amazon.com/service-authorization/latest/reference/list_ecs.html#list_ecs-action-UpdateService) | service/CLUSTER/SERVICE | aws:ResourceTag/cheapskate:group |
 | Application Auto Scaling | [application-autoscaling:DescribeScalableTargets](https://docs.aws.amazon.com/service-authorization/latest/reference/list_application-autoscaling.html#list_application-autoscaling-action-DescribeScalableTargets) | * | aws:RequestedRegion |
-| Application Auto Scaling | [application-autoscaling:RegisterScalableTarget](https://docs.aws.amazon.com/service-authorization/latest/reference/list_application-autoscaling.html#list_application-autoscaling-action-RegisterScalableTarget) | scalable-target/SCALABLE_TARGET_ID | application-autoscaling:service-namespace、application-autoscaling:scalable-dimension |
+| Application Auto Scaling | [application-autoscaling:RegisterScalableTarget](https://docs.aws.amazon.com/service-authorization/latest/reference/list_application-autoscaling.html#list_application-autoscaling-action-RegisterScalableTarget) | scalable-target/SCALABLE_TARGET_ID | Resource の scalable target ARN で限定 |
 | EC2 | [ec2:DescribeInstances](https://docs.aws.amazon.com/service-authorization/latest/reference/list_ec2.html#list_ec2-action-DescribeInstances) | * | aws:RequestedRegion |
 | EC2 | [ec2:StartInstances](https://docs.aws.amazon.com/service-authorization/latest/reference/list_ec2.html#list_ec2-action-StartInstances)、[ec2:StopInstances](https://docs.aws.amazon.com/service-authorization/latest/reference/list_ec2.html#list_ec2-action-StopInstances) | instance/INSTANCE_ID | aws:ResourceTag/cheapskate:group |
 | SNS | [sns:Publish](https://docs.aws.amazon.com/service-authorization/latest/reference/list_sns.html#list_sns-action-Publish) | TOPIC | Resource の topic ARN で限定 |
@@ -112,9 +112,6 @@ reconciler、CLI の show、および Web コンソールのグループ詳細�
       "Action": "ecs:DescribeServices",
       "Resource": "arn:PARTITION:ecs:REGION:ACCOUNT:service/CLUSTER/SERVICE",
       "Condition": {
-        "ArnEquals": {
-          "ecs:cluster": "arn:PARTITION:ecs:REGION:ACCOUNT:cluster/CLUSTER"
-        },
         "StringEquals": {
           "aws:ResourceTag/cheapskate:group": [
             "GROUP"
@@ -126,11 +123,11 @@ reconciler、CLI の show、および Web コンソールのグループ詳細�
 }
 ```
 
-tag:GetResources はリソース ARN とタグ条件によるアクセス制御に対応しない。cheapskate が送る TagFilters と ResourceTypeFilters は検索条件であり、IAM による制限ではない。ec2:DescribeInstances もインスタンス ARN とタグで制限できない。application-autoscaling:DescribeScalableTargets は namespace・dimension の条件キーにも対応しないため、更新用の条件をこのアクションに追加してはいけない。
+tag:GetResources はリソース ARN とタグ条件によるアクセス制御に対応しない。cheapskate が送る TagFilters と ResourceTypeFilters は検索条件であり、IAM による制限ではない。ec2:DescribeInstances もインスタンス ARN とタグで制限できない。application-autoscaling:DescribeScalableTargets は namespace・dimension の条件キーにも対応しない。
 
-この 3 アクションは aws:RequestedRegion で呼び出し先リージョンを制限する。同じリージョン内では、管理対象以外の情報も参照可能である。このキーは API の呼び出し先を制限するもので、一般に操作の影響範囲を制限するものではない。詳細は、[aws:RequestedRegion](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_condition-keys.html#condition-keys-requestedregion) を参照。
+この 3 アクションは aws:RequestedRegion で呼び出し先リージョンを制限する。同じリージョン内では、管理対象以外の情報も参照可能である。詳細は、[aws:RequestedRegion](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_condition-keys.html#condition-keys-requestedregion) を参照。
 
-RDS の Describe は、DB 識別子を指定するこの構成では対象 ARN と所属タグで制限できる。ECS の参照と更新は長形式の service ARN と service 自身のタグを使用し、ecs:cluster には cluster ARN を指定する。cluster のタグを service のタグの代わりに指定してはいけない。
+RDS の Describe は、DB 識別子を指定するこの構成では対象 ARN と所属タグで制限できる。ECS の参照と更新は長形式の service ARN で cluster と service を特定し、service 自身の所属タグを条件にする。
 
 ## reconciler の権限
 
@@ -150,9 +147,6 @@ RDS の Describe は、DB 識別子を指定するこの構成では対象 ARN �
           "dynamodb:LeadingKeys": [
             "CONFIG"
           ]
-        },
-        "Null": {
-          "dynamodb:LeadingKeys": "false"
         }
       }
     },
@@ -194,9 +188,6 @@ RDS の Describe は、DB 識別子を指定するこの構成では対象 ARN �
       "Action": "ecs:UpdateService",
       "Resource": "arn:PARTITION:ecs:REGION:ACCOUNT:service/CLUSTER/SERVICE",
       "Condition": {
-        "ArnEquals": {
-          "ecs:cluster": "arn:PARTITION:ecs:REGION:ACCOUNT:cluster/CLUSTER"
-        },
         "StringEquals": {
           "aws:ResourceTag/cheapskate:group": [
             "GROUP"
@@ -208,13 +199,7 @@ RDS の Describe は、DB 識別子を指定するこの構成では対象 ARN �
       "Sid": "UpdateManagedScalableTargets",
       "Effect": "Allow",
       "Action": "application-autoscaling:RegisterScalableTarget",
-      "Resource": "arn:PARTITION:application-autoscaling:REGION:ACCOUNT:scalable-target/SCALABLE_TARGET_ID",
-      "Condition": {
-        "StringEquals": {
-          "application-autoscaling:service-namespace": "ecs",
-          "application-autoscaling:scalable-dimension": "ecs:service:DesiredCount"
-        }
-      }
+      "Resource": "arn:PARTITION:application-autoscaling:REGION:ACCOUNT:scalable-target/SCALABLE_TARGET_ID"
     },
     {
       "Sid": "ControlManagedEc2Instances",
@@ -240,9 +225,9 @@ RDS の Describe は、DB 識別子を指定するこの構成では対象 ARN �
 
 reconciler はテーブルの CONFIG パーティションだけを Query する。index の ARN、Scan、および書き込み権限は不要である。
 
-dynamodb:LeadingKeys は複数値の条件キーであるため ForAllValues:StringEquals を使用する。条件キーが存在しない場合に ForAllValues だけで許可されることを防ぐため、Null=false を併用する。詳細は、[DynamoDB の条件キー](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/specifying-conditions.html)と [IAM の集合演算子](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_elements_condition_operators.html#Conditions_String) を参照。
+dynamodb:LeadingKeys は複数値の条件キーであるため ForAllValues:StringEquals を使用し、CONFIG 以外のパーティションへのアクセスを許可しない。この文書で許可する Query、GetItem、PutItem、UpdateItem、DeleteItem はいずれもパーティションキーの指定を必要とする。詳細は、[DynamoDB の条件キー](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/specifying-conditions.html)と [Query のキー条件](https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_Query.html)を参照。
 
-LeadingKeys が制限するのは pk であり、sk=GROUP#... ではない。全グループが同じ CONFIG パーティションにあるため、この条件ではグループ単位の隔離はできない。Query と GetItem は全属性を読み取るので、dynamodb:Select=SPECIFIC_ATTRIBUTES を必須にすると現在の読み取りに適合しない。
+LeadingKeys が制限するのは pk であり、sk=GROUP#... ではない。全グループが同じ CONFIG パーティションにあるため、この条件ではグループ単位の隔離はできない。
 
 ### RDS と EC2
 
@@ -264,7 +249,7 @@ aws application-autoscaling describe-scalable-targets \
   --output text
 ```
 
-service-namespace=ecs と scalable-dimension=ecs:service:DesiredCount を更新操作に必須とする。scalable target の再作成で ARN が変わった場合は IAM ポリシーも更新する。追加でタグ制限を使う場合は、scalable target 自身へ cheapskate:group を付与してから、同じ StringEquals に aws:ResourceTag/cheapskate:group の許可値を追加する。ECS service のタグだけではこの条件を満たさない。詳細は、[Application Auto Scaling のタグによるアクセス制御](https://docs.aws.amazon.com/autoscaling/application/userguide/resource-tagging-support.html) を参照。
+scalable target は ResourceId、ServiceNamespace、ScalableDimension の組み合わせで一意に決まる。上記のコマンドで取得した ARN を Resource に指定すれば、対象 service の desired count を管理する scalable target に限定できる。再作成で ARN が変わった場合は IAM ポリシーも更新する。
 
 scalable target と AWSServiceRoleForApplicationAutoScaling_ECSService は配置時に準備する。reconciler は RoleARN や Tags を渡さずに既存 target を更新するため、この用途では iam:PassRole、iam:CreateServiceLinkedRole、および application-autoscaling:TagResource を追加しない。前提となる挙動の詳細は、[RegisterScalableTarget のパラメータ](https://docs.aws.amazon.com/autoscaling/application/APIReference/API_RegisterScalableTarget.html)と [Application Auto Scaling のサービスリンクロール](https://docs.aws.amazon.com/autoscaling/application/userguide/application-auto-scaling-service-linked-roles.html) を参照。
 
@@ -294,9 +279,6 @@ ecs:UpdateService には desiredCount のみの変更に限定する条件キー
           "dynamodb:LeadingKeys": [
             "CONFIG"
           ]
-        },
-        "Null": {
-          "dynamodb:LeadingKeys": "false"
         }
       }
     }
@@ -345,7 +327,7 @@ NOTIFICATION_TOPIC_ARN を設定する場合に、reconciler へ付与する Sta
 }
 ```
 
-Resource は NOTIFICATION_TOPIC_ARN と一致させる。SNS の sns:Endpoint と sns:Protocol は Publish に対応する条件キーではない。通知が無効ならこの Statement は不要である。
+Resource は NOTIFICATION_TOPIC_ARN と一致させる。通知が無効ならこの Statement は不要である。
 
 ### SNS の暗号化
 
@@ -363,7 +345,6 @@ Resource は NOTIFICATION_TOPIC_ARN と一致させる。SNS の sns:Endpoint �
   "Condition": {
     "StringEquals": {
       "kms:ViaService": "sns.REGION.amazonaws.com",
-      "kms:CallerAccount": "ACCOUNT",
       "kms:EncryptionContext:aws:sns:topicArn": "arn:PARTITION:sns:REGION:ACCOUNT:TOPIC"
     }
   }
@@ -374,7 +355,7 @@ Resource は NOTIFICATION_TOPIC_ARN と一致させる。SNS の sns:Endpoint �
 
 ### 暗号化した EBS ボリュームの起動
 
-暗号化した EBS ボリュームを持つ EC2 を起動する場合は、使用するキーへの [kms:CreateGrant](https://docs.aws.amazon.com/service-authorization/latest/reference/list_kms.html#list_kms-action-CreateGrant) も必要となる。EBS_KEY_ID は対象ボリュームのキー ID とする。既存ボリュームの復号用 grant に限定する Statement を、以下に示す。
+暗号化した EBS ボリュームを持つ EC2 を起動する場合は、使用するキーへの [kms:CreateGrant](https://docs.aws.amazon.com/service-authorization/latest/reference/list_kms.html#list_kms-action-CreateGrant) も必要となる。EBS_KEY_ID は対象ボリュームのキー ID、EBS_VOLUME_ID は vol- で始まるボリューム ID とする。対象ボリュームの復号用 grant を EBS 経由で作成する Statement を、以下に示す。
 
 ```json
 {
@@ -385,28 +366,22 @@ Resource は NOTIFICATION_TOPIC_ARN と一致させる。SNS の sns:Endpoint �
   "Condition": {
     "StringEquals": {
       "kms:ViaService": "ec2.REGION.amazonaws.com",
-      "kms:CallerAccount": "ACCOUNT"
-    },
-    "Bool": {
-      "kms:GrantIsForAWSResource": "true"
+      "kms:EncryptionContext:aws:ebs:id": [
+        "EBS_VOLUME_ID"
+      ]
     },
     "ForAllValues:StringEquals": {
       "kms:GrantOperations": [
         "Decrypt"
-      ],
-      "kms:EncryptionContextKeys": [
-        "aws:ebs:id"
       ]
-    },
-    "Null": {
-      "kms:GrantOperations": "false",
-      "kms:EncryptionContextKeys": "false"
     }
   }
 }
 ```
 
-EC2 経由で AWS リソースのために作成する grant に限り、grant の操作を Decrypt、暗号化コンテキストのキーを aws:ebs:id に限定する。複数値の条件には Null=false を併用する。この制限の根拠は、[AWS の Instance Scheduler における暗号化 EBS の権限例](https://docs.aws.amazon.com/solutions/latest/instance-scheduler-on-aws/security-1.html#encrypted-ec2-ebs-volumes) を参照。
+kms:ViaService の ec2.REGION.amazonaws.com は EBS 経由の KMS 呼び出しを表す。kms:GrantOperations は Decrypt だけを許可し、kms:EncryptionContext:aws:ebs:id は許可するボリューム ID を限定する。同じキーで暗号化された別のボリュームは、この Statement では許可されない。複数ボリュームがある場合はキーごとに Statement を分け、そのキーを使用する対象ボリュームの ID を列挙する。ボリュームの追加や交換時にはこの一覧も更新する。
+
+CreateGrant の Operations は必須であり、空の操作一覧は API が受け付けない。詳細は、[kms:GrantOperations](https://docs.aws.amazon.com/kms/latest/developerguide/conditions-kms.html#conditions-kms-grant-operations)、[EBS の暗号化コンテキスト](https://docs.aws.amazon.com/kms/latest/developerguide/services-ebs.html)、および [EBS の grant 作成例](https://docs.aws.amazon.com/kms/latest/developerguide/ct-ec2two.html)を参照。
 
 ## 実行ロールの信頼と定期呼び出し
 
@@ -416,7 +391,9 @@ EC2 経由で AWS リソースのために作成する grant に限り、grant �
 | --- | --- | --- |
 | reconciler / Web Lambda の実行ロールの信頼ポリシー | Principal.Service=lambda.amazonaws.com に sts:AssumeRole | 関数ごとに専用の実行ロールを使用 |
 | EventBridge Scheduler の呼び出し用ロール | lambda:InvokeFunction | Resource を呼び出す reconciler 関数または alias の完全な ARN に限定 |
-| Scheduler の呼び出し用ロールの信頼ポリシー | Principal.Service=scheduler.amazonaws.com に sts:AssumeRole | StringEquals の aws:SourceAccount=ACCOUNT と ArnEquals の aws:SourceArn=arn:PARTITION:scheduler:REGION:ACCOUNT:schedule-group/SCHEDULE_GROUP |
-| EventBridge rule を使用する場合の Lambda リソースポリシー | Principal.Service=events.amazonaws.com に lambda:InvokeFunction | 対象関数 ARN に限定し、ArnLike の aws:SourceArn にワイルドカードなしの rule ARN、StringEquals の aws:SourceAccount に ACCOUNT を指定 |
+| Scheduler の呼び出し用ロールの信頼ポリシー | Principal.Service=scheduler.amazonaws.com に sts:AssumeRole | ArnEquals の aws:SourceArn=arn:PARTITION:scheduler:REGION:ACCOUNT:schedule-group/SCHEDULE_GROUP |
+| EventBridge rule を使用する場合の Lambda リソースポリシー | Principal.Service=events.amazonaws.com に lambda:InvokeFunction | 対象関数 ARN に限定し、ArnLike の aws:SourceArn に arn:PARTITION:events:REGION:ACCOUNT:rule/RULE_NAME を指定 |
+
+aws:SourceArn にはアカウント ID を含む完全な ARN を指定する。この場合、呼び出し元アカウントも ARN で制限される。詳細は、[aws:SourceArn](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_condition-keys.html#condition-keys-sourcearn) を参照。
 
 Scheduler の aws:SourceArn は schedule group ARN であり、個別の schedule ARN ではない。詳細は、[Scheduler の信頼ポリシー条件](https://docs.aws.amazon.com/scheduler/latest/UserGuide/cross-service-confused-deputy-prevention.html) を参照。EventBridge rule と Lambda 実行ロールの設定は、[EventBridge の Lambda 呼び出し権限](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-use-resource-based.html#eb-lambda-permissions)と [Lambda の実行ロール](https://docs.aws.amazon.com/lambda/latest/dg/lambda-intro-execution-role.html) を参照。

@@ -22,7 +22,7 @@ aws dynamodb create-table \
 
 ## 2. reconciler の配置
 
-Lambda のロググループを事前作成し、実行ロールに対象 ARN と Condition を指定した権限を付与する。ECS の Auto Scaling を使用する場合は、scalable target とサービスリンクロールも先に準備する。ポリシー例と ARN の確認方法は、[AWS リソースと IAM](aws_resources.md)を参照。
+Lambda のロググループを事前作成し、実行ロールに管理対象と使用する機能に応じた権限を付与する。ECS の Auto Scaling を使用する場合は、scalable target とサービスリンクロールも先に準備する。ポリシー例と ARN の確認方法は、[AWS リソースと IAM](aws_resources.md)を参照。
 
 reconciler イメージを Lambda に配置する。イメージと Lambda のアーキテクチャを一致させる。STATE_TABLE_NAME にテーブル名、DEFAULT_TIMEZONE にスケジュールのタイムゾーンを設定する。
 
