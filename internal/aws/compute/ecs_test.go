@@ -454,9 +454,9 @@ func TestEcsReconcileEnforcesRegisteredCountLimit(t *testing.T) {
 			resource.EcsMaxCount = 1000
 			ecsClient := mocks.NewMockEcsAPI(controller)
 			autoScaling := mocks.NewMockAutoScalingAPI(controller)
-			reads := 1
+			reads := 2
 			if test.wantErr == "" {
-				reads = 2
+				reads = 3
 				ecsClient.EXPECT().UpdateService(gomock.Any(), gomock.Any()).DoAndReturn(
 					func(_ context.Context, input *ecs.UpdateServiceInput, _ ...func(*ecs.Options)) (*ecs.UpdateServiceOutput, error) {
 						assert.Equal(t, test.desired, aws.ToInt32(input.DesiredCount))
