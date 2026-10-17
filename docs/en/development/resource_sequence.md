@@ -175,6 +175,8 @@ For the implementation, see the [EC2 adapter](../../../internal/aws/compute/ec2.
 
 ## ECS services
 
+Bounds mode prevents competing updates between tag bounds and Scheduled Scaling. The tags mode maintains tag bounds and suspension; scheduled resumes Scheduled Scaling after startup configuration.
+
 ECS observes scalable-target settings as well as task counts. Configuration tags come from the discovery snapshot and are validated again by Start and Stop. Tag values in the diagrams include defaults. An absent or nil AWS ScheduledScalingSuspended flag is treated as false.
 
 The scalable target is identified by ServiceNamespace=ecs, ResourceId=service/{cluster}/{service}, and ScalableDimension=ecs:service:DesiredCount. Every RegisterScalableTarget specifies only ScheduledScalingSuspended in SuspendedState and omits DynamicScalingInSuspended and DynamicScalingOutSuspended. Scheduled action definitions are neither read nor written.
@@ -198,7 +200,7 @@ sequenceDiagram
     else Scheduling strategy is neither REPLICA nor empty
         Adapter-->>Reconciler: Error
     else Eligible service
-        Adapter->>Adapter: Validate cheapskate:desired-count, cheapskate:scaling-min,<br/>cheapskate:scaling-max, and cheapskate:scheduled-scaling-paused
+        Adapter->>Adapter: Validate cheapskate:desired-count, cheapskate:scaling-min,<br/>cheapskate:scaling-max, and cheapskate:scaling-bounds-mode
         Note over Adapter,AutoScaling: Invalid tags return an error here
         Adapter->>AutoScaling: DescribeScalableTargets(service target)
         AutoScaling-->>Adapter: Scalable target or no target
@@ -218,10 +220,10 @@ Repair conditions are listed below. Both flags can be true; the reconciler uses 
 | --- | --- |
 | NeedsStop | AWS bounds differ from 0/0 or ScheduledScalingSuspended=false |
 | NeedsStart | All desiredCount / runningCount / pendingCount zero, or bounds 0/0 |
-| NeedsStart | AWS ScheduledScalingSuspended differs from the cheapskate:scheduled-scaling-paused tag |
-| NeedsStart | cheapskate:scheduled-scaling-paused=true and AWS bounds differ from the cheapskate:scaling-min and cheapskate:scaling-max tags |
+| NeedsStart | AWS ScheduledScalingSuspended differs from the suspension state required by bounds mode |
+| NeedsStart | cheapskate:scaling-bounds-mode=tags and AWS bounds differ from the cheapskate:scaling-min and cheapskate:scaling-max tags |
 
-A positive fixed range is not used to infer incomplete startup. With cheapskate:scheduled-scaling-paused=false during normal operation, Scheduled Scaling changes to bounds do not trigger repair.
+A positive fixed range is not used to infer incomplete startup. With cheapskate:scaling-bounds-mode=scheduled during normal operation, Scheduled Scaling changes to bounds do not trigger repair.
 
 ### Stop
 
@@ -247,7 +249,7 @@ sequenceDiagram
     Adapter-->>Reconciler: nil or error
 ```
 
-Stop applies AWS ScheduledScalingSuspended=true regardless of the cheapskate:scheduled-scaling-paused tag and never changes the tag. It does not reject stopping based on ecs_max_count. With a target, there is no additional UpdateService or rollback.
+Stop applies AWS ScheduledScalingSuspended=true regardless of bounds mode and never changes the tag. It does not reject stopping based on ecs_max_count. With a target, there is no additional UpdateService or rollback.
 
 ### Startup initialization
 
@@ -282,8 +284,8 @@ sequenceDiagram
             Adapter->>EcsAPI: UpdateService(desiredCount=cheapskate:desired-count tag value)
             EcsAPI-->>Adapter: Response
         end
-        opt Normal bounds tags differ from cheapskate:desired-count,<br/>or cheapskate:scheduled-scaling-paused=false
-            Adapter->>AutoScaling: RegisterScalableTarget(MinCapacity=cheapskate:scaling-min tag value,<br/>MaxCapacity=cheapskate:scaling-max tag value,<br/>ScheduledScalingSuspended=cheapskate:scheduled-scaling-paused tag value)
+        opt Normal bounds tags differ from cheapskate:desired-count,<br/>or cheapskate:scaling-bounds-mode=scheduled
+            Adapter->>AutoScaling: RegisterScalableTarget(MinCapacity=cheapskate:scaling-min tag value,<br/>MaxCapacity=cheapskate:scaling-max tag value,<br/>ScheduledScalingSuspended=true for tags, false for scheduled)
             AutoScaling-->>Adapter: Response
         end
     end
@@ -292,11 +294,11 @@ sequenceDiagram
 
 This diagram shows the successful path. Any API failure stops subsequent calls and returns an error. A missing service or unsupported strategy also returns an error. The second observation accounts for RegisterScalableTarget adjusting capacity to fit its bounds.
 
-cheapskate:scheduled-scaling-paused=false resumes only in the final RegisterScalableTarget. If the tag is true and both normal bounds tags equal the startup-count tag, the initial pin also satisfies normal configuration, so the final RegisterScalableTarget is omitted. For running services that need no initialization, Start uses the following repair sequence.
+cheapskate:scaling-bounds-mode=scheduled resumes only in the final RegisterScalableTarget. If bounds mode is tags and both normal bounds tags equal the startup-count tag, the initial pin also satisfies normal configuration, so the final RegisterScalableTarget is omitted. For running services that need no initialization, Start uses the following repair sequence.
 
 ### Running configuration repair
 
-For a service that needs no startup initialization, Start applies normal bounds and suspension configuration. Without a target it makes no modifying API call. With a target, the sequence is:
+For a service that needs no startup initialization, Start applies normal bounds and the suspension state required by bounds mode. Without a target it makes no modifying API call. With a target, the sequence is:
 
 ```mermaid
 sequenceDiagram
@@ -311,10 +313,10 @@ sequenceDiagram
     Adapter->>AutoScaling: DescribeScalableTargets(service target)
     AutoScaling-->>Adapter: Current target
     Adapter->>Adapter: Confirm initialization is unnecessary
-    alt cheapskate:scheduled-scaling-paused=true and suspension or normal bounds need repair
+    alt cheapskate:scaling-bounds-mode=tags and suspension or normal bounds need repair
         Adapter->>AutoScaling: RegisterScalableTarget(MinCapacity=cheapskate:scaling-min tag value,<br/>MaxCapacity=cheapskate:scaling-max tag value, ScheduledScalingSuspended=true)
         AutoScaling-->>Adapter: Response or error
-    else cheapskate:scheduled-scaling-paused=false and AWS ScheduledScalingSuspended=true
+    else cheapskate:scaling-bounds-mode=scheduled and AWS ScheduledScalingSuspended=true
         Adapter->>AutoScaling: RegisterScalableTarget(MinCapacity=cheapskate:scaling-min tag value,<br/>MaxCapacity=cheapskate:scaling-max tag value, ScheduledScalingSuspended=false)
         AutoScaling-->>Adapter: Response or error
     else Settings already match
@@ -350,7 +352,7 @@ sequenceDiagram
     AutoScaling-->>Adapter: Positive fixed range, ScheduledScalingSuspended=true
     Adapter-->>Reconciler: Observation with NeedsStart=true
     Reconciler->>Adapter: Start(resource with current tags)
-    Note over Adapter,AutoScaling: Run configuration repair<br/>Apply normal bounds and suspension request without resetting startup capacity
+    Note over Adapter,AutoScaling: Run configuration repair<br/>Apply normal bounds and the suspension state required by bounds mode without resetting startup capacity
     Adapter-->>Reconciler: nil
     Reconciler->>Reconciler: Record action and notify if configured
 ```
@@ -361,10 +363,10 @@ No execution phase is stored. Each cycle chooses operations from configuration a
 | --- | --- |
 | Stop configuration not applied | Repair AWS bounds or ScheduledScalingSuspended differences |
 | All task counts zero or bounds 0/0 | Run startup initialization |
-| Positive desiredCount and a suspended positive fixed range | Apply normal bounds and suspension request; retain applied capacity within those bounds |
-| Normal bounds equal startup count, with only the suspension flag differing | Apply normal bounds and suspension request |
-| Final response lost, cheapskate:scheduled-scaling-paused=true, normal settings match | No additional operation |
-| Final response lost, cheapskate:scheduled-scaling-paused=false, Scheduled Scaling subsequently changed bounds | Preserve the changed range |
+| Positive desiredCount and a suspended positive fixed range | Apply normal bounds and the suspension state required by bounds mode; retain applied capacity within those bounds |
+| Normal bounds equal startup count, with only the suspension flag differing | Apply normal bounds and the suspension state required by bounds mode |
+| Final response lost, cheapskate:scaling-bounds-mode=tags, normal settings match | No additional operation |
+| Final response lost, cheapskate:scaling-bounds-mode=scheduled, Scheduled Scaling subsequently changed bounds | Preserve the changed range |
 
 An invocation holding an old snapshot can apply an old request. A successful later cycle converges to the latest request after the old invocation finishes. Disabling management, exiting management, and stopping execution of cheapskate itself do not restore applied AWS flags or bounds.
 

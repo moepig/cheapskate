@@ -18,6 +18,6 @@ EC2 の aws:autoscaling:groupName タグは AWS が Auto Scaling グループの
 
 ## ECS 設定タグ
 
-起動台数、通常の上下限、および Scheduled Scaling の一時停止要求は ECS service 自身のタグに設定する。タグ一覧、既定値、制約、および設定コマンドは、[ECS service のタグ側の設定](resources/ecs-service.md#タグ側の設定) を参照。
+起動台数、通常の上下限、および上下限管理モードは ECS service 自身のタグに設定する。タグ一覧、既定値、制約、および設定コマンドは、[ECS service のタグ側の設定](resources/ecs-service.md#タグ側の設定) を参照。
 
 タグの適用タイミングとスケーリングの挙動は、[ECS の起動・停止とスケーリング](ecs.md) を参照。

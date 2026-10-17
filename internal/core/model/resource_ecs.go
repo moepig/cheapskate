@@ -5,12 +5,12 @@ import "regexp"
 // ECS サービス (クラスタに属する 1 サービス)
 const TypeEcsService ResourceType = "ecs-service"
 
-// ECS サービス単位の起動規模と Scheduled Scaling の一時停止要求を指定するリソースタグ。
+// ECS サービス単位の起動規模とスケーリング上下限の管理方法を指定するリソースタグ。
 const (
-	EcsDesiredCountTagKey           = "cheapskate:desired-count"
-	EcsScalingMinTagKey             = "cheapskate:scaling-min"
-	EcsScalingMaxTagKey             = "cheapskate:scaling-max"
-	EcsScheduledScalingPausedTagKey = "cheapskate:scheduled-scaling-paused"
+	EcsDesiredCountTagKey      = "cheapskate:desired-count"
+	EcsScalingMinTagKey        = "cheapskate:scaling-min"
+	EcsScalingMaxTagKey        = "cheapskate:scaling-max"
+	EcsScalingBoundsModeTagKey = "cheapskate:scaling-bounds-mode"
 )
 
 // ecs-service の宣言 (resource.go の typeInfos に登録する)
@@ -29,6 +29,6 @@ var ecsServiceType = TypeInfo{
 		{Key: EcsDesiredCountTagKey, Name: "desired_count", Label: "desired"},
 		{Key: EcsScalingMinTagKey, Name: "min", Label: "scaling min"},
 		{Key: EcsScalingMaxTagKey, Name: "max", Label: "scaling max"},
-		{Key: EcsScheduledScalingPausedTagKey, Name: "scheduled_scaling_paused", Label: "scheduled scaling paused"},
+		{Key: EcsScalingBoundsModeTagKey, Name: "scaling_bounds_mode", Label: "scaling bounds mode"},
 	},
 }

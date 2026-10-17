@@ -2,6 +2,10 @@
 
 This document covers DynamoDB group settings, cheapskate-cli operations, and startup and scaling tags for an ECS service. Its cheapskate resource type name is ecs-service.
 
+## Purpose of the settings
+
+Startup count selects capacity when resuming from zero. Normal bounds define the allowed operating range. Bounds mode selects tags to continuously maintain that range or scheduled to delegate bounds changes after startup to AWS Scheduled Scaling. For scope and mode selection, see [Purpose of ECS scaling management](../ecs.md#purpose-and-scope).
+
 ## Eligibility
 
 REPLICA services with long ARNs containing the cluster name are eligible. Tags on a cluster or task definition do not replace settings on the service itself.
@@ -57,7 +61,7 @@ In addition to the shared cheapskate:group tag, set these tags on the ECS servic
 | cheapskate:desired-count | 1 | Startup count from all-zero counts or 0/0 bounds; 1–2147483647 |
 | cheapskate:scaling-min | cheapskate:desired-count | Normal MinCapacity; 0–2147483647 |
 | cheapskate:scaling-max | cheapskate:desired-count | Normal MaxCapacity; 0–2147483647 |
-| cheapskate:scheduled-scaling-paused | false | Keep Scheduled Scaling suspended while running; lowercase true or false |
+| cheapskate:scaling-bounds-mode | scheduled | Bounds management: tags maintains tag bounds and suspends Scheduled Scaling; scheduled retains bounds changes after startup and enables Scheduled Scaling |
 
 Defaults apply only to absent tags; empty strings are invalid. Tag counts must satisfy cheapskate:scaling-min <= cheapskate:desired-count <= cheapskate:scaling-max. Startup and running configuration updates also require the cheapskate:desired-count and cheapskate:scaling-max tag values to be no greater than the DynamoDB ecs_max_count attribute. All tags are validated whether or not a scalable target exists; invalid tags prevent stopping too.
 
@@ -70,7 +74,7 @@ aws ecs tag-resource --region ap-northeast-1 \
     key=cheapskate:desired-count,value=2 \
     key=cheapskate:scaling-min,value=1 \
     key=cheapskate:scaling-max,value=3 \
-    key=cheapskate:scheduled-scaling-paused,value=false
+    key=cheapskate:scaling-bounds-mode,value=tags
 ```
 
 ECS tag arguments use lowercase key and value. For arguments and long ARNs, see [AWS CLI tag-resource](https://docs.aws.amazon.com/cli/latest/reference/ecs/tag-resource.html).
@@ -79,7 +83,7 @@ ECS tag arguments use lowercase key and value. For arguments and long ARNs, see 
 
 cheapskate:desired-count is a startup count, not a continuously enforced running count. Without a scalable target, stopping sets desiredCount=0 and starting sets startup capacity only when all counts are zero. Cheapskate does not create scalable targets.
 
-With a scalable target, stopping sets bounds to 0/0 and suspends Scheduled Scaling. Starting initializes capacity, then applies normal bounds and the tag's suspension request. While running, a true suspension request maintains normal bounds. When both the request and AWS suspension are false, bounds and capacity changed by Scheduled Scaling are retained.
+With a scalable target, stopping sets bounds to 0/0 and suspends Scheduled Scaling. Starting initializes capacity, then applies normal bounds and the suspension state corresponding to bounds mode. While running, tags maintains normal bounds. In scheduled mode with AWS suspension cleared, bounds and capacity changed by Scheduled Scaling are retained.
 
 For the inspection command, see [Shared verification](README.md#shared-verification). In the show JSON output, check group.ecs_max_count and the target resource's config, counts and bounds and ScheduledScalingSuspended in live.detail, and live_error. Stopping completes only when ECS desiredCount, runningCount, and pendingCount are all zero.
 

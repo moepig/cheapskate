@@ -291,7 +291,7 @@ func TestEcsPartialStartFailuresRecoverOnNextReconcile(t *testing.T) {
 			cycle := func() reconcile.Summary {
 				target := &EcsServiceTarget{Ecs: ecsClient, AutoScaling: autoScaling}
 				resource := ecsReconcileResource()
-				resource.Tags[model.EcsScheduledScalingPausedTagKey] = fmt.Sprint(test.paused)
+				resource.Tags[model.EcsScalingBoundsModeTagKey] = ecsBoundsModeForTest(test.paused)
 				result, err := reconcile.Run(context.Background(), nil, ecsReconcileDeps(resource, target, notifier), time.Now())
 				require.NoError(t, err)
 				return result
@@ -391,12 +391,13 @@ func assertScalableBounds(t *testing.T, minimum, maximum int32, paused bool) fun
 
 func TestEcsRejectsInvalidTagsBeforeModification(t *testing.T) {
 	for name, tags := range map[string]map[string]string{
-		"zero desired":  {model.EcsDesiredCountTagKey: "0"},
-		"empty desired": {model.EcsDesiredCountTagKey: ""},
-		"negative min":  {model.EcsScalingMinTagKey: "-1"},
-		"inconsistent":  {model.EcsDesiredCountTagKey: "2", model.EcsScalingMinTagKey: "3", model.EcsScalingMaxTagKey: "4"},
-		"empty pause":   {model.EcsScheduledScalingPausedTagKey: ""},
-		"invalid pause": {model.EcsScheduledScalingPausedTagKey: "TRUE"},
+		"zero desired":   {model.EcsDesiredCountTagKey: "0"},
+		"empty desired":  {model.EcsDesiredCountTagKey: ""},
+		"negative min":   {model.EcsScalingMinTagKey: "-1"},
+		"inconsistent":   {model.EcsDesiredCountTagKey: "2", model.EcsScalingMinTagKey: "3", model.EcsScalingMaxTagKey: "4"},
+		"empty mode":     {model.EcsScalingBoundsModeTagKey: ""},
+		"uppercase mode": {model.EcsScalingBoundsModeTagKey: "TAGS"},
+		"invalid mode":   {model.EcsScalingBoundsModeTagKey: "true"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			controller := gomock.NewController(t)
@@ -411,7 +412,7 @@ func TestEcsRejectsInvalidTagsBeforeModification(t *testing.T) {
 func TestEcsDefaultConfiguration(t *testing.T) {
 	config, err := ecsConfigFromTags(nil)
 	require.NoError(t, err)
-	assert.Equal(t, ecsConfig{desired: 1, minimum: 1, maximum: 1}, config)
+	assert.Equal(t, ecsConfig{desired: 1, minimum: 1, maximum: 1, boundsMode: ecsBoundsModeScheduled}, config)
 }
 
 func TestEcsConfigurationAcceptsInt32LimitAndRejectsOverflow(t *testing.T) {

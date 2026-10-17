@@ -2,6 +2,10 @@
 
 本ドキュメントは、ECS service に適用する DynamoDB のグループ設定、cheapskate-cli の操作、および起動・スケーリング用タグの設定を示す。cheapskate のリソースタイプ名は ecs-service である。
 
+## 設定の目的
+
+起動台数は停止状態から何台で再開するか、通常の上下限は稼働中に許容する台数の範囲を指定する。上下限管理モードは、タグの範囲を継続して維持する tags と、起動後の上下限変更を AWS Scheduled Scaling に委ねる scheduled を選ぶ。管理範囲と使い分けは、[ECS の機能の目的](../ecs.md#機能の目的と管理範囲) を参照。
+
 ## 対象条件
 
 REPLICA の ECS service が対象である。cluster 名を含む長形式の ARN を使用する。cluster や task definition に付けたタグは、service 自身の設定の代わりにはならない。
@@ -57,11 +61,11 @@ clear-ecs-max-count は上限を未登録に戻す。現在の service を停止
 | cheapskate:desired-count | 1 | 停止状態または上下限 0/0 からの起動台数。1～2147483647 |
 | cheapskate:scaling-min | cheapskate:desired-count | 通常の MinCapacity。0～2147483647 |
 | cheapskate:scaling-max | cheapskate:desired-count | 通常の MaxCapacity。0～2147483647 |
-| cheapskate:scheduled-scaling-paused | false | 稼働中も Scheduled Scaling を一時停止する要求。小文字の true または false |
+| cheapskate:scaling-bounds-mode | scheduled | 上下限の管理方法。tags はタグ範囲を維持して Scheduled Scaling を一時停止、scheduled は起動後の上下限変更を維持して Scheduled Scaling を有効化 |
 
 既定値はタグが存在しない場合だけ適用し、空文字列はエラーとなる。各タグの台数は cheapskate:scaling-min <= cheapskate:desired-count <= cheapskate:scaling-max を満たす必要がある。起動と稼働中の設定更新には、cheapskate:desired-count と cheapskate:scaling-max のタグ値が、DynamoDB の ecs_max_count 以下であることも必要である。scalable target の有無にかかわらずタグ一式を検証し、不正なタグがあれば停止も実行しない。
 
-cluster が dev、service が api の場合に、起動台数 2、通常の上下限 1～3 を設定する例を、以下に示す。
+cluster が dev、service が api の場合に、起動台数 2、継続して維持する上下限 1～3 を設定する例を、以下に示す。
 
 ```sh
 aws ecs tag-resource --region ap-northeast-1 \
@@ -70,7 +74,7 @@ aws ecs tag-resource --region ap-northeast-1 \
     key=cheapskate:desired-count,value=2 \
     key=cheapskate:scaling-min,value=1 \
     key=cheapskate:scaling-max,value=3 \
-    key=cheapskate:scheduled-scaling-paused,value=false
+    key=cheapskate:scaling-bounds-mode,value=tags
 ```
 
 ECS のタグ引数は key と value を小文字で指定する。引数と長形式 ARN の詳細は、[AWS CLI tag-resource](https://docs.aws.amazon.com/cli/latest/reference/ecs/tag-resource.html) を参照。
@@ -79,7 +83,7 @@ ECS のタグ引数は key と value を小文字で指定する。引数と長�
 
 cheapskate:desired-count は起動時の台数であり、稼働中の台数を常に固定する値ではない。scalable target がなければ、停止は desiredCount=0、起動は全台数が 0 のときに起動台数を設定する。cheapskate は scalable target を新規作成しない。
 
-scalable target がある場合は、停止時に上下限を 0/0 とし、Scheduled Scaling を一時停止する。起動時は起動台数を設定してから通常の上下限とタグの一時停止要求を適用する。稼働中に一時停止要求が true なら通常の上下限を維持し、false で AWS の一時停止も解除済みなら Scheduled Scaling が変更した上下限と台数を維持する。
+scalable target がある場合は、停止時に上下限を 0/0 とし、Scheduled Scaling を一時停止する。起動時は起動台数を設定してから通常の上下限と管理モードに対応する一時停止状態を適用する。稼働中は tags モードなら通常の上下限を維持し、scheduled モードで AWS の一時停止も解除済みなら Scheduled Scaling が変更した上下限と台数を維持する。
 
 確認コマンドは、[共通の反映確認](README.md#共通の反映確認) を参照。show の JSON 出力で、group.ecs_max_count と、対象リソースの config、live.detail の台数・上下限・ScheduledScalingSuspended、および live_error を確認する。停止完了には ECS の desiredCount、runningCount、および pendingCount がすべて 0 である必要がある。
 

@@ -83,21 +83,21 @@ cheapskate-cli ecs-max-count --group dev 4
 
 Use the same command to change the limit. CLI and web-console schedule and override operations retain it. For attribute removal and other ECS settings, see [ECS service configuration](resources/ecs-service.md#dynamodb-and-cli).
 
-### Suspending and resuming Scheduled Scaling
+### Changing scaling bounds management
 
-To suspend, set the service's cheapskate:scheduled-scaling-paused tag to true and confirm ScheduledScalingSuspended=true after a successful cycle.
+Switch between maintaining tag bounds and using AWS Scheduled Scaling to change them. To maintain tag bounds, set the service's cheapskate:scaling-bounds-mode to tags and the group's request to running. After a successful cycle, confirm normal bounds and ScheduledScalingSuspended=true.
 
 Before resuming, confirm that cheapskate:scaling-min and cheapskate:scaling-max specify the intended normal range. Resuming applies those bounds, and AWS adjusts capacity outside the range. To resume:
 
-1. Set cheapskate:scheduled-scaling-paused to false or remove it.
+1. Set cheapskate:scaling-bounds-mode to scheduled.
 2. Set the group's request to running.
 3. After a successful cycle, inspect show or the web console for ScheduledScalingSuspended=false and normal bounds.
 
-A stopped request keeps AWS suspension enabled even after clearing the tag. Scheduled actions whose execution time passed during suspension are not replayed.
+A stopped request keeps AWS suspension enabled even after switching to scheduled mode. Scheduled actions whose execution time passed during suspension are not replayed.
 
 ## Ending management
 
-First choose the running/stopped state and ECS Scheduled Scaling state to retain. For a running ECS service, set the intended normal bounds in tags and request false suspension to enable Scheduled Scaling, or true to keep it suspended. A stopped service retains bounds 0/0 and suspension.
+First choose the running/stopped state and ECS Scheduled Scaling state to retain. For a running ECS service, set the intended normal bounds in tags and select scheduled bounds mode to enable Scheduled Scaling, or tags to maintain tag bounds. A stopped service retains bounds 0/0 and suspension.
 
 To end management:
 

@@ -29,9 +29,9 @@ type AutoScalingAPI interface {
 	RegisterScalableTarget(ctx context.Context, in *aas.RegisterScalableTargetInput, opts ...func(*aas.Options)) (*aas.RegisterScalableTargetOutput, error)
 }
 
-// ECS サービスの起動規模と Scheduled Scaling の一時停止をリソースタグから制御する。
+// ECS サービスの起動規模とスケーリング上下限の管理方法をリソースタグから制御する。
 // 停止時は scalable target の上下限を 0/0 とし、Scheduled Scaling を一時停止する。
-// 起動の初期設定と一時停止解除で通常の上下限を適用し、一時停止要求が true の間はその範囲を維持する。
+// tags モードは通常のタグ範囲を維持し、scheduled モードは起動後の上下限変更を維持する。
 type EcsServiceTarget struct {
 	Ecs         EcsAPI
 	AutoScaling AutoScalingAPI
@@ -65,8 +65,9 @@ func (t *EcsServiceTarget) Describe(ctx context.Context, res model.Resource) (mo
 	}
 	if scalable != nil {
 		paused := ecsScheduledScalingPaused(scalable)
+		maintainBounds := config.boundsMode == ecsBoundsModeTags
 		observation.Detail += fmt.Sprintf(" minCapacity=%d maxCapacity=%d ScheduledScalingSuspended=%t", aws.ToInt32(scalable.MinCapacity), aws.ToInt32(scalable.MaxCapacity), paused)
-		observation.NeedsStart = ecsNeedsInitialization(current, scalable) || paused != config.paused || (config.paused && !ecsBoundsEqual(scalable, config.minimum, config.maximum))
+		observation.NeedsStart = ecsNeedsInitialization(current, scalable) || paused != maintainBounds || (maintainBounds && !ecsBoundsEqual(scalable, config.minimum, config.maximum))
 		observation.NeedsStop = !ecsBoundsEqual(scalable, 0, 0) || !paused
 	}
 	return observation, nil
@@ -101,7 +102,7 @@ func (t *EcsServiceTarget) Stop(ctx context.Context, res model.Resource) error {
 	return err
 }
 
-// 起動規模の検証後、初期設定または稼働中の一時停止設定を適用する。
+// 起動規模の検証後、初期設定または稼働中の上下限管理モードを適用する。
 func (t *EcsServiceTarget) Start(ctx context.Context, res model.Resource) error {
 	cluster, service, err := splitEcsRef(res.Ref)
 	if err != nil {
@@ -131,14 +132,15 @@ func (t *EcsServiceTarget) Start(ctx context.Context, res model.Resource) error 
 	if err != nil {
 		return err
 	}
+	maintainBounds := config.boundsMode == ecsBoundsModeTags
 	if !ecsNeedsInitialization(current, scalable) {
 		if scalable == nil {
 			return nil
 		}
-		if config.paused && (!ecsScheduledScalingPaused(scalable) || !ecsBoundsEqual(scalable, config.minimum, config.maximum)) {
+		if maintainBounds && (!ecsScheduledScalingPaused(scalable) || !ecsBoundsEqual(scalable, config.minimum, config.maximum)) {
 			return t.register(ctx, cluster, service, &config.minimum, &config.maximum, true)
 		}
-		if !config.paused && ecsScheduledScalingPaused(scalable) {
+		if !maintainBounds && ecsScheduledScalingPaused(scalable) {
 			return t.register(ctx, cluster, service, &config.minimum, &config.maximum, false)
 		}
 		return nil
@@ -165,8 +167,8 @@ func (t *EcsServiceTarget) Start(ctx context.Context, res model.Resource) error 
 			return err
 		}
 	}
-	if scalable != nil && (config.minimum != config.desired || config.maximum != config.desired || !config.paused) {
-		return t.register(ctx, cluster, service, &config.minimum, &config.maximum, config.paused)
+	if scalable != nil && (config.minimum != config.desired || config.maximum != config.desired || !maintainBounds) {
+		return t.register(ctx, cluster, service, &config.minimum, &config.maximum, maintainBounds)
 	}
 	return nil
 }
@@ -201,11 +203,18 @@ func ecsNeedsInitialization(service *ecstypes.Service, scalable *aastypes.Scalab
 		(scalable != nil && ecsBoundsEqual(scalable, 0, 0))
 }
 
+type ecsBoundsMode string
+
+const (
+	ecsBoundsModeTags      ecsBoundsMode = "tags"
+	ecsBoundsModeScheduled ecsBoundsMode = "scheduled"
+)
+
 type ecsConfig struct {
-	desired int32
-	minimum int32
-	maximum int32
-	paused  bool
+	desired    int32
+	minimum    int32
+	maximum    int32
+	boundsMode ecsBoundsMode
 }
 
 func ecsConfigFromTags(tags map[string]string) (ecsConfig, error) {
@@ -217,17 +226,14 @@ func ecsConfigFromTags(tags map[string]string) (ecsConfig, error) {
 	if err != nil {
 		return ecsConfig{}, err
 	}
-	paused := false
-	if value, present := tags[model.EcsScheduledScalingPausedTagKey]; present {
-		switch value {
-		case "true":
-			paused = true
-		case "false":
-		default:
-			return ecsConfig{}, fmt.Errorf("tag %s=%q must be true or false", model.EcsScheduledScalingPausedTagKey, value)
+	mode := ecsBoundsModeScheduled
+	if modeValue, present := tags[model.EcsScalingBoundsModeTagKey]; present {
+		mode = ecsBoundsMode(modeValue)
+		if mode != ecsBoundsModeTags && mode != ecsBoundsModeScheduled {
+			return ecsConfig{}, fmt.Errorf("tag %s=%q must be tags or scheduled", model.EcsScalingBoundsModeTagKey, modeValue)
 		}
 	}
-	return ecsConfig{desired: desired, minimum: minimum, maximum: maximum, paused: paused}, nil
+	return ecsConfig{desired: desired, minimum: minimum, maximum: maximum, boundsMode: mode}, nil
 }
 
 // ecs-service の Ref を、ECS API が個別の引数として要求する cluster と service へ分解する

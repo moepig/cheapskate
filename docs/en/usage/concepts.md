@@ -11,7 +11,7 @@ Configuration and current state have separate sources:
 | Information | Location | Meaning |
 | --- | --- | --- |
 | Group configuration | DynamoDB | Normal start and stop times, override, and ECS capacity limit |
-| Resource configuration | AWS resource tags | Membership and ECS startup count, normal bounds, and suspension request |
+| Resource configuration | AWS resource tags | Membership and ECS startup count, normal bounds, and bounds mode |
 | Current state | AWS services | Current running/stopped state or ECS task counts and scaling settings |
 
 Saving configuration through the CLI or web console does not wait for AWS resources to start or stop. The reconciler is the program that periodically compares configuration with current state and applies necessary changes.

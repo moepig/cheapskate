@@ -115,6 +115,14 @@ func (f *ecsScalingFixture) target() *EcsServiceTarget {
 	return &EcsServiceTarget{Ecs: f.ecs, AutoScaling: f.autoScaling}
 }
 
+// AWS の一時停止状態に対応する上下限管理モードをテスト入力として返す。
+func ecsBoundsModeForTest(paused bool) string {
+	if paused {
+		return "tags"
+	}
+	return "scheduled"
+}
+
 type ecsScalingStore struct{ override model.Override }
 
 func (s ecsScalingStore) ListGroups(context.Context) ([]state.GroupRow, error) {
@@ -130,7 +138,7 @@ func (f *ecsScalingFixture) cycle(t *testing.T, resource model.Resource, overrid
 	return summary
 }
 
-// タグ要求と AWS フラグの差および停止設定の不足を観測し、通常の scheduled action の変更は維持する。
+// 上下限管理モードと AWS 設定の差を観測し、scheduled モードでの scheduled action の変更は維持する。
 func TestEcsDescribeScheduledScalingRepair(t *testing.T) {
 	for _, test := range []struct {
 		name                      string
@@ -160,7 +168,7 @@ func TestEcsDescribeScheduledScalingRepair(t *testing.T) {
 				f.scalable.SuspendedState.ScheduledScalingSuspended = nil
 			}
 			resource := ecsReconcileResource()
-			resource.Tags[model.EcsScheduledScalingPausedTagKey] = strconv.FormatBool(test.request)
+			resource.Tags[model.EcsScalingBoundsModeTagKey] = ecsBoundsModeForTest(test.request)
 			observation, err := f.target().Describe(context.Background(), resource)
 			require.NoError(t, err)
 			assert.Equal(t, test.wantStart, observation.NeedsStart)
@@ -172,11 +180,11 @@ func TestEcsDescribeScheduledScalingRepair(t *testing.T) {
 	}
 }
 
-// true のタグを保持した複数日の停止・起動で、AWS の一時停止を解除せず、収束後には追加操作を行わない。
-func TestEcsPauseRequestPersistsAcrossStopStartCycles(t *testing.T) {
+// tags モードで複数日の停止・起動を行い、通常範囲と AWS の一時停止を維持し、収束後には追加操作を行わない。
+func TestEcsTagsBoundsModePersistsAcrossStopStartCycles(t *testing.T) {
 	f := newEcsScalingFixture(t, 0, 0, 0, true)
 	resource := ecsReconcileResource()
-	resource.Tags[model.EcsScheduledScalingPausedTagKey] = "true"
+	resource.Tags[model.EcsScalingBoundsModeTagKey] = "tags"
 	for day := 0; day < 3; day++ {
 		at := time.Date(2026, 10, 4+day, 9, 0, 0, 0, time.UTC)
 		for _, override := range []model.Override{model.OverrideRunning, model.OverrideStopped} {
@@ -190,17 +198,44 @@ func TestEcsPauseRequestPersistsAcrossStopStartCycles(t *testing.T) {
 	for _, input := range f.requests {
 		assert.Equal(t, aws.Bool(true), input.SuspendedState.ScheduledScalingSuspended)
 	}
-	assert.Equal(t, "true", resource.Tags[model.EcsScheduledScalingPausedTagKey])
+	assert.Equal(t, "tags", resource.Tags[model.EcsScalingBoundsModeTagKey])
 	assert.Empty(t, f.updates)
 	assert.True(t, aws.ToBool(f.scalable.SuspendedState.DynamicScalingInSuspended))
 	assert.True(t, aws.ToBool(f.scalable.SuspendedState.DynamicScalingOutSuspended))
 }
 
-// false のタグでも ECS サービスの停止中は一時停止し、起動設定を完了した後だけ Scheduled Scaling を再開する。
+// 稼働中の上下限を外部で変更して複数サイクル実行し、tags はタグ範囲へ戻し、scheduled は変更を維持する。
+func TestEcsBoundsModesReconcileBoundsDrift(t *testing.T) {
+	for _, test := range []struct {
+		mode                          string
+		paused                        bool
+		wantDesired, wantMin, wantMax int32
+		wantRequests                  int
+	}{
+		{mode: "tags", paused: true, wantDesired: 3, wantMin: 1, wantMax: 3, wantRequests: 1},
+		{mode: "scheduled", wantDesired: 5, wantMin: 4, wantMax: 6},
+	} {
+		t.Run(test.mode, func(t *testing.T) {
+			f := newEcsScalingFixture(t, 5, 4, 6, test.paused)
+			resource := ecsReconcileResource()
+			resource.Tags[model.EcsScalingBoundsModeTagKey] = test.mode
+			at := time.Now()
+			assert.Empty(t, f.cycle(t, resource, model.OverrideRunning, at).Errors)
+			assert.Equal(t, test.wantDesired, f.service.DesiredCount)
+			assert.True(t, ecsBoundsEqual(f.scalable, test.wantMin, test.wantMax))
+			assert.Equal(t, test.paused, ecsScheduledScalingPaused(f.scalable))
+			assert.Empty(t, f.cycle(t, resource, model.OverrideRunning, at.Add(time.Hour)).Actions)
+			assert.Len(t, f.requests, test.wantRequests)
+			assert.Empty(t, f.updates)
+		})
+	}
+}
+
+// scheduled モードで停止・起動し、停止中は一時停止し、起動設定を完了した後だけ Scheduled Scaling を再開する。
 func TestEcsStopTemporarilySuspendsScheduledScaling(t *testing.T) {
 	f := newEcsScalingFixture(t, 3, 1, 3, false)
 	resource := ecsReconcileResource()
-	resource.Tags[model.EcsScheduledScalingPausedTagKey] = "false"
+	resource.Tags[model.EcsScalingBoundsModeTagKey] = "scheduled"
 	at := time.Now()
 	assert.Empty(t, f.cycle(t, resource, model.OverrideStopped, at).Errors)
 	require.Len(t, f.requests, 1)
@@ -212,23 +247,23 @@ func TestEcsStopTemporarilySuspendsScheduledScaling(t *testing.T) {
 	assert.Equal(t, aws.Bool(true), f.requests[1].SuspendedState.ScheduledScalingSuspended)
 	assert.Equal(t, aws.Bool(false), f.requests[2].SuspendedState.ScheduledScalingSuspended)
 	assert.EqualValues(t, 2, f.service.DesiredCount)
-	assert.Equal(t, "false", resource.Tags[model.EcsScheduledScalingPausedTagKey])
+	assert.Equal(t, "scheduled", resource.Tags[model.EcsScalingBoundsModeTagKey])
 	assert.Empty(t, f.cycle(t, resource, model.OverrideRunning, at.Add(3*time.Hour)).Actions)
 }
 
-// 稼働中のタグ変更と一時停止解除で通常の上下限を適用し、範囲内の現在台数を維持する。
-func TestEcsRunningPauseChangesPreserveDesiredCount(t *testing.T) {
+// 稼働中に上下限管理モードを切り替え、通常の上下限を適用し、範囲内の現在台数を維持する。
+func TestEcsRunningBoundsModeChangesPreserveDesiredCount(t *testing.T) {
 	f := newEcsScalingFixture(t, 3, 2, 9, false)
 	resource := ecsReconcileResource()
 	at := time.Now()
 	assert.Empty(t, f.cycle(t, resource, model.OverrideRunning, at).Actions)
-	resource.Tags[model.EcsScheduledScalingPausedTagKey] = "true"
+	resource.Tags[model.EcsScalingBoundsModeTagKey] = "tags"
 	assert.Empty(t, f.cycle(t, resource, model.OverrideRunning, at).Errors)
 	require.Len(t, f.requests, 1)
 	assert.Equal(t, aws.Int32(1), f.scalable.MinCapacity)
 	assert.Equal(t, aws.Int32(3), f.scalable.MaxCapacity)
 	assert.EqualValues(t, 3, f.service.DesiredCount)
-	resource.Tags[model.EcsScheduledScalingPausedTagKey] = "false"
+	resource.Tags[model.EcsScalingBoundsModeTagKey] = "scheduled"
 	assert.Empty(t, f.cycle(t, resource, model.OverrideRunning, at).Errors)
 	require.Len(t, f.requests, 2)
 	assert.Equal(t, aws.Int32(1), f.requests[1].MinCapacity)
@@ -245,12 +280,12 @@ func TestEcsStartAppliesNormalBoundsWithoutResettingFixedCapacity(t *testing.T) 
 			f := newEcsScalingFixture(t, 2, 2, 2, true)
 			resource := ecsReconcileResource()
 			resource.Tags[model.EcsScalingMinTagKey], resource.Tags[model.EcsScalingMaxTagKey] = "2", "2"
-			resource.Tags[model.EcsScheduledScalingPausedTagKey] = "true"
+			resource.Tags[model.EcsScalingBoundsModeTagKey] = "tags"
 			at := time.Now()
 			assert.Empty(t, f.cycle(t, resource, model.OverrideRunning, at).Actions)
 			resource.Tags[model.EcsDesiredCountTagKey] = "1"
 			resource.Tags[model.EcsScalingMinTagKey], resource.Tags[model.EcsScalingMaxTagKey] = "1", "3"
-			resource.Tags[model.EcsScheduledScalingPausedTagKey] = strconv.FormatBool(paused)
+			resource.Tags[model.EcsScalingBoundsModeTagKey] = ecsBoundsModeForTest(paused)
 			assert.Empty(t, f.cycle(t, resource, model.OverrideRunning, at).Errors)
 			assert.EqualValues(t, 2, f.service.DesiredCount)
 			assert.Equal(t, aws.Int32(1), f.scalable.MinCapacity)
@@ -275,7 +310,7 @@ func TestEcsLostPinResponseConvergesWhileTasksStart(t *testing.T) {
 				return errors.New("pin response lost")
 			}
 			resource := ecsReconcileResource()
-			resource.Tags[model.EcsScheduledScalingPausedTagKey] = strconv.FormatBool(paused)
+			resource.Tags[model.EcsScalingBoundsModeTagKey] = ecsBoundsModeForTest(paused)
 			at := time.Now()
 			require.Len(t, f.cycle(t, resource, model.OverrideRunning, at).Errors, 1)
 			assert.EqualValues(t, 2, f.service.DesiredCount)
@@ -340,7 +375,7 @@ func TestEcsFixedStartupBoundsRecoverSuspension(t *testing.T) {
 				}
 				resource := ecsReconcileResource()
 				resource.Tags[model.EcsScalingMinTagKey], resource.Tags[model.EcsScalingMaxTagKey] = "2", "2"
-				resource.Tags[model.EcsScheduledScalingPausedTagKey] = strconv.FormatBool(paused)
+				resource.Tags[model.EcsScalingBoundsModeTagKey] = ecsBoundsModeForTest(paused)
 				at := time.Now()
 				require.Len(t, f.cycle(t, resource, model.OverrideRunning, at).Errors, 1)
 				assert.Empty(t, f.cycle(t, resource, model.OverrideRunning, at).Errors)
@@ -438,11 +473,11 @@ func TestEcsStopFailureConvergesWithoutRestoringScaling(t *testing.T) {
 	}
 }
 
-// 古いタグでの再適用後も最新の要求へ収束し、disabled は適用済みの AWS 設定を変更しない。
-func TestEcsLatestPauseRequestConvergesAfterStaleConfiguration(t *testing.T) {
+// 古いモードでの再適用後も最新のモードへ収束し、disabled は適用済みの AWS 設定を変更しない。
+func TestEcsLatestBoundsModeConvergesAfterStaleConfiguration(t *testing.T) {
 	f := newEcsScalingFixture(t, 2, 1, 3, false)
 	resource := ecsReconcileResource()
-	resource.Tags[model.EcsScheduledScalingPausedTagKey] = "true"
+	resource.Tags[model.EcsScalingBoundsModeTagKey] = "tags"
 	at := time.Now()
 	assert.Empty(t, f.cycle(t, resource, model.OverrideRunning, at).Errors)
 	stale := ecsReconcileResource()
@@ -456,19 +491,19 @@ func TestEcsLatestPauseRequestConvergesAfterStaleConfiguration(t *testing.T) {
 	assert.True(t, ecsScheduledScalingPaused(f.scalable))
 }
 
-// scalable target がない場合も一時停止要求を検証し、target を作らず ECS の起動・停止だけを行う。
-func TestEcsPauseRequestWithoutScalableTarget(t *testing.T) {
+// scalable target がない場合も上下限管理モードを検証し、target を作らず ECS の起動・停止だけを行う。
+func TestEcsBoundsModeWithoutScalableTarget(t *testing.T) {
 	f := newEcsScalingFixture(t, 0, 0, 0, false)
 	f.scalable = nil
 	resource := ecsReconcileResource()
-	resource.Tags[model.EcsScheduledScalingPausedTagKey] = "true"
+	resource.Tags[model.EcsScalingBoundsModeTagKey] = "tags"
 	require.NoError(t, f.target().Start(context.Background(), resource))
 	require.NoError(t, f.target().Stop(context.Background(), resource))
 	assert.Equal(t, []int32{2, 0}, f.updates)
 	assert.Empty(t, f.requests)
-	resource.Tags[model.EcsScheduledScalingPausedTagKey] = "invalid"
+	resource.Tags[model.EcsScalingBoundsModeTagKey] = "invalid"
 	_, err := f.target().Describe(context.Background(), resource)
-	assert.ErrorContains(t, err, model.EcsScheduledScalingPausedTagKey)
+	assert.ErrorContains(t, err, model.EcsScalingBoundsModeTagKey)
 	assert.Error(t, f.target().Start(context.Background(), resource))
 	assert.Error(t, f.target().Stop(context.Background(), resource))
 	assert.Len(t, f.updates, 2)

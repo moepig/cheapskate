@@ -175,6 +175,8 @@ State.Name の running と stopped を同名の観測状態へ対応づける。
 
 ## ECS service
 
+上下限管理モードは、タグ範囲を維持する処理と Scheduled Scaling に変更を委ねる処理の競合を防ぐために使用する。tags ではタグ範囲と一時停止を維持し、scheduled では起動設定後に Scheduled Scaling を再開する。
+
 本節は現行実装の呼び出し順を示す。ECS は現在のタスク数に加えて scalable target の設定を観測する。設定タグは探索時の snapshot を使用し、Start と Stop でも検証する。図中のタグ値には既定値を適用する。AWS の ScheduledScalingSuspended が未取得または nil の場合は false として扱う。
 
 実行状態を保存しない収束設計と具体的な設定値による観測例は、[ECS の起動・停止とスケーリング](../usage/ecs.md)を参照。
@@ -200,7 +202,7 @@ sequenceDiagram
     else scheduling strategy が REPLICA でも空でもない
         Adapter-->>Reconciler: エラー
     else 対応する service
-        Adapter->>Adapter: cheapskate:desired-count・cheapskate:scaling-min・<br/>cheapskate:scaling-max・cheapskate:scheduled-scaling-paused を検証
+        Adapter->>Adapter: cheapskate:desired-count・cheapskate:scaling-min・<br/>cheapskate:scaling-max・cheapskate:scaling-bounds-mode を検証
         Note over Adapter,AutoScaling: 不正なタグの場合はここでエラーを返す
         Adapter->>AutoScaling: DescribeScalableTargets(対象 service)
         AutoScaling-->>Adapter: scalable target または target なし
@@ -220,10 +222,10 @@ Ref の分割または DescribeServices が失敗した場合もエラーを返�
 | --- | --- |
 | NeedsStop | AWS の上下限が 0/0 でない、または ScheduledScalingSuspended=false |
 | NeedsStart | desiredCount・runningCount・pendingCount がすべて 0、または上下限が 0/0 |
-| NeedsStart | AWS の ScheduledScalingSuspended と cheapskate:scheduled-scaling-paused タグが異なる |
-| NeedsStart | cheapskate:scheduled-scaling-paused=true で、AWS の上下限が cheapskate:scaling-min と cheapskate:scaling-max タグ値と異なる |
+| NeedsStart | AWS の ScheduledScalingSuspended と上下限管理モードが要求する一時停止状態が異なる |
+| NeedsStart | cheapskate:scaling-bounds-mode=tags で、AWS の上下限が cheapskate:scaling-min と cheapskate:scaling-max タグ値と異なる |
 
-正の固定範囲から起動途中かどうかを推測しない。cheapskate:scheduled-scaling-paused=false の通常稼働中は、Scheduled Scaling による上下限変更を再適用の理由にしない。
+正の固定範囲から起動途中かどうかを推測しない。cheapskate:scaling-bounds-mode=scheduled の通常稼働中は、Scheduled Scaling による上下限変更を再適用の理由にしない。
 
 ### 停止
 
@@ -249,7 +251,7 @@ sequenceDiagram
     Adapter-->>Reconciler: nil またはエラー
 ```
 
-cheapskate:scheduled-scaling-paused タグ値によらず AWS の ScheduledScalingSuspended=true を適用し、タグ自体は変更しない。ecs_max_count による停止の拒否は行わない。target がある場合は UpdateService と rollback を追加しない。
+上下限管理モードによらず AWS の ScheduledScalingSuspended=true を適用し、タグ自体は変更しない。ecs_max_count による停止の拒否は行わない。target がある場合は UpdateService と rollback を追加しない。
 
 ### 起動の初期設定
 
@@ -284,8 +286,8 @@ sequenceDiagram
             Adapter->>EcsAPI: UpdateService(desiredCount=cheapskate:desired-count タグ値)
             EcsAPI-->>Adapter: 応答
         end
-        opt 通常の上下限タグが cheapskate:desired-count タグ値と異なる、<br/>または cheapskate:scheduled-scaling-paused=false
-            Adapter->>AutoScaling: RegisterScalableTarget(MinCapacity=cheapskate:scaling-min タグ値、<br/>MaxCapacity=cheapskate:scaling-max タグ値、<br/>ScheduledScalingSuspended=cheapskate:scheduled-scaling-paused タグ値)
+        opt 通常の上下限タグが cheapskate:desired-count タグ値と異なる、<br/>または cheapskate:scaling-bounds-mode=scheduled
+            Adapter->>AutoScaling: RegisterScalableTarget(MinCapacity=cheapskate:scaling-min タグ値、<br/>MaxCapacity=cheapskate:scaling-max タグ値、<br/>ScheduledScalingSuspended=モードから決まる値（tags は true、scheduled は false）)
             AutoScaling-->>Adapter: 応答
         end
     end
@@ -294,11 +296,11 @@ sequenceDiagram
 
 この図は成功経路であり、各 API が失敗した時点で後続の呼び出しを中止してエラーを返す。service が見つからない場合や REPLICA 以外の場合もエラーとなる。固定後の再観測は、RegisterScalableTarget が capacity を上下限内へ調整する動作を考慮したものである。
 
-cheapskate:scheduled-scaling-paused=false による解除は最後の RegisterScalableTarget だけで行う。一時停止要求のタグが true で、通常の上下限タグがともに起動台数タグと同じ場合は、最初の固定で通常設定も成立するため最後の RegisterScalableTarget を省略する。稼働中で初期設定が不要な場合は、次の設定再適用シーケンスを使用する。
+cheapskate:scaling-bounds-mode=scheduled による解除は最後の RegisterScalableTarget だけで行う。上下限管理モードが tags で、通常の上下限タグがともに起動台数タグと同じ場合は、最初の固定で通常設定も成立するため最後の RegisterScalableTarget を省略する。稼働中で初期設定が不要な場合は、次の設定再適用シーケンスを使用する。
 
 ### 稼働中の設定再適用
 
-起動の初期設定が不要な service への Start は、通常の上下限と一時停止要求を適用する。target がない場合は変更 API を呼ばない。target がある場合のシーケンスを、次の図に示す。
+起動の初期設定が不要な service への Start は、通常の上下限と管理モードに対応する一時停止状態を適用する。target がない場合は変更 API を呼ばない。target がある場合のシーケンスを、次の図に示す。
 
 ```mermaid
 sequenceDiagram
@@ -313,10 +315,10 @@ sequenceDiagram
     Adapter->>AutoScaling: DescribeScalableTargets(対象 service)
     AutoScaling-->>Adapter: 現在の target
     Adapter->>Adapter: 初期設定が不要であることを判定
-    alt cheapskate:scheduled-scaling-paused=true で、一時停止または通常範囲が未適用
+    alt cheapskate:scaling-bounds-mode=tags で、一時停止または通常範囲が未適用
         Adapter->>AutoScaling: RegisterScalableTarget(MinCapacity=cheapskate:scaling-min タグ値、<br/>MaxCapacity=cheapskate:scaling-max タグ値、ScheduledScalingSuspended=true)
         AutoScaling-->>Adapter: 応答またはエラー
-    else cheapskate:scheduled-scaling-paused=false かつ AWS の ScheduledScalingSuspended=true
+    else cheapskate:scaling-bounds-mode=scheduled かつ AWS の ScheduledScalingSuspended=true
         Adapter->>AutoScaling: RegisterScalableTarget(MinCapacity=cheapskate:scaling-min タグ値、<br/>MaxCapacity=cheapskate:scaling-max タグ値、ScheduledScalingSuspended=false)
         AutoScaling-->>Adapter: 応答またはエラー
     else 設定が一致している
@@ -352,7 +354,7 @@ sequenceDiagram
     AutoScaling-->>Adapter: 正の固定範囲、ScheduledScalingSuspended=true
     Adapter-->>Reconciler: Observation、NeedsStart=true
     Reconciler->>Adapter: Start(resource、現在のタグ)
-    Note over Adapter,AutoScaling: 稼働中の設定再適用シーケンスを実行<br/>通常の上下限と一時停止要求を適用し、起動台数へ戻さない
+    Note over Adapter,AutoScaling: 稼働中の設定再適用シーケンスを実行<br/>通常の上下限と管理モードに対応する一時停止状態を適用し、起動台数へ戻さない
     Adapter-->>Reconciler: nil
     Reconciler->>Reconciler: action を記録し、設定に応じて通知
 ```
@@ -363,10 +365,10 @@ sequenceDiagram
 | --- | --- |
 | 停止設定が未適用 | AWS の上下限または ScheduledScalingSuspended の差から停止を再適用する |
 | すべてのタスク数が 0、または上下限が 0/0 | 起動の初期設定を行う |
-| 正の desiredCount と一時停止中の正の固定範囲 | 通常の上下限と一時停止要求を適用する。設定台数がその範囲内なら維持する |
-| 通常の上下限タグが起動台数タグと等しく、AWS の ScheduledScalingSuspended だけが一時停止要求のタグと異なる | 通常の上下限と一時停止要求を適用する |
-| 最後の更新の応答喪失後、cheapskate:scheduled-scaling-paused=true で通常設定が一致 | 追加操作を行わない |
-| 最後の更新の応答喪失後、cheapskate:scheduled-scaling-paused=false で Scheduled Scaling が上下限を変更 | 変更された範囲を維持する |
+| 正の desiredCount と一時停止中の正の固定範囲 | 通常の上下限と管理モードに対応する一時停止状態を適用する。設定台数がその範囲内なら維持する |
+| 通常の上下限タグが起動台数タグと等しく、AWS の ScheduledScalingSuspended だけに管理モードとの差がある | 通常の上下限と管理モードに対応する一時停止状態を適用する |
+| 最後の更新の応答喪失後、cheapskate:scaling-bounds-mode=tags で通常設定が一致 | 追加操作を行わない |
+| 最後の更新の応答喪失後、cheapskate:scaling-bounds-mode=scheduled で Scheduled Scaling が上下限を変更 | 変更された範囲を維持する |
 
 古い snapshot に基づく invocation は古い要求を適用しうる。最新の要求への収束は、その invocation の終了後に成功する後続サイクルで行う。disabled、管理終了、および cheapskate 自体の実行停止では、適用済みの AWS フラグと上下限を復元しない。
 

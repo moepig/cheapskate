@@ -56,7 +56,7 @@ Terraform でグループを管理する場合の例は、[Terraform による�
 
 ## 5. リソースタグの設定
 
-管理対象の各リソースに cheapskate:group=dev を設定する。ECS では service 自身に起動台数、通常の上下限、および必要な一時停止要求を設定する。値の制約は、[リソースタグ](resource_tag.md)を参照。
+管理対象の各リソースに cheapskate:group=dev を設定する。ECS では service 自身に起動台数、通常の上下限、および上下限管理モードを設定する。値の制約は、[リソースタグ](resource_tag.md)を参照。
 
 ## 6. 動作確認と定期実行の有効化
 

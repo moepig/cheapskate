@@ -56,7 +56,7 @@ For Terraform-managed groups, see [Terraform group configuration](terraform_reco
 
 ## 5. Tag resources
 
-Set cheapskate:group=dev on every managed resource. For ECS, set startup count, normal bounds, and any suspension request on the service itself. For value constraints, see [Resource tags](resource_tag.md).
+Set cheapskate:group=dev on every managed resource. For ECS, set startup count, normal bounds, and bounds mode on the service itself. For value constraints, see [Resource tags](resource_tag.md).
 
 ## 6. Verify and enable periodic execution
 

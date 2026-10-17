@@ -83,21 +83,21 @@ cheapskate-cli ecs-max-count --group dev 4
 
 同じコマンドで上限を変更できる。CLI と Web コンソールのスケジュール・override 操作は上限を保持する。属性の削除と ECS 固有の設定は、[ECS service の設定](resources/ecs-service.md#dynamodb-と-cli) を参照。
 
-### Scheduled Scaling の一時停止と再開
+### スケーリング上下限の管理方法の変更
 
-一時停止は、service の cheapskate:scheduled-scaling-paused タグを true に設定し、後続サイクルで ScheduledScalingSuspended=true を確認する。
+タグの上下限を維持する運用と、AWS Scheduled Scaling による上下限変更を使用する運用を切り替える。タグ範囲を維持する場合は、service の cheapskate:scaling-bounds-mode を tags に設定し、グループの要求を running にする。正常なサイクルの後、通常の上下限と ScheduledScalingSuspended=true を確認する。
 
 再開前に、cheapskate:scaling-min と cheapskate:scaling-max が目的の通常範囲であることを確認する。再開時にその範囲が適用され、範囲外の台数は AWS によって調整される。再開手順は、次のとおりである。
 
-1. cheapskate:scheduled-scaling-paused を false に変更するか削除する。
+1. cheapskate:scaling-bounds-mode を scheduled に変更する。
 2. グループの要求を running にする。
 3. 正常なサイクルの後、show または Web コンソールで ScheduledScalingSuspended=false と通常の上下限を確認する。
 
-停止要求が有効な間は、タグを解除しても AWS の一時停止は維持される。一時停止中に実行時刻を過ぎた scheduled action は再実行されない。
+停止要求が有効な間は、scheduled モードに変更しても AWS の一時停止は維持される。一時停止中に実行時刻を過ぎた scheduled action は再実行されない。
 
 ## 管理の終了
 
-管理終了後に保つ起動・停止状態と、ECS の Scheduled Scaling の状態を先に決める。ECS を起動状態で残す場合は、維持する上下限を通常のタグに設定し、Scheduled Scaling を有効にするなら一時停止要求を false、維持するなら true にする。停止状態で残す場合は上下限 0/0 と一時停止が残る。
+管理終了後に保つ起動・停止状態と、ECS の Scheduled Scaling の状態を先に決める。ECS を起動状態で残す場合は、維持する上下限を通常のタグに設定し、Scheduled Scaling を有効にするなら上下限管理モードを scheduled、タグ範囲を維持するなら tags にする。停止状態で残す場合は上下限 0/0 と一時停止が残る。
 
 管理終了の手順は、次のとおりである。
 

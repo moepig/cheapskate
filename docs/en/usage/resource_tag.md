@@ -18,6 +18,6 @@ AWS assigns the aws:autoscaling:groupName tag to EC2 Auto Scaling group members.
 
 ## ECS configuration tags
 
-Startup count, normal bounds, and the Scheduled Scaling suspension request are tags on the ECS service itself. For tags, defaults, constraints, and commands, see [ECS service resource tags](resources/ecs-service.md#resource-tags).
+Startup count, normal bounds, and bounds mode are tags on the ECS service itself. For tags, defaults, constraints, and commands, see [ECS service resource tags](resources/ecs-service.md#resource-tags).
 
 For application timing and scaling behavior, see [ECS startup, shutdown, and scaling](ecs.md).
