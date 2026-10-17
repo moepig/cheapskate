@@ -35,4 +35,4 @@ The reconciler image is a Lambda handler. Both periodic and manual invocations p
 
 The web-console image includes an HTTP server and Lambda Web Adapter. The adapter translates API Gateway or similar invocation events into HTTP. The console application remains a regular HTTP server.
 
-Reserved concurrency of 1 is optional to reduce overlapping execution. Correctness does not depend on excluding concurrent invocations.
+A reserved concurrency of 1 for the reconciler Lambda is optional to reduce overlapping execution. Correctness does not depend on excluding concurrent invocations.

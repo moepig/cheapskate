@@ -58,4 +58,4 @@ override は、スケジュールより優先する状態の指定である。�
 
 ## 設定と運用の参照先
 
-グループ名、cron、および有効期限の制約は、[グループ設定](group_config.md)を参照。設定操作は、[日常の操作](operations.md)を参照。反映のタイミングと対応リソースは、[起動・停止の挙動](resource_flow.md)を参照。
+グループ名、cron、および override の有効期限の制約は、[グループ設定](group_config.md)を参照。設定操作は、[日常の操作](operations.md)を参照。反映のタイミングと対応リソースは、[起動・停止の挙動](resource_flow.md)を参照。

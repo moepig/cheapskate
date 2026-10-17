@@ -1,6 +1,6 @@
 # EC2 instance configuration
 
-This document describes eligibility, how group settings apply, and where to set tags for an EC2 instance. Its type name is ec2-instance.
+This document describes eligibility, how group settings apply, and where to set tags for an EC2 instance. Its cheapskate resource type name is ec2-instance.
 
 ## Eligibility
 
@@ -28,7 +28,7 @@ For connection and group assumptions, see [Shared prerequisites](README.md#share
 
 ## Applied behavior
 
-running means running and stopped means stopped. The pending, stopping, and shutting-down states defer operations until a later cycle. A terminated instance is treated as not found and is not restarted. Operations use StartInstances and StopInstances.
+The EC2 instance states running and stopped map to cheapskate's running and stopped states. The pending, stopping, and shutting-down states defer operations until a later cycle. A terminated instance is treated as not found and is not restarted. Operations use StartInstances and StopInstances.
 
 If inspection reports Auto Scaling group membership, remove the instance from cheapskate management.
 

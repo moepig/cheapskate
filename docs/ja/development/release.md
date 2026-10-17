@@ -6,18 +6,18 @@ goreleaser をローカルで実行することはない。CI が pull request �
 
 ## リリースの手順
 
-リリースはタグの push によって開始する。
+リリースは Git タグの push によって開始する。
 
 ```console
 git tag v0.1.0
 git push origin v0.1.0
 ```
 
-バージョンはタグそのものであり、goreleaser がタグから導出する。semver のプレリリース(`v0.1.0-rc.1`)である場合、GitHub リリースはプレリリースとして作られ、イメージの `latest` タグは移動しない。先にテストスイート全体がタグ付けされたコミットに対して走り、いずれかが失敗した場合、そのタグにリリースは作られない。
+バージョンは Git タグそのものであり、goreleaser がタグから導出する。semver のプレリリース(`v0.1.0-rc.1`)である場合、GitHub リリースはプレリリースとして作られ、イメージの `latest` タグは移動しない。先にテストスイート全体がタグ付けされたコミットに対して走り、いずれかが失敗した場合、そのタグにリリースは作られない。
 
 リリースの成果物は次のとおりである。
 
-| 成果物 | 配置先 | タグ |
+| 成果物 | 配置先 | イメージタグ |
 |---|---|---|
 | `cheapskate-reconciler` イメージ | `ghcr.io/moepig/cheapskate-reconciler` | バージョン、`latest` |
 | `cheapskate-webconsole` イメージ | `ghcr.io/moepig/cheapskate-webconsole` | バージョン、`latest` |

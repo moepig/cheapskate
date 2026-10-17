@@ -16,7 +16,7 @@ export DEFAULT_TIMEZONE=Asia/Tokyo
 
 The CLI saves group configuration without creating, tagging, starting, or stopping AWS resources. Set cheapskate:group=<group-name> separately on member resources. The reconciler later reads the configuration and tags to apply the current request.
 
-For ECS, register the group limit with cheapskate-cli ecs-max-count --group NAME COUNT before allowing startup. See [Registering an ECS capacity limit](operations.md#registering-an-ecs-capacity-limit).
+For ECS, register the group's DynamoDB ecs_max_count attribute with cheapskate-cli ecs-max-count --group NAME COUNT before allowing startup. See [Registering an ECS capacity limit](operations.md#registering-an-ecs-capacity-limit).
 
 ## Weekday operation
 

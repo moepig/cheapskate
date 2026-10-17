@@ -4,7 +4,7 @@ This document defines read boundaries, failure isolation, overlapping invocation
 
 ## Read boundary
 
-Each invocation takes in-memory snapshots of all groups and discovered resources before resource processing. Group reads use a strongly consistent Query of CONFIG. Discovery follows every GetResources page for supported resources with the fixed membership tag.
+Each invocation takes in-memory snapshots of all groups and discovered resources before resource processing. Group reads use a strongly consistent Query of the DynamoDB CONFIG partition. Discovery follows every Resource Groups Tagging API GetResources page for supported resources with the cheapskate:group tag.
 
 A global read or ARN parsing failure returns an error without calling adapter Describe, Start, or Stop. Duplicate ARNs use the last complete tag set and are processed once per cycle.
 
@@ -22,7 +22,7 @@ Overlapping invocations can repeat absolute-state operations and apply different
 
 ## Notification boundary
 
-Successful resource calls are followed by at most two Publish attempts. Notification failure is logged without reversing the resource operation or stopping the cycle. If observation after a lost response shows no further changes are needed, the operation and notification are not replayed.
+Successful resource calls are followed by at most two SNS Publish attempts. Notification failure is logged without reversing the resource operation or stopping the cycle. If observation after a lost response shows no further changes are needed, the operation and notification are not replayed.
 
 ## Verification scope
 

@@ -1,6 +1,6 @@
 # RDS DB インスタンスの設定
 
-本ドキュメントは、RDS DB インスタンスの対象条件、グループ設定の適用先、およびタグの設定先を示す。タイプ名は rds-instance である。
+本ドキュメントは、RDS DB インスタンスの対象条件、グループ設定の適用先、およびタグの設定先を示す。cheapskate のリソースタイプ名は rds-instance である。
 
 ## 対象条件
 
@@ -30,6 +30,6 @@ aws rds add-tags-to-resource --region ap-northeast-1 \
 
 ## 設定の反映
 
-available を稼働中、stopped を停止済みとして扱う。他の状態では操作せず、後続サイクルで再確認する。起動は StartDBInstance、停止は StopDBInstance による DB インスタンス単位の操作となる。
+RDS の DB インスタンス状態 available を稼働中、stopped を停止済みとして扱う。他の状態では操作せず、後続サイクルで再確認する。起動は StartDBInstance、停止は StopDBInstance による DB インスタンス単位の操作となる。
 
 設定と現在状態の確認方法は、[共通の反映確認](README.md#共通の反映確認) を参照。

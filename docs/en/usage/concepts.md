@@ -58,4 +58,4 @@ A cycle after 20:00 selects stopped based on the 18:00 stop occurrence. Resource
 
 ## Configuration and operation references
 
-For names, cron constraints, and expiration values, see [Group configuration](group_config.md). For commands, see [Daily operations](operations.md). For timing and supported resources, see [Start and stop behavior](resource_flow.md).
+For group names, cron constraints, and override expiration values, see [Group configuration](group_config.md). For commands, see [Daily operations](operations.md). For timing and supported resources, see [Start and stop behavior](resource_flow.md).

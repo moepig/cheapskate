@@ -4,7 +4,7 @@
 
 ## 共通設定
 
-AWS の認証情報、リージョン、および接続先は AWS SDK の設定を使用する。アプリケーション固有の共通変数を、以下に示す。
+AWS の認証情報、リージョン、および接続先は AWS SDK の設定を使用する。アプリケーション固有の共通環境変数を、以下に示す。
 
 | 変数 | 必須 | 既定値 | 用途 |
 | --- | --- | --- | --- |
@@ -22,7 +22,7 @@ DEFAULT_TIMEZONE が不正な場合、reconciler と Web コンソールは起�
 | LOG_LEVEL | info | 最低ログレベル。debug、info、warn、error を指定可能 |
 | NOTIFICATION_TOPIC_ARN | 空 | 成功したアクションの SNS 通知先 |
 | METRICS_ENABLED | false | true の場合にカスタムメトリクスを出力 |
-| METRICS_NAMESPACE | cheapskate | カスタムメトリクスの namespace |
+| METRICS_NAMESPACE | cheapskate | CloudWatch カスタムメトリクスの namespace |
 
 LOG_LEVEL は大文字と小文字を区別せず、空の場合は info を使う。解釈できない値では起動に失敗する。
 
@@ -30,7 +30,7 @@ METRICS_ENABLED を真偽値として解釈できない場合は起動に失敗�
 
 ## CLI
 
-CLI は、名前付きの context と選択状態をローカルの JSON ファイルに保存する。context にはテーブル名と、任意の AWS profile、リージョン、およびスケジュールのタイムゾーンを設定する。テーブル名は、-table、選択中 context、CHEAPSKATE_TABLE、STATE_TABLE_NAME の順に参照する。context のタイムゾーンは DEFAULT_TIMEZONE より優先する。CLI の有効期限表示は常に UTC の RFC 3339 形式である。context の管理コマンド、保存先、引数、および出力形式は、[CLI リファレンス](cli.md)を参照。
+CLI は、名前付きの context と選択状態をローカルの JSON ファイルに保存する。context には DynamoDB テーブル名と、任意の AWS profile、リージョン、およびスケジュールのタイムゾーンを設定する。テーブル名は、-table、選択中 context、CHEAPSKATE_TABLE、STATE_TABLE_NAME の順に参照する。context のタイムゾーンは DEFAULT_TIMEZONE より優先する。CLI では、override の有効期限を常に UTC の RFC 3339 形式で表示する。context の管理コマンド、保存先、引数、および出力形式は、[CLI リファレンス](cli.md)を参照。
 
 ## Web コンソール
 

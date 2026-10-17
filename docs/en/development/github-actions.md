@@ -10,7 +10,7 @@ The definition files under `.github/` and their roles are collected below.
 |---|---|---|
 | `workflows/ci.yml` | push to `main`, pull request | Calls `test.yml`, and snapshots the release path when that path changed |
 | `workflows/test.yml` | Called by `ci.yml` and `release.yml` | lint, unit, integration, image tests, `goreleaser check` |
-| `workflows/release.yml` | push of a `v*` tag | Calls `test.yml`, after which goreleaser publishes the GitHub release and the images |
+| `workflows/release.yml` | push of a `v*` Git tag | Calls `test.yml`, after which goreleaser publishes the GitHub release and the images |
 | `workflows/dependabot-auto-merge.yml` | pull request | Queues Dependabot's patch and minor updates for auto-merge |
 | `dependabot.yml` | weekly | Go modules, Actions, and Docker base images, grouped and held back by a 7-day cooldown |
 
@@ -28,7 +28,7 @@ flowchart LR
     pull request"] --> ci["ci.yml"]
     pr["pull request
     by Dependabot"] --> am["dependabot-auto-merge.yml"]
-    tag["push of a v* tag"] --> rel["release.yml"]
+    tag["push of a v* Git tag"] --> rel["release.yml"]
 
     ci --> test["test.yml
     (workflow_call only)"]
@@ -58,7 +58,7 @@ Branch protection selects the required checks by these names, and whether Depend
 
 ## Token permissions
 
-Every workflow declares `permissions: contents: read` at the top and raises it only in the jobs that need it, so write access exists only while it is needed. The release job holds `contents: write` and `packages: write`, and the auto-merge job holds `contents: write` and `pull-requests: write`.
+Every workflow declares GITHUB_TOKEN permissions with `permissions: contents: read` at the top and raises them only in the jobs that need them, so write access exists only while it is needed. The release job holds `contents: write` and `packages: write`, and the auto-merge job holds `contents: write` and `pull-requests: write`.
 
 The auto-merge job runs only when the pull request author is dependabot[bot]. It passes GITHUB_TOKEN to fetch-metadata and gh pr merge and requests write permissions at job level.
 

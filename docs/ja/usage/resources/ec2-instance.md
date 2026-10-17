@@ -1,6 +1,6 @@
 # EC2 インスタンスの設定
 
-本ドキュメントは、EC2 インスタンスの対象条件、グループ設定の適用先、およびタグの設定先を示す。タイプ名は ec2-instance である。
+本ドキュメントは、EC2 インスタンスの対象条件、グループ設定の適用先、およびタグの設定先を示す。cheapskate のリソースタイプ名は ec2-instance である。
 
 ## 対象条件
 
@@ -28,7 +28,7 @@ aws ec2 create-tags --region ap-northeast-1 \
 
 ## 設定の反映
 
-running を稼働中、stopped を停止済みとして扱う。pending、stopping、および shutting-down では操作せず、後続サイクルで再確認する。terminated は見つからない状態として扱い、再起動しない。起動は StartInstances、停止は StopInstances による操作となる。
+EC2 のインスタンス状態 running を稼働中、stopped を停止済みとして扱う。pending、stopping、および shutting-down では操作せず、後続サイクルで再確認する。terminated は見つからない状態として扱い、再起動しない。起動は StartInstances、停止は StopInstances による操作となる。
 
 Auto Scaling グループ所属のエラーがある場合は、そのインスタンスを cheapskate の管理対象から外す。
 

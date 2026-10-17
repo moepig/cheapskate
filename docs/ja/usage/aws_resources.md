@@ -25,7 +25,7 @@ cheapskate は、これらのリソースを自動作成しない。配置手順
 
 PARTITION、REGION、ACCOUNT は配置先に置き換える。通常の AWS パーティションは aws である。TABLE は STATE_TABLE_NAME、GROUP は許可する所属タグ値とする。DB_INSTANCE、DB_CLUSTER、CLUSTER、SERVICE、INSTANCE_ID は実際の識別子、SCALABLE_TARGET_ID は登録済み scalable target の ARN の末尾である。FUNCTION_NAME と TOPIC は対象の Lambda 関数名と通知先 topic 名に置き換える。
 
-Resource には対象 ARN を列挙する。複数ある場合は配列にする。所属タグの StringEquals には許可するグループ名を列挙する。所属タグ条件を持つ Statement では、ARN が一致してもタグが削除されたり許可外のグループへ変更されたりするとアクセスを許可しない。異なるグループに異なる ARN を許可する場合は Statement を分ける。
+IAM ポリシーの Resource には対象 ARN を列挙する。複数ある場合は配列にする。所属タグの StringEquals には許可するグループ名を列挙する。所属タグ条件を持つ Statement では、ARN が一致してもタグが削除されたり許可外のグループへ変更されたりするとアクセスを許可しない。異なるグループに異なる ARN を許可する場合は Statement を分ける。
 
 役割ごとに組み合わせる権限を、以下に示す。JSON 全体の例はそれぞれ単独のポリシーとして使用できる。Statement 単体の例は、対象ロールのポリシーの Statement 配列へ追加する。
 
@@ -237,7 +237,7 @@ EC2 の起動・停止は列挙した instance ARN と所属タグの両方で�
 
 ### ECS と Application Auto Scaling
 
-RegisterScalableTarget の Resource は ECS service ARN ではなく、Application Auto Scaling が返す ScalableTargetARN である。API の ResourceId=service/CLUSTER/SERVICE を scalable-target/ の後ろへ連結してはいけない。配置時に ARN を確認するコマンドを、以下に示す。
+RegisterScalableTarget を許可する IAM ポリシーの Resource は ECS service ARN ではなく、Application Auto Scaling が返す ScalableTargetARN である。API の ResourceId=service/CLUSTER/SERVICE を scalable-target/ の後ろへ連結してはいけない。配置時に ARN を確認するコマンドを、以下に示す。
 
 ```console
 aws application-autoscaling describe-scalable-targets \
@@ -331,7 +331,7 @@ Resource は NOTIFICATION_TOPIC_ARN と一致させる。通知が無効なら�
 
 ### SNS の暗号化
 
-暗号化した topic への発行では、対象キーの [kms:GenerateDataKey](https://docs.aws.amazon.com/service-authorization/latest/reference/list_kms.html#list_kms-action-GenerateDataKey) と [kms:Decrypt](https://docs.aws.amazon.com/service-authorization/latest/reference/list_kms.html#list_kms-action-Decrypt) を許可する。SNS_KEY_ID は topic が使用するキーの ID とする。SNS 経由かつ対象 topic の暗号化コンテキストに限定する Statement を、以下に示す。
+暗号化した topic への発行では、対象 KMS キーの [kms:GenerateDataKey](https://docs.aws.amazon.com/service-authorization/latest/reference/list_kms.html#list_kms-action-GenerateDataKey) と [kms:Decrypt](https://docs.aws.amazon.com/service-authorization/latest/reference/list_kms.html#list_kms-action-Decrypt) を許可する。SNS_KEY_ID は topic が使用する KMS キーの ID とする。SNS 経由かつ対象 topic の暗号化コンテキストに限定する Statement を、以下に示す。
 
 ```json
 {
@@ -355,7 +355,7 @@ Resource は NOTIFICATION_TOPIC_ARN と一致させる。通知が無効なら�
 
 ### 暗号化した EBS ボリュームの起動
 
-暗号化した EBS ボリュームを持つ EC2 を起動する場合は、使用するキーへの [kms:CreateGrant](https://docs.aws.amazon.com/service-authorization/latest/reference/list_kms.html#list_kms-action-CreateGrant) も必要となる。EBS_KEY_ID は対象ボリュームのキー ID、EBS_VOLUME_ID は vol- で始まるボリューム ID とする。対象ボリュームの復号用 grant を EBS 経由で作成する Statement を、以下に示す。
+暗号化した EBS ボリュームを持つ EC2 を起動する場合は、使用する KMS キーへの [kms:CreateGrant](https://docs.aws.amazon.com/service-authorization/latest/reference/list_kms.html#list_kms-action-CreateGrant) も必要となる。EBS_KEY_ID は対象ボリュームの KMS キー ID、EBS_VOLUME_ID は vol- で始まるボリューム ID とする。対象ボリュームの復号用 grant を EBS 経由で作成する Statement を、以下に示す。
 
 ```json
 {

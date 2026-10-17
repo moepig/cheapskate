@@ -1,6 +1,6 @@
 # RDS DB instance configuration
 
-This document describes eligibility, how group settings apply, and where to set tags for an RDS DB instance. Its type name is rds-instance.
+This document describes eligibility, how group settings apply, and where to set tags for an RDS DB instance. Its cheapskate resource type name is rds-instance.
 
 ## Eligibility
 
@@ -30,6 +30,6 @@ For connection and group assumptions, see [Shared prerequisites](README.md#share
 
 ## Applied behavior
 
-available means running and stopped means stopped. Other states defer operations until a later cycle. StartDBInstance and StopDBInstance operate on the individual DB instance.
+The RDS DB instance status available means running and stopped means stopped. Other states defer operations until a later cycle. StartDBInstance and StopDBInstance operate on the individual DB instance.
 
 For inspecting configuration and current state, see [Shared verification](README.md#shared-verification).

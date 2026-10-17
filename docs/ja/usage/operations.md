@@ -13,7 +13,7 @@ cheapskate-cli list
 cheapskate-cli -output json show --group dev
 ```
 
-list で保存された設定を、show で所属リソースの設定タグと AWS の現在状態を確認する。show は起動・停止せず、状態が変わるまで待機もしない。live_error があるリソースは、状態取得が失敗している。
+list で保存されたグループ設定を、show で所属リソースの設定タグと AWS の現在状態を確認する。show は起動・停止せず、状態が変わるまで待機もしない。show の JSON 出力で live_error があるリソースは、状態取得が失敗している。
 
 Web 画面での確認と設定変更は、[Web コンソール](web_console.md)を参照。CLI の引数と出力形式は、[CLI リファレンス](cli.md)を参照。
 

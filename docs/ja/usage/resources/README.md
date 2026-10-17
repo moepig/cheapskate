@@ -6,7 +6,7 @@
 
 設定対象と文書の対応を、以下に示す。
 
-| リソース | タイプ名 | タグの設定先 | 固有の設定 |
+| リソース | cheapskate のリソースタイプ名 | タグの設定先 | 固有の設定 |
 | --- | --- | --- | --- |
 | [RDS DB インスタンス](rds-instance.md) | rds-instance | DB インスタンス | なし |
 | [Aurora DB クラスタ](rds-cluster.md) | rds-cluster | DB クラスタ | なし |
@@ -32,7 +32,7 @@ DynamoDB には 1 グループにつき 1 アイテムを保存する。リソ�
 
 全リソースが参照する属性を、以下に示す。
 
-| 属性 | 型 | 用途 |
+| 属性 | DynamoDB の型 | 用途 |
 | --- | --- | --- |
 | pk | String | 固定値 CONFIG |
 | sk | String | GROUP#<グループ名>。所属タグの値と対応する |
@@ -44,7 +44,7 @@ DynamoDB には 1 グループにつき 1 アイテムを保存する。リソ�
 
 ecs_max_count は ECS service のみが使用し、RDS、Aurora、および EC2 には登録不要である。ただし、属性型や値が不正な場合はグループ全体の設定エラーとなり、同じグループの他のリソースも処理しない。未使用の属性は 0 や NULL で埋めず、省略すること。
 
-名前、cron、有効期限、および属性型の制約は、[グループ設定](../group_config.md) を参照。ECS 上限の意味と設定方法は、[ECS service の DynamoDB と CLI](ecs-service.md#dynamodb-と-cli) を参照。
+グループ名、cron、override の有効期限、および DynamoDB の属性型の制約は、[グループ設定](../group_config.md) を参照。ECS 上限の意味と設定方法は、[ECS service の DynamoDB と CLI](ecs-service.md#dynamodb-と-cli) を参照。
 
 ## 共通の CLI 操作
 
@@ -99,6 +99,6 @@ cheapskate-cli はグループ設定を保存する。設定を読み取った�
 cheapskate-cli -context dev -output json show --group dev
 ```
 
-group で保存設定を、resources の ref と type で対象リソースを確認する。live.state と live.detail は現在状態、live_error は取得エラーである。show は個別リソースの取得エラーを含んでも終了コード 0 を返すため、live_error も確認すること。
+show の JSON 出力では、group で保存設定を、resources の各要素の ref と type で対象リソースを確認する。各要素の live.state と live.detail は AWS の現在状態、live_error は状態取得のエラーである。show は個別リソースの取得エラーを含んでも終了コード 0 を返すため、live_error も確認すること。
 
 管理中の手動変更はグループの要求へ戻される。disabled、所属タグの削除、およびグループの削除は、現在の AWS 設定を残す。反映タイミングと失敗時の扱いは、[起動・停止の挙動](../resource_flow.md) を参照。管理終了の手順は、[日常の操作](../operations.md#管理の終了) を参照。

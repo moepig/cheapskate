@@ -21,7 +21,7 @@ Choose a guide according to the task:
 | [Daily operations](usage/operations.md) | Inspection, schedules, temporary starts/stops, ECS changes, and ending management |
 | [CLI group configuration examples](usage/cli_records.md) | Commands and their saved DynamoDB configuration |
 | [Terraform group configuration](usage/terraform_records.md) | Registering, changing, and removing groups through IaC |
-| [Web console](usage/web_console.md) | Pages, forms, expiration input, and public access settings |
+| [Web console](usage/web_console.md) | Pages, forms, override expiration input, and public access settings |
 | [Logs, metrics, and notifications](usage/monitoring.md) | Current state, cycle results, error detection, and successful-action notifications |
 | [Troubleshooting](usage/troubleshooting.md) | Checks and remedies by symptom |
 
@@ -33,7 +33,7 @@ Use these documents for valid values and how they affect resources:
 | --- | --- |
 | [Resource configuration and shared settings](usage/resources/README.md) | Shared DynamoDB and CLI configuration, plus RDS, Aurora, EC2, and ECS tags and specific settings |
 | [Runtime configuration](usage/config.md) | Connections, time zones, monitoring, and HTTP environment settings |
-| [Group configuration](usage/group_config.md) | Names, cron, overrides, ECS limits, and DynamoDB attribute types |
+| [Group configuration](usage/group_config.md) | Group names, cron, overrides, ECS limits, and DynamoDB attribute types |
 | [Resource tags](usage/resource_tag.md) | Tag locations, defaults, and constraints |
 | [CLI reference](usage/cli.md) | Arguments, formats, exit codes, and update constraints |
 | [Start and stop behavior](usage/resource_flow.md) | Timing, eligibility, manual changes, failures, and overlapping invocations |

@@ -1,6 +1,6 @@
 # Testing
 
-The main test targets are:
+The main make targets for running tests are:
 
 ```console
 make unit

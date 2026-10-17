@@ -1,6 +1,6 @@
 # テスト
 
-主な test target を次に示す。
+テストを実行する主な make のターゲットを次に示す。
 
 ```console
 make unit

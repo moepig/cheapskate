@@ -18,7 +18,7 @@ The reconciler and the web console are separate images, each carrying one binary
 
 The build targets for the images and the binary each carries are collected below.
 
-| Target | Image | Binary |
+| Dockerfile target | Image | Binary |
 | --- | --- | --- |
 | `reconciler` | `cheapskate-reconciler` | `./cmd/reconciler` |
 | `webconsole` | `cheapskate-webconsole` | `./cmd/webconsole` |

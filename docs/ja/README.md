@@ -21,7 +21,7 @@
 | [日常の操作](usage/operations.md) | 確認、スケジュール変更、一時起動・停止、ECS 設定変更、管理終了 |
 | [CLI によるグループ設定例](usage/cli_records.md) | コマンドと DynamoDB の登録内容を対応させた例 |
 | [Terraform によるグループ設定](usage/terraform_records.md) | IaC での登録、変更、削除 |
-| [Web コンソール](usage/web_console.md) | 画面、設定変更、有効期限の入力、公開時のアクセス設定 |
+| [Web コンソール](usage/web_console.md) | 画面、設定変更、override の有効期限の入力、公開時のアクセス設定 |
 | [ログ・メトリクス・通知](usage/monitoring.md) | 現在状態、サイクルの結果、エラー検知、成功通知 |
 | [トラブルシューティング](usage/troubleshooting.md) | 症状ごとの確認項目と対処 |
 

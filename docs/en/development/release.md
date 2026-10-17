@@ -6,18 +6,18 @@ goreleaser is never run locally. CI validates `.goreleaser.yaml` with `gorelease
 
 ## Cutting a release
 
-A release starts from pushing a tag.
+A release starts from pushing a Git tag.
 
 ```console
 git tag v0.1.0
 git push origin v0.1.0
 ```
 
-The version is the tag itself, which goreleaser derives from it. For a semver prerelease (`v0.1.0-rc.1`), the GitHub release is created as a prerelease and the images' `latest` tags do not move. The whole test suite runs first, against the tagged commit, and if any of it fails no release is created for that tag.
+The version is the Git tag itself, which goreleaser derives from it. For a semver prerelease (`v0.1.0-rc.1`), the GitHub release is created as a prerelease and the images' `latest` tags do not move. The whole test suite runs first, against the tagged commit, and if any of it fails no release is created for that tag.
 
 A release produces the following.
 
-| Artifact | Destination | Tags |
+| Artifact | Destination | Image tags |
 |---|---|---|
 | The `cheapskate-reconciler` image | `ghcr.io/moepig/cheapskate-reconciler` | The version, `latest` |
 | The `cheapskate-webconsole` image | `ghcr.io/moepig/cheapskate-webconsole` | The version, `latest` |

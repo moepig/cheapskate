@@ -10,7 +10,7 @@ CI、リリース、依存の更新は、いずれも `.github/` 配下の定義
 |---|---|---|
 | `workflows/ci.yml` | `main` への push、pull request | `test.yml` を呼ぶ。リリース経路が変わった場合はスナップショットも行う |
 | `workflows/test.yml` | `ci.yml` と `release.yml` から呼ばれる | lint、ユニット、統合、イメージテスト、`goreleaser check` |
-| `workflows/release.yml` | `v*` タグの push | `test.yml` を呼び、その後 goreleaser が GitHub リリースとイメージを公開する |
+| `workflows/release.yml` | `v*` の Git タグの push | `test.yml` を呼び、その後 goreleaser が GitHub リリースとイメージを公開する |
 | `workflows/dependabot-auto-merge.yml` | pull request | Dependabot の patch/minor 更新を自動マージに載せる |
 | `dependabot.yml` | 週次 | Go モジュール、Actions、Docker ベースイメージ。グループ化し、7 日の cooldown で抑える |
 
@@ -28,7 +28,7 @@ flowchart LR
     pull request"] --> ci["ci.yml"]
     pr["Dependabot の
     pull request"] --> am["dependabot-auto-merge.yml"]
-    tag["v* タグの push"] --> rel["release.yml"]
+    tag["v* の Git タグの push"] --> rel["release.yml"]
 
     ci --> test["test.yml
     (workflow_call のみ)"]
@@ -58,7 +58,7 @@ flowchart LR
 
 ## トークンの権限
 
-各ワークフローは先頭で `permissions: contents: read` を宣言し、必要なジョブでのみ引き上げる。書き込み権限を持つのは必要な間だけである。リリースジョブは `contents: write` と `packages: write`、自動マージのジョブは `contents: write` と `pull-requests: write` を持つ。
+各ワークフローは GITHUB_TOKEN の権限として、先頭で `permissions: contents: read` を宣言し、必要なジョブでのみ引き上げる。書き込み権限を持つのは必要な間だけである。リリースジョブは `contents: write` と `packages: write`、自動マージのジョブは `contents: write` と `pull-requests: write` を持つ。
 
 自動マージジョブは pull request の作成者が dependabot[bot] の場合だけ実行する。fetch-metadata と gh pr merge には GITHUB_TOKEN を渡す。書き込み権限の要求はジョブ単位の permissions に記述する。
 

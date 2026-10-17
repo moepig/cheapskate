@@ -4,7 +4,7 @@ This document lists checks and remedies for unexpected configuration, resource o
 
 ## Initial checks
 
-Use CLI show or the web console to inspect group configuration, resource membership tags, current state, and live_error. Check summary error counts and the relevant group-error or resource-error logs. For inspection, see [Logs, metrics, and notifications](monitoring.md).
+Use CLI show or the web console to inspect group configuration, resource membership tags, and current AWS state. Check live_error in the show JSON output for state inspection failures. Check reconciler summary error counts and the relevant group-error or resource-error logs. For inspection, see [Logs, metrics, and notifications](monitoring.md).
 
 ## Configuration errors
 
@@ -47,7 +47,7 @@ ECS configuration and current state are separate values. Check according to the 
 | Startup-count tag change does not change capacity | cheapskate/desired-count applies only from all-zero counts or 0/0 bounds |
 | runningCount differs from desiredCount | Task transitions are asynchronous; inspect ECS events and later cycles |
 | Resuming Scheduled Scaling changes count | Normal bounds may have adjusted an out-of-range desiredCount |
-| Bounds differ from normal tags | A false request retains Scheduled Scaling changes; use true to maintain tag bounds |
+| Bounds differ from normal tags | A false cheapskate/scheduled-scaling-paused tag retains Scheduled Scaling changes; use true to maintain tag bounds |
 | Suspension cannot be cleared while stopped | A stopped request maintains ScheduledScalingSuspended=true |
 | Service restarts after Scheduled Scaling sets zero | Use cheapskate's stop schedule or stopped override to remain at zero |
 

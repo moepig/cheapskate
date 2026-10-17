@@ -59,7 +59,7 @@ cheapskate-cli config current-context
 
 -config は CHEAPSKATE_CONFIG より優先する。ファイルが存在しない場合は保存済み context がない状態として扱い、context または選択状態の保存時に作成する。不正なファイルはエラーとなる。ファイルは current_context と、context 名をキーとする contexts オブジェクトを含む。各 context のフィールドは table、profile、region、timezone である。
 
--output json を指定した場合、get-contexts は設定オブジェクト、set-context は name と保存済みの context のフィールド、use-context と current-context は current_context を含むオブジェクトを返す。
+-output json を指定した場合、get-contexts は CLI 設定オブジェクト、set-context は context 名の name と保存済みの context のフィールド、use-context と current-context は current_context を含むオブジェクトを返す。
 
 ## コマンド
 
@@ -86,9 +86,9 @@ ecs-max-count はグループを新規作成しない。先に schedule また�
 
 list の text 出力は、有効なグループを stdout、不正なグループを stderr に出力する。json 出力は、一覧の読み取りに成功すると groups と errors を含む 1 個のオブジェクトを stdout に出力する。読み取り自体に失敗した場合は stderr に出力する。
 
-show の json 出力は、group と resources を含む。各リソースの config はタグから得た設定、live は AWS の観測値、live_error は状態取得のエラーである。不正な保存済みグループの場合は、構造化された error オブジェクトを出力する。
+show の json 出力は、グループ設定の group と、所属リソースの配列 resources を含む。resources の各要素の type は cheapskate のリソースタイプ名、ref はリソース固有の識別子、arn はリソースの ARN である。各要素の config はタグから得た設定、live は AWS の観測値、live_error は状態取得のエラーである。不正な保存済みグループの場合は、構造化された error オブジェクトを出力する。
 
-CLI の有効期限はスケジュールのタイムゾーンにかかわらず UTC の RFC 3339 形式で表示する。
+CLI では、override の有効期限をスケジュールのタイムゾーンにかかわらず UTC の RFC 3339 形式で表示する。
 
 ## 終了コード
 

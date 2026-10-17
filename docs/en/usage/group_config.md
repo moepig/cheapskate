@@ -27,7 +27,7 @@ A stored expiration at or before current time makes the override inactive. Attri
 
 ## ECS capacity limit
 
-ecs_max_count validates startup count and the normal maximum tag for each member ECS service. Register a positive int32 Number from 1 through 2147483647. Startup and running configuration updates require this value. Stopping does not apply this limit.
+The DynamoDB attribute ecs_max_count validates the startup-count tag cheapskate/desired-count and normal-maximum tag cheapskate/scaling-max for each member ECS service. Register a positive int32 Number from 1 through 2147483647. Startup and running configuration updates require this value. Stopping does not apply this limit.
 
 The limit applies per service, not to the group's total task count. Scheduled Scaling bounds and current capacity do not pass through this validation.
 
@@ -44,7 +44,7 @@ The table uses String partition key pk and String sort key sk. Store one item pe
 | start_cron | String | Start cron |
 | stop_cron | String | Stop cron |
 | override | String | running, stopped, or disabled |
-| override_expires_at | Number | Expiration in Unix seconds |
+| override_expires_at | Number | Override expiration in Unix seconds |
 | ecs_max_count | Number | Per-service ECS capacity limit |
 
 Unknown attributes, incorrect types, and invalid field combinations are configuration errors for that group. Do not add resource state or operation history to the item.

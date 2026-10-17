@@ -92,7 +92,7 @@ resource "aws_dynamodb_table_item" "group" {
 
 item は DynamoDB の属性型を含む JSON で指定する。Number 型も N の値には文字列を渡す。Terraform の引数の詳細は、[aws_dynamodb_table_item](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/dynamodb_table_item)および[aws_dynamodb_table データソース](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/dynamodb_table)を参照。
 
-ecs_max_count は、所属する各 ECS サービスの desired count と scaling-max の上限である。ECS を起動するグループには、タグで指定する台数以上の正の int32 を登録する必要がある。この例では、起動する 3 グループに上限 4 を設定する。未登録またはタグ値の超過は起動エラーとなる。上限はグループ全体の合計台数には適用しない。
+ecs_max_count は、所属する各 ECS service の cheapskate/desired-count と cheapskate/scaling-max のタグ値の上限である。ECS を起動するグループには、タグで指定する台数以上の正の int32 を登録する必要がある。この例では、起動する 3 グループに上限 4 を設定する。未登録またはタグ値の超過は起動エラーとなる。上限はグループ全体の合計台数には適用しない。
 
 登録するアイテムと設定の対応を、以下に示す。すべて pk=CONFIG である。
 
@@ -106,7 +106,7 @@ ecs_max_count は、所属する各 ECS サービスの desired count と scalin
 
 ## 適用と確認
 
-有効期限は、適用時点より未来の Unix time 秒を terraform.tfvars に指定する。2026-09-14 20:00:00 日本時間の記述例を示す。実際の適用時には目的の日時に置き換えること。
+override の有効期限は、適用時点より未来の Unix time 秒を terraform.tfvars に指定する。2026-09-14 20:00:00 日本時間の記述例を示す。実際の適用時には目的の日時に置き換えること。
 
 ```hcl
 override_expires_at = 1789383600

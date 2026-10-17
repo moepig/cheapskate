@@ -4,7 +4,7 @@ This document defines connection, time-zone, monitoring, and HTTP settings for t
 
 ## Common settings
 
-AWS credentials, region, and endpoints use AWS SDK configuration. Application variables shared across executables are:
+AWS credentials, region, and endpoints use AWS SDK configuration. Application environment variables shared across executables are:
 
 | Variable | Required | Default | Purpose |
 | --- | --- | --- | --- |
@@ -22,7 +22,7 @@ Logging, notification, and metrics settings are:
 | LOG_LEVEL | info | Minimum log level: debug, info, warn, or error |
 | NOTIFICATION_TOPIC_ARN | Empty | SNS destination for successful actions |
 | METRICS_ENABLED | false | Emit custom metrics when true |
-| METRICS_NAMESPACE | cheapskate | Custom metric namespace |
+| METRICS_NAMESPACE | cheapskate | CloudWatch custom metric namespace |
 
 LOG_LEVEL is case-insensitive and defaults to info when empty. An unparseable value prevents startup.
 
@@ -30,7 +30,7 @@ An unparseable METRICS_ENABLED prevents startup. Empty METRICS_NAMESPACE selects
 
 ## CLI
 
-The CLI saves named contexts and the current selection in a local JSON file. A context contains the table name and optional AWS profile, region, and schedule time zone. The table name comes from -table, then the selected context, then CHEAPSKATE_TABLE, then STATE_TABLE_NAME. A context's time zone takes precedence over DEFAULT_TIMEZONE. CLI expiration output always uses UTC RFC 3339. For context commands, file locations, arguments, and output formats, see [CLI reference](cli.md).
+The CLI saves named contexts and the current selection in a local JSON file. A context contains the DynamoDB table name and optional AWS profile, region, and schedule time zone. The table name comes from -table, then the selected context, then CHEAPSKATE_TABLE, then STATE_TABLE_NAME. A context's time zone takes precedence over DEFAULT_TIMEZONE. CLI override expiration output always uses UTC RFC 3339. For context commands, file locations, arguments, and output formats, see [CLI reference](cli.md).
 
 ## Web console
 

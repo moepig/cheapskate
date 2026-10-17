@@ -1,6 +1,6 @@
 # ECS service configuration
 
-This document covers DynamoDB group settings, cheapskate-cli operations, and startup and scaling tags for an ECS service. Its type name is ecs-service.
+This document covers DynamoDB group settings, cheapskate-cli operations, and startup and scaling tags for an ECS service. Its cheapskate resource type name is ecs-service.
 
 ## Eligibility
 
@@ -12,7 +12,7 @@ For the CLI context and AWS connection used below, see [Shared prerequisites](RE
 
 Schedules and overrides follow [Shared DynamoDB settings](README.md#shared-dynamodb-settings). ECS services also require this group attribute:
 
-| Attribute | Type | Purpose and constraint |
+| Attribute | DynamoDB type | Purpose and constraint |
 | --- | --- | --- |
 | ecs_max_count | Number | Maximum allowed cheapskate/desired-count and cheapskate/scaling-max for each service; 1–2147483647 |
 
@@ -59,7 +59,7 @@ In addition to the shared cheapskate:group tag, set these tags on the ECS servic
 | cheapskate/scaling-max | cheapskate/desired-count | Normal MaxCapacity; 0–2147483647 |
 | cheapskate/scheduled-scaling-paused | false | Keep Scheduled Scaling suspended while running; lowercase true or false |
 
-Defaults apply only to absent tags; empty strings are invalid. Counts must satisfy scaling-min <= desired-count <= scaling-max. Startup and running configuration updates also require desired-count and scaling-max to be no greater than ecs_max_count. All tags are validated whether or not a scalable target exists; invalid tags prevent stopping too.
+Defaults apply only to absent tags; empty strings are invalid. Tag counts must satisfy cheapskate/scaling-min <= cheapskate/desired-count <= cheapskate/scaling-max. Startup and running configuration updates also require the cheapskate/desired-count and cheapskate/scaling-max tag values to be no greater than the DynamoDB ecs_max_count attribute. All tags are validated whether or not a scalable target exists; invalid tags prevent stopping too.
 
 For service api in cluster dev, set a startup count of 2 and normal bounds of 1–3:
 
@@ -81,6 +81,6 @@ cheapskate/desired-count is a startup count, not a continuously enforced running
 
 With a scalable target, stopping sets bounds to 0/0 and suspends Scheduled Scaling. Starting initializes capacity, then applies normal bounds and the tag's suspension request. While running, a true suspension request maintains normal bounds. When both the request and AWS suspension are false, bounds and capacity changed by Scheduled Scaling are retained.
 
-For the inspection command, see [Shared verification](README.md#shared-verification). Check group.ecs_max_count, the resource's config, counts and bounds and ScheduledScalingSuspended in live.detail, and live_error. Stopping completes only when desiredCount, runningCount, and pendingCount are all zero.
+For the inspection command, see [Shared verification](README.md#shared-verification). In the show JSON output, check group.ecs_max_count and the target resource's config, counts and bounds and ScheduledScalingSuspended in live.detail, and live_error. Stopping completes only when ECS desiredCount, runningCount, and pendingCount are all zero.
 
 For tag changes and partial failures, see [ECS startup, shutdown, and scaling](../ecs.md). For bounds and suspension left behind after management ends, see [Daily operations](../operations.md#ending-management).

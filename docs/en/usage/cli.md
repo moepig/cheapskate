@@ -59,7 +59,7 @@ The default file locations are:
 
 -config overrides CHEAPSKATE_CONFIG. A missing file means no saved contexts; it is created when saving a context or selection. Invalid files produce an error. The file contains current_context and a contexts object keyed by name; context fields are table, profile, region, and timezone.
 
-With -output json, get-contexts returns that config object, set-context returns name and the saved context fields, and use-context and current-context return an object containing current_context.
+With -output json, get-contexts returns the CLI config object, set-context returns the context name in name and the saved context fields, and use-context and current-context return an object containing current_context.
 
 ## Commands
 
@@ -86,9 +86,9 @@ For examples, see [Daily operations](operations.md) and [CLI group configuration
 
 Text list writes valid groups to stdout and invalid groups to stderr. JSON list writes one object containing groups and errors to stdout when the list read succeeds. Failure of the read itself is written to stderr.
 
-JSON show contains group and resources. Each resource's config comes from tags; live contains AWS observations; live_error contains an inspection failure. An invalid stored group produces a structured error object.
+JSON show contains group for group configuration and resources for the member resource array. In each resources entry, type is the cheapskate resource type name, ref is the resource-specific identifier, and arn is the resource ARN. Each entry's config comes from tags; live contains AWS observations; live_error contains a state inspection failure. An invalid stored group produces a structured error object.
 
-CLI expiration timestamps always use UTC RFC 3339 regardless of the schedule time zone.
+CLI override expiration timestamps always use UTC RFC 3339 regardless of the schedule time zone.
 
 ## Exit codes
 

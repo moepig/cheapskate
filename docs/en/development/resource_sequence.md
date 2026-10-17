@@ -21,7 +21,7 @@ sequenceDiagram
     end
     R->>R: Validate groups and resolve schedule / override requests
     loop Every GetResources page
-        R->>T: GetResources(cheapskate:group, supported type filters)
+        R->>T: GetResources(cheapskate:group, supported resource type filters)
         T-->>R: ARNs, tags, next page token
         R->>R: Validate ARNs and retain the last tags for duplicates
     end

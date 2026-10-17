@@ -4,7 +4,7 @@
 
 ## 最初に確認する情報
 
-CLI の show または Web コンソールで、グループ設定、リソースの所属タグ、現在状態、および live_error を確認する。reconciler のログでは、summary のエラー数と、該当する group-error・resource-error を確認する。確認方法は、[ログ・メトリクス・通知](monitoring.md)を参照。
+CLI の show または Web コンソールで、グループ設定、リソースの所属タグ、および AWS の現在状態を確認する。状態取得のエラーは、show の JSON 出力の live_error で確認する。reconciler のログでは、summary のエラー数と、該当する group-error・resource-error を確認する。確認方法は、[ログ・メトリクス・通知](monitoring.md)を参照。
 
 ## 設定保存のエラー
 
@@ -47,7 +47,7 @@ ECS の設定と現在状態は別の値である。症状ごとの確認項目�
 | タグの起動台数へ変わらない | cheapskate/desired-count は停止状態または上下限 0/0 からの起動時だけ適用 |
 | runningCount が desiredCount と異なる | タスクの起動・終了は非同期。AWS のイベントと後続サイクルを確認 |
 | Scheduled Scaling の再開時に台数が変わる | 通常の上下限を適用した結果、範囲外の desiredCount が調整されていないか確認 |
-| 上下限が通常のタグ値と異なる | 一時停止要求が false なら Scheduled Scaling による変更を維持。タグ範囲を維持するなら true を指定 |
+| 上下限が通常のタグ値と異なる | cheapskate/scheduled-scaling-paused タグが false なら Scheduled Scaling による変更を維持。タグ範囲を維持するなら true を指定 |
 | 停止中に一時停止を解除できない | グループ要求が stopped の間は ScheduledScalingSuspended=true を維持 |
 | Scheduled Scaling で 0 台にしても再起動する | 0 台を維持する時間帯は cheapskate の停止スケジュールまたは stopped override を使用 |
 

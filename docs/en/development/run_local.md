@@ -6,7 +6,7 @@ Integration and image tests use the same emulator. Adapter unit tests verify req
 
 ## Complete development environment
 
-Docker is required. The convenience target starts the emulator, creates the table, creates tagged ECS fixtures, writes a sample schedule, and runs the web console:
+Docker is required. The make target starts the AWS emulator, creates the DynamoDB table, creates tagged ECS fixtures, writes a sample schedule, and runs the web console:
 
 ```console
 make dev
@@ -27,7 +27,7 @@ go run ./cmd/cheapskate-cli list
 go run ./cmd/cheapskate-cli show --group dev
 ```
 
-Without the endpoint variable, an AWS SDK client may use real AWS credentials and resources.
+Without the AWS_ENDPOINT_URL environment variable, an AWS SDK client may use real AWS credentials and resources.
 
 ## Individual components
 

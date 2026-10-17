@@ -18,7 +18,7 @@ reconciler と Web コンソールは別々のイメージであり、バイナ�
 
 イメージのビルドターゲットと、それぞれが含むバイナリの対応を、以下にまとめる。
 
-| ターゲット | イメージ | バイナリ |
+| Dockerfile のターゲット | イメージ | バイナリ |
 | --- | --- | --- |
 | `reconciler` | `cheapskate-reconciler` | `./cmd/reconciler` |
 | `webconsole` | `cheapskate-webconsole` | `./cmd/webconsole` |

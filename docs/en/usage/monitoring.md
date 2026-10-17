@@ -4,7 +4,7 @@ This document explains how to inspect reconciler results, resource errors, and s
 
 ## Configuration and current-state inspection
 
-Use CLI show or the web console's group detail to inspect stored configuration and current AWS state. For ECS, config represents tags and live represents AWS observations. Inspect live_error when a resource cannot be observed.
+Use CLI show or the web console's group detail to inspect stored configuration and current AWS state. In the show JSON output, each resources entry's config represents tag settings and live represents AWS observations. Inspect the entry's live_error when a resource cannot be observed.
 
 A successful show command does not mean every resource has reached its requested state. For inspection, use:
 

@@ -6,7 +6,7 @@
 
 ## 開発環境全体の起動
 
-Docker が必要である。次の target は emulator と table を起動し、タグ付き ECS fixture とサンプル schedule を作成して、Web コンソールを実行する。
+Docker が必要である。次の make のターゲットは AWS emulator を起動し、DynamoDB テーブル、タグ付き ECS fixture、およびサンプル schedule を作成して、Web コンソールを実行する。
 
 ```console
 make dev
@@ -27,7 +27,7 @@ go run ./cmd/cheapskate-cli list
 go run ./cmd/cheapskate-cli show --group dev
 ```
 
-endpoint 変数を指定しない場合、AWS SDK client が実 AWS の認証情報とリソースを使用する可能性がある。
+環境変数 AWS_ENDPOINT_URL を指定しない場合、AWS SDK client が実 AWS の認証情報とリソースを使用する可能性がある。
 
 ## コンポーネント別の起動
 

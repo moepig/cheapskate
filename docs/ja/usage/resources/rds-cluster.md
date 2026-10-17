@@ -1,6 +1,6 @@
 # Aurora DB クラスタの設定
 
-本ドキュメントは、Aurora DB クラスタの対象条件、グループ設定の適用先、およびタグの設定先を示す。タイプ名は rds-cluster である。
+本ドキュメントは、Aurora DB クラスタの対象条件、グループ設定の適用先、およびタグの設定先を示す。cheapskate のリソースタイプ名は rds-cluster である。
 
 ## 対象条件
 
@@ -28,7 +28,7 @@ aws rds add-tags-to-resource --region ap-northeast-1 \
 
 ## 設定の反映
 
-available を稼働中、stopped を停止済みとして扱う。他の状態では操作せず、後続サイクルで再確認する。起動は StartDBCluster、停止は StopDBCluster によるクラスタ単位の操作となる。
+Aurora の DB クラスタ状態 available を稼働中、stopped を停止済みとして扱う。他の状態では操作せず、後続サイクルで再確認する。起動は StartDBCluster、停止は StopDBCluster によるクラスタ単位の操作となる。
 
 所属 DB インスタンスに所属タグを付けた場合、そのインスタンスは対象外のエラーとなる。
 

@@ -1,6 +1,6 @@
 # Aurora DB cluster configuration
 
-This document describes eligibility, how group settings apply, and where to set tags for an Aurora DB cluster. Its type name is rds-cluster.
+This document describes eligibility, how group settings apply, and where to set tags for an Aurora DB cluster. Its cheapskate resource type name is rds-cluster.
 
 ## Eligibility
 
@@ -28,7 +28,7 @@ For connection and group assumptions, see [Shared prerequisites](README.md#share
 
 ## Applied behavior
 
-available means running and stopped means stopped. Other states defer operations until a later cycle. StartDBCluster and StopDBCluster operate on the entire cluster.
+The Aurora DB cluster status available means running and stopped means stopped. Other states defer operations until a later cycle. StartDBCluster and StopDBCluster operate on the entire cluster.
 
 A member DB instance with its own membership tag produces an unsupported-instance error.
 

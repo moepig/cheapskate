@@ -25,7 +25,7 @@ The examples are identity policies for roles that manage existing resources in o
 
 Replace PARTITION, REGION, and ACCOUNT with deployment values. The standard AWS partition is aws. TABLE is STATE_TABLE_NAME; GROUP is an allowed membership tag value. DB_INSTANCE, DB_CLUSTER, CLUSTER, SERVICE, and INSTANCE_ID are actual resource identifiers. SCALABLE_TARGET_ID is the suffix of an existing scalable target ARN. Replace FUNCTION_NAME and TOPIC with the Lambda function name and notification topic name.
 
-Enumerate the target ARNs in Resource, using an array for multiple resources. Enumerate allowed group names in the membership tag's StringEquals condition. Statements with a membership tag condition stop allowing access when the tag is removed or changed to an unlisted group, even if the ARN still matches. Use separate statements when different groups must be restricted to different ARNs.
+Enumerate the target ARNs in the IAM policy's Resource, using an array for multiple resources. Enumerate allowed group names in the membership tag's StringEquals condition. Statements with a membership tag condition stop allowing access when the tag is removed or changed to an unlisted group, even if the ARN still matches. Use separate statements when different groups must be restricted to different ARNs.
 
 Combine permissions by role as follows. Each complete JSON policy can be attached separately. Add examples containing a single statement to the appropriate role policy's Statement array.
 
@@ -237,7 +237,7 @@ EC2 start and stop permissions require both an enumerated instance ARN and its m
 
 ### ECS and Application Auto Scaling
 
-RegisterScalableTarget authorizes the ScalableTargetARN returned by Application Auto Scaling, rather than the ECS service ARN. Do not append the API ResourceId value service/CLUSTER/SERVICE to scalable-target/. Retrieve the existing ARN during deployment:
+The IAM policy Resource for RegisterScalableTarget is the ScalableTargetARN returned by Application Auto Scaling, rather than the ECS service ARN. Do not append the API ResourceId value service/CLUSTER/SERVICE to scalable-target/. Retrieve the existing ARN during deployment:
 
 ```console
 aws application-autoscaling describe-scalable-targets \
@@ -331,7 +331,7 @@ Resource must match NOTIFICATION_TOPIC_ARN. Omit this statement when notificatio
 
 ### SNS encryption
 
-Publishing to an encrypted topic requires [kms:GenerateDataKey](https://docs.aws.amazon.com/service-authorization/latest/reference/list_kms.html#list_kms-action-GenerateDataKey) and [kms:Decrypt](https://docs.aws.amazon.com/service-authorization/latest/reference/list_kms.html#list_kms-action-Decrypt) on its key. Set SNS_KEY_ID to the topic's key ID. Restrict access to SNS and the topic's encryption context:
+Publishing to an encrypted topic requires [kms:GenerateDataKey](https://docs.aws.amazon.com/service-authorization/latest/reference/list_kms.html#list_kms-action-GenerateDataKey) and [kms:Decrypt](https://docs.aws.amazon.com/service-authorization/latest/reference/list_kms.html#list_kms-action-Decrypt) on its KMS key. Set SNS_KEY_ID to the topic's KMS key ID. Restrict access to SNS and the topic's encryption context:
 
 ```json
 {
@@ -355,7 +355,7 @@ For permissions and encryption context, see [SNS key management](https://docs.aw
 
 ### Starting instances with encrypted EBS volumes
 
-Starting EC2 instances with encrypted EBS volumes also requires [kms:CreateGrant](https://docs.aws.amazon.com/service-authorization/latest/reference/list_kms.html#list_kms-action-CreateGrant) on the keys in use. Set EBS_KEY_ID to the volume's key ID and EBS_VOLUME_ID to its volume ID, including the vol- prefix. This statement permits EBS to create grants for decrypting the specified volumes:
+Starting EC2 instances with encrypted EBS volumes also requires [kms:CreateGrant](https://docs.aws.amazon.com/service-authorization/latest/reference/list_kms.html#list_kms-action-CreateGrant) on the KMS keys in use. Set EBS_KEY_ID to the volume's KMS key ID and EBS_VOLUME_ID to its volume ID, including the vol- prefix. This statement permits EBS to create grants for decrypting the specified volumes:
 
 ```json
 {

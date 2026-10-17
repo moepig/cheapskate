@@ -6,7 +6,7 @@ This document covers DynamoDB settings, cheapskate-cli operations, and membershi
 
 Choose the document for the resource being configured:
 
-| Resource | Type name | Tag location | Specific settings |
+| Resource | cheapskate resource type name | Tag location | Specific settings |
 | --- | --- | --- | --- |
 | [RDS DB instance](rds-instance.md) | rds-instance | DB instance | None |
 | [Aurora DB cluster](rds-cluster.md) | rds-cluster | DB cluster | None |
@@ -32,7 +32,7 @@ DynamoDB stores one item per group, with no separate items for individual resour
 
 All resource types use these attributes:
 
-| Attribute | Type | Purpose |
+| Attribute | DynamoDB type | Purpose |
 | --- | --- | --- |
 | pk | String | Fixed value CONFIG |
 | sk | String | GROUP#NAME, where NAME is the membership tag value |
@@ -44,7 +44,7 @@ A schedule or an override is required. Timed overrides also require a schedule. 
 
 Only ECS services use ecs_max_count. RDS, Aurora, and EC2 do not require it. However, an invalid attribute type or value makes the entire group invalid, preventing processing of its other resources as well. Omit unused attributes rather than storing 0 or NULL.
 
-For name, cron, expiration, and attribute constraints, see [Group configuration](../group_config.md). For ECS capacity limits, see [ECS DynamoDB and CLI settings](ecs-service.md#dynamodb-and-cli).
+For group name, cron, override expiration, and DynamoDB attribute constraints, see [Group configuration](../group_config.md). For ECS capacity limits, see [ECS DynamoDB and CLI settings](ecs-service.md#dynamodb-and-cli).
 
 ## Shared CLI operations
 
@@ -99,6 +99,6 @@ cheapskate-cli saves group configuration. Startup or shutdown begins in a later 
 cheapskate-cli -context dev -output json show --group dev
 ```
 
-Inspect group for saved settings and each resources entry's ref and type to identify the resource. live.state and live.detail contain current state; live_error reports inspection failures. Show can return exit code 0 with individual resource failures, so check live_error too.
+In the show JSON output, inspect group for saved settings and each resources entry's ref and type to identify the resource. Each entry's live.state and live.detail contain current AWS state; live_error reports state inspection failures. Show can return exit code 0 with individual resource failures, so check live_error too.
 
 Manual changes to managed resources are reconciled back to the group's request. Disabled overrides, membership-tag removal, and group deletion leave current AWS settings in place. For timing and failures, see [Start and stop behavior](../resource_flow.md). For ending management, see [Daily operations](../operations.md#ending-management).

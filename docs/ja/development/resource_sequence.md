@@ -21,7 +21,7 @@ sequenceDiagram
     end
     R->>R: グループを検証し、schedule と override から要求を決定
     loop GetResources の全ページ
-        R->>T: GetResources(cheapskate:group, 対応種別フィルタ)
+        R->>T: GetResources(cheapskate:group, 対応リソース種別のフィルタ)
         T-->>R: ARN、タグ、次ページ token
         R->>R: ARN を検証し、同一 ARN の最後のタグを採用
     end

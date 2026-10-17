@@ -35,4 +35,4 @@ reconciler イメージは Lambda handler として動作し、定期・手動�
 
 Web コンソールのイメージは HTTP server と Lambda Web Adapter を含む。アダプタが API Gateway などの呼び出しを HTTP へ変換する。Web コンソール本体は通常の HTTP server として動作する。
 
-reserved concurrency=1 は、重複実行を抑える任意の設定である。正しさは同時実行の排除に依存しない。
+reconciler 用 Lambda の reserved concurrency=1 は、重複実行を抑える任意の設定である。正しさは同時実行の排除に依存しない。
