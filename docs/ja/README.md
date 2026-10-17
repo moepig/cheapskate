@@ -31,6 +31,7 @@
 
 | ドキュメント | 内容 |
 | --- | --- |
+| [リソース別の設定と共通項目](usage/resources/README.md) | 共通の DynamoDB・CLI 設定と、RDS・Aurora・EC2・ECS ごとのタグ・固有設定 |
 | [実行時設定](usage/config.md) | 接続先、タイムゾーン、監視、HTTP 公開の環境変数 |
 | [グループ設定](usage/group_config.md) | グループ名、cron、override、ECS 上限、DynamoDB の属性型 |
 | [リソースタグ](usage/resource_tag.md) | タグの設定先、既定値、値の制約 |

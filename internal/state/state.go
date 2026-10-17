@@ -161,6 +161,25 @@ func (s *Store) ClearOverride(ctx context.Context, name string) error {
 	return writeResult("clear override for group "+name, err)
 }
 
+// 既存グループの ECS 上限だけを更新する。maximum が 0 の場合は属性を削除する。
+func (s *Store) SetEcsMaxCount(ctx context.Context, name string, maximum int32) error {
+	update := "REMOVE #maximum"
+	var values map[string]types.AttributeValue
+	if maximum != 0 {
+		update = "SET #maximum = :maximum"
+		values = map[string]types.AttributeValue{
+			":maximum": &types.AttributeValueMemberN{Value: strconv.FormatInt(int64(maximum), 10)},
+		}
+	}
+	_, err := s.db.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: &s.table, Key: marshalKey(groupKey(name)), UpdateExpression: &update,
+		ConditionExpression:       aws.String("attribute_exists(#pk)"),
+		ExpressionAttributeNames:  map[string]string{"#pk": "pk", "#maximum": "ecs_max_count"},
+		ExpressionAttributeValues: values,
+	})
+	return writeResult("set ECS count limit for group "+name, err)
+}
+
 func (s *Store) DeleteGroup(ctx context.Context, name string) error {
 	_, err := s.db.DeleteItem(ctx, &dynamodb.DeleteItemInput{
 		TableName:                &s.table,

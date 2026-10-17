@@ -72,9 +72,13 @@ Arguments, effects, and prerequisites are:
 | schedule | --group NAME -start CRON -stop CRON | Create a group or update both cron attributes |
 | override | --group NAME running, stopped, or disabled [-for DURATION] | Set override; indefinite overrides can create groups; timed overrides require an existing schedule |
 | clear-override | --group NAME | Remove override and expiration; requires a schedule |
+| ecs-max-count | --group NAME COUNT | Register or change ecs_max_count on an existing group; COUNT is an integer from 1 through 2147483647 |
+| clear-ecs-max-count | --group NAME | Remove the ecs_max_count attribute from an existing group |
 | remove | --group NAME | Delete the entire group item |
 
 -for takes a positive duration such as 2h or 30m. Omitting it creates an indefinite override. The CLI does not create, tag, start, or stop AWS resources. Configuration changes take effect in later reconciler cycles.
+
+The ecs-max-count command does not create groups; create one first with schedule or an indefinite override. The clear-ecs-max-count command removes the attribute instead of storing 0 and does not stop current resources. ECS startup and running configuration updates require registering a limit again. All DynamoDB group configuration fields can be registered through the CLI.
 
 For examples, see [Daily operations](operations.md) and [CLI group configuration examples](cli_records.md).
 
@@ -100,7 +104,7 @@ List returns 2 if any group is invalid. Show returns 0 even when individual reso
 
 ## Updates and conflicts
 
-Schedule, override, and clear-override validate the complete resulting group. Schedule preserves overrides and ECS limits. Override and clear-override preserve the schedule and ECS limit. Remove deletes a decodable item without validating cron expressions or cross-attribute constraints.
+Schedule, override, clear-override, ecs-max-count, and clear-ecs-max-count validate the complete resulting group. Schedule preserves overrides and ECS limits. Override and clear-override preserve the schedule and ECS limit. The ecs-max-count command and clear-ecs-max-count change only the ECS limit, preserving schedules and overrides. Remove deletes a decodable item without validating cron expressions or cross-attribute constraints.
 
 Conditional-write conflicts are not retried automatically. Read again and explicitly repeat the intended change. Changes to different attributes preserve one another. Changes to the same attributes are not detected as conflicts; the last value applied by DynamoDB remains.
 

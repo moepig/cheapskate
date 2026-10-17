@@ -18,17 +18,6 @@ EC2 の aws:autoscaling:groupName タグは AWS が Auto Scaling グループの
 
 ## ECS 設定タグ
 
-ECS service 自身に設定するタグを、以下に示す。グループ設定の ecs_max_count は DynamoDB に別途登録する。
+起動台数、通常の上下限、および Scheduled Scaling の一時停止要求は ECS service 自身のタグに設定する。タグ一覧、既定値、制約、および設定コマンドは、[ECS service のタグ側の設定](resources/ecs-service.md#タグ側の設定) を参照。
 
-| タグ | 既定値 | 意味 | 制約 |
-| --- | --- | --- | --- |
-| cheapskate/desired-count | 1 | 停止状態または上下限 0/0 から起動する際の台数 | 正の int32 |
-| cheapskate/scaling-min | cheapskate/desired-count の値 | 通常の MinCapacity | 0 以上の int32 |
-| cheapskate/scaling-max | cheapskate/desired-count の値 | 通常の MaxCapacity | 0 以上の int32 |
-| cheapskate/scheduled-scaling-paused | false | 稼働中も Scheduled Scaling を一時停止する要求 | 小文字の true または false |
-
-既定値はタグが存在しない場合だけ適用する。空文字列はエラーである。台数は、既定値の適用後に cheapskate/scaling-min <= cheapskate/desired-count <= cheapskate/scaling-max を満たす必要がある。
-
-scalable target の有無によらず、起動・停止前にタグ一式を検証する。不正なタグがある場合、その service を変更しない。起動や稼働中の設定更新には、cheapskate/desired-count と cheapskate/scaling-max がグループの ecs_max_count 以下であることも必要である。
-
-タグの適用タイミングとスケーリングの挙動は、[ECS の起動・停止とスケーリング](ecs.md)を参照。台数上限の登録と一時停止の操作は、[日常の操作](operations.md#ecs-の設定変更)を参照。
+タグの適用タイミングとスケーリングの挙動は、[ECS の起動・停止とスケーリング](ecs.md) を参照。

@@ -29,10 +29,10 @@ Eligibility and operation effects are:
 
 | Resource | Eligibility | Start | Stop |
 | --- | --- | --- | --- |
-| RDS DB instance | Not a cluster member; not RDS Custom | Start the instance | Stop the instance |
-| Aurora DB cluster | Engine starts with aurora | Start the cluster | Stop the cluster |
-| EC2 instance | Not a member of an Auto Scaling group | Start the instance | Stop the instance |
-| ECS service | REPLICA; long ARN | Apply startup count and scaling settings | Set desiredCount and registered bounds to zero; suspend Scheduled Scaling |
+| [RDS DB instance](resources/rds-instance.md) | Not a cluster member; not RDS Custom | Start the instance | Stop the instance |
+| [Aurora DB cluster](resources/rds-cluster.md) | Engine starts with aurora | Start the cluster | Stop the cluster |
+| [EC2 instance](resources/ec2-instance.md) | Not a member of an Auto Scaling group | Start the instance | Stop the instance |
+| [ECS service](resources/ecs-service.md) | REPLICA; long ARN | Apply startup count and scaling settings | Set desiredCount and registered bounds to zero; suspend Scheduled Scaling |
 
 RDS DB instances and Aurora clusters are running when available and stopped when stopped. Other states wait for a later cycle. Do not register Aurora's member DB instances as individual stop targets.
 

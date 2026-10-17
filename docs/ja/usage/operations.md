@@ -78,15 +78,10 @@ ECS の設定は、DynamoDB のグループ上限と、service 自身のタグ�
 ECS の起動を許可する前に、グループアイテムへ Number 型の ecs_max_count を登録する。既存の dev グループに上限 4 を登録する例を、以下に示す。
 
 ```sh
-aws dynamodb update-item \
-  --table-name cheapskate \
-  --key '{"pk":{"S":"CONFIG"},"sk":{"S":"GROUP#dev"}}' \
-  --update-expression 'SET ecs_max_count = :maximum' \
-  --expression-attribute-values '{":maximum":{"N":"4"}}' \
-  --condition-expression 'attribute_exists(pk)'
+cheapskate-cli ecs-max-count --group dev 4
 ```
 
-CLI と Web コンソールのスケジュール・override 操作は上限を保持する。値の制約は、[グループ設定](group_config.md#ecs-台数上限)を参照。
+同じコマンドで上限を変更できる。CLI と Web コンソールのスケジュール・override 操作は上限を保持する。属性の削除と ECS 固有の設定は、[ECS service の設定](resources/ecs-service.md#dynamodb-と-cli) を参照。
 
 ### Scheduled Scaling の一時停止と再開
 
@@ -109,7 +104,7 @@ CLI と Web コンソールのスケジュール・override 操作は上限を�
 1. 無期限の running または stopped override を設定する。
 2. 書き込み完了から、設定済みの reconciler Lambda timeout 以上待つ。
 3. reconciler を手動で呼び出すか、次の定期実行を待つ。
-4. show で全リソースが指定した安定状態にあることを確認する。ECS は live.Detail の上下限と ScheduledScalingSuspended も確認する。
+4. show で全リソースが指定した安定状態にあることを確認する。ECS は live.detail の上下限と ScheduledScalingSuspended も確認する。
 5. リソースから cheapskate:group タグを削除する。
 6. cheapskate-cli remove --group <グループ名> でグループを削除する。
 

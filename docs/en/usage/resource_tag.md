@@ -18,17 +18,6 @@ AWS assigns the aws:autoscaling:groupName tag to EC2 Auto Scaling group members.
 
 ## ECS configuration tags
 
-Set these tags on the ECS service itself. Register the group's ecs_max_count separately in DynamoDB.
+Startup count, normal bounds, and the Scheduled Scaling suspension request are tags on the ECS service itself. For tags, defaults, constraints, and commands, see [ECS service resource tags](resources/ecs-service.md#resource-tags).
 
-| Tag | Default | Meaning | Constraint |
-| --- | --- | --- | --- |
-| cheapskate/desired-count | 1 | Startup capacity from all-zero counts or 0/0 bounds | Positive int32 |
-| cheapskate/scaling-min | cheapskate/desired-count value | Normal MinCapacity | Nonnegative int32 |
-| cheapskate/scaling-max | cheapskate/desired-count value | Normal MaxCapacity | Nonnegative int32 |
-| cheapskate/scheduled-scaling-paused | false | Keep Scheduled Scaling suspended while running | Lowercase true or false |
-
-Defaults apply only when a tag is absent. An empty string is invalid. After defaults, counts must satisfy cheapskate/scaling-min <= cheapskate/desired-count <= cheapskate/scaling-max.
-
-All tags are validated before starting or stopping, whether or not a scalable target exists. Invalid tags prevent changes to that service. Startup and running configuration updates also require cheapskate/desired-count and cheapskate/scaling-max to be no greater than the group's ecs_max_count.
-
-For application timing and scaling behavior, see [ECS startup, shutdown, and scaling](ecs.md). For limit registration and suspension procedures, see [Daily operations](operations.md#ecs-configuration-changes).
+For application timing and scaling behavior, see [ECS startup, shutdown, and scaling](ecs.md).

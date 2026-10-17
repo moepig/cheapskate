@@ -31,7 +31,7 @@ ecs_max_count validates startup count and the normal maximum tag for each member
 
 The limit applies per service, not to the group's total task count. Scheduled Scaling bounds and current capacity do not pass through this validation.
 
-The CLI and web console display and retain the value during schedule and override changes. Set it through DynamoDB or IaC. For registration, see [Daily operations](operations.md#registering-an-ecs-capacity-limit).
+Use the CLI ecs-max-count command to register or change the limit and clear-ecs-max-count to remove the attribute. Both require an existing group and preserve its schedule and override. The web console displays the value and retains it during schedule and override changes. For registration, changes, and removal, see [ECS service configuration](resources/ecs-service.md#dynamodb-and-cli).
 
 ## DynamoDB format
 

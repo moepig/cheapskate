@@ -19,7 +19,7 @@ DynamoDB のグループ設定、service のタグ、および AWS の現在状�
 
 グループの running は起動状態を維持する要求である。ECS の現在の desiredCount や、タグの起動台数と同じ意味ではない。タグの cheapskate/desired-count は、稼働中の台数を常時固定する設定ではない。
 
-設定の型と既定値は、[グループ設定](group_config.md#ecs-台数上限)と[リソースタグ](resource_tag.md#ecs-設定タグ)を参照。
+DynamoDB 属性、CLI 操作、およびタグの型と既定値は、[ECS service の設定](resources/ecs-service.md) を参照。
 
 ## 停止と起動
 

@@ -31,7 +31,7 @@ ecs_max_count は、所属する各 ECS service の起動台数と通常の上�
 
 グループ全体の合計台数ではなく、service ごとに適用する。Scheduled Scaling が設定する上下限と現在台数は、この検証を通らない。
 
-CLI と Web コンソールは値を表示し、スケジュールや override の変更時に保持する。上限の設定は DynamoDB または IaC で行う。登録手順は、[日常の操作](operations.md#ecs-台数上限の登録)を参照。
+CLI の ecs-max-count で上限を登録・変更し、clear-ecs-max-count で属性を削除する。どちらも既存グループを対象とし、スケジュールと override を保持する。Web コンソールは値を表示し、スケジュールや override の変更時に保持する。上限の登録・変更・削除の詳細は、[ECS service の設定](resources/ecs-service.md#dynamodb-と-cli) を参照。
 
 ## DynamoDB の登録形式
 

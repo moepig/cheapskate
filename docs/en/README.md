@@ -31,6 +31,7 @@ Use these documents for valid values and how they affect resources:
 
 | Document | Scope |
 | --- | --- |
+| [Resource configuration and shared settings](usage/resources/README.md) | Shared DynamoDB and CLI configuration, plus RDS, Aurora, EC2, and ECS tags and specific settings |
 | [Runtime configuration](usage/config.md) | Connections, time zones, monitoring, and HTTP environment settings |
 | [Group configuration](usage/group_config.md) | Names, cron, overrides, ECS limits, and DynamoDB attribute types |
 | [Resource tags](usage/resource_tag.md) | Tag locations, defaults, and constraints |

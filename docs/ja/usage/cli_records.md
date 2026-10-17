@@ -16,7 +16,7 @@ export DEFAULT_TIMEZONE=Asia/Tokyo
 
 DynamoDB は 1 グループにつき 1 アイテムを保存する。キーは pk=CONFIG、sk=GROUP#<グループ名> である。CLI は設定を書き込み、reconciler が後続サイクルでその設定と現在状態を比較して起動・停止する。リソースには所属タグを別途設定する。
 
-ECS の起動には、所属グループのアイテムに Number 型の ecs_max_count を別途登録する必要がある。以下の起動動作は、ECS では desired count と scaling-max がその上限内にある場合に実行される。上限の登録手順は、[ECS 台数上限の登録](operations.md#ecs-台数上限の登録)を参照。
+ECS の起動には、所属グループのアイテムに Number 型の ecs_max_count を登録する必要がある。cheapskate-cli ecs-max-count --group NAME COUNT で登録する。以下の起動動作は、ECS では desired count と scaling-max がその上限内にある場合に実行される。上限の登録手順は、[ECS 台数上限の登録](operations.md#ecs-台数上限の登録)を参照。
 
 ## 平日の起動・停止
 

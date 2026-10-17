@@ -72,9 +72,13 @@ cheapskate-cli config current-context
 | schedule | --group NAME -start CRON -stop CRON | グループを作成、または 2 個の cron 属性を更新 |
 | override | --group NAME running・stopped・disabled [-for DURATION] | override を設定。無期限ならグループを作成可能。期限付きには既存スケジュールが必要 |
 | clear-override | --group NAME | override と有効期限を削除。スケジュールが必要 |
+| ecs-max-count | --group NAME COUNT | 既存グループの ecs_max_count を登録・変更。COUNT は 1～2147483647 の整数 |
+| clear-ecs-max-count | --group NAME | 既存グループの ecs_max_count 属性を削除 |
 | remove | --group NAME | グループアイテム全体を削除 |
 
 -for は 2h や 30m のような正の期間で指定する。省略すると無期限となる。CLI は AWS リソースの作成、タグ付け、起動・停止を行わない。設定変更の反映は、reconciler の後続サイクルで行う。
+
+ecs-max-count はグループを新規作成しない。先に schedule または無期限 override で作成する。clear-ecs-max-count は 0 を保存せず属性を削除し、現在のリソースを停止しない。ECS の起動と稼働中の設定更新には上限の再登録が必要となる。DynamoDB のグループ設定項目は、すべて CLI から登録できる。
 
 コマンドの使用例は、[日常の操作](operations.md)と[CLI によるグループ設定例](cli_records.md)を参照。
 
@@ -100,7 +104,7 @@ list は不正なグループが 1 件以上あれば 2 を返す。show は個�
 
 ## 設定更新と競合
 
-schedule、override、および clear-override は、変更後のグループ全体を検証する。schedule は override と ECS 上限を保持し、override と clear-override はスケジュールと ECS 上限を保持する。remove は、属性型などを読み取れるアイテムを、cron や属性間の制約を検証せずに削除する。
+schedule、override、clear-override、ecs-max-count、および clear-ecs-max-count は、変更後のグループ全体を検証する。schedule は override と ECS 上限を保持し、override と clear-override はスケジュールと ECS 上限を保持する。ecs-max-count と clear-ecs-max-count は ECS 上限だけを変更し、スケジュールと override を保持する。remove は、属性型などを読み取れるアイテムを、cron や属性間の制約を検証せずに削除する。
 
 条件付き書き込みの競合は自動再試行しない。再読み込み後、意図した変更を明示的に再実行する。異なる属性への変更は互いに保持される。同じ属性への変更は競合として検出されず、DynamoDB で後に適用された値が残る。
 

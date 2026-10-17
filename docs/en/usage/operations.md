@@ -78,15 +78,10 @@ ECS settings are split between a group limit in DynamoDB and tags on the service
 Before allowing startup, register a Number ecs_max_count on the group item. To set a limit of 4 on an existing dev group:
 
 ```sh
-aws dynamodb update-item \
-  --table-name cheapskate \
-  --key '{"pk":{"S":"CONFIG"},"sk":{"S":"GROUP#dev"}}' \
-  --update-expression 'SET ecs_max_count = :maximum' \
-  --expression-attribute-values '{":maximum":{"N":"4"}}' \
-  --condition-expression 'attribute_exists(pk)'
+cheapskate-cli ecs-max-count --group dev 4
 ```
 
-CLI and web-console schedule and override operations retain this value. For constraints, see [Group configuration](group_config.md#ecs-capacity-limit).
+Use the same command to change the limit. CLI and web-console schedule and override operations retain it. For attribute removal and other ECS settings, see [ECS service configuration](resources/ecs-service.md#dynamodb-and-cli).
 
 ### Suspending and resuming Scheduled Scaling
 
@@ -109,7 +104,7 @@ To end management:
 1. Set an indefinite running or stopped override.
 2. Wait at least one configured reconciler Lambda timeout after the write completes.
 3. Invoke the reconciler manually or wait for the next periodic invocation.
-4. Use show to confirm every resource is stable in the selected state. For ECS, also inspect bounds and ScheduledScalingSuspended in live.Detail.
+4. Use show to confirm every resource is stable in the selected state. For ECS, also inspect bounds and ScheduledScalingSuspended in live.detail.
 5. Remove cheapskate:group from the resources.
 6. Delete the group with cheapskate-cli remove --group <group-name>.
 

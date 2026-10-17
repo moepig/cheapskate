@@ -92,6 +92,52 @@ func TestOverrideForMustBePositiveWhenSpecified(t *testing.T) {
 	assert.EqualError(t, err, "-for must be a positive duration")
 }
 
+// 台数の位置を変えて上限を登録し、JSON と text の結果、および属性削除を確認する。
+func TestEcsMaxCountCommands(t *testing.T) {
+	db, service := cliFixture(t)
+	ctx := context.Background()
+	now := time.Now()
+	_, err := service.Override(ctx, "dev", model.OverrideDisabled, 0, now)
+	require.NoError(t, err)
+	var output bytes.Buffer
+	require.NoError(t, cmdEcsMaxCount(ctx, service, []string{"3", "--group", "dev"}, &output, "json", now))
+	var result struct {
+		Command string    `json:"command"`
+		Group   groupJSON `json:"group"`
+	}
+	require.NoError(t, json.Unmarshal(output.Bytes(), &result))
+	assert.Equal(t, "ecs-max-count", result.Command)
+	assert.EqualValues(t, 3, result.Group.EcsMaxCount)
+	assert.Equal(t, model.OverrideDisabled, result.Group.Override)
+	output.Reset()
+	require.NoError(t, cmdEcsMaxCount(ctx, service, []string{"--group", "dev", "2147483647"}, &output, "text", now))
+	assert.Contains(t, output.String(), "ecs_max_count=2147483647")
+	output.Reset()
+	require.NoError(t, cmdClearEcsMaxCount(ctx, service, []string{"--group", "dev"}, &output, "json", now))
+	assert.Contains(t, output.String(), `"command": "clear-ecs-max-count"`)
+	assert.NotContains(t, output.String(), "ecs_max_count")
+	assert.NotContains(t, db.Item("CONFIG", "GROUP#dev"), "ecs_max_count")
+}
+
+// 引数の欠落、余分な引数、整数の範囲外を拒否し、保存処理が発生しないことを確認する。
+func TestEcsMaxCountCommandsRejectInvalidArguments(t *testing.T) {
+	db, service := cliFixture(t)
+	ctx := context.Background()
+	now := time.Now()
+	for _, args := range [][]string{
+		{"3"}, {"--group", "dev"}, {"--group", "dev", "3", "4"},
+		{"--group", "dev", "0"}, {"--group", "dev", "-1"},
+		{"--group", "dev", "2147483648"}, {"--group", "dev", "1.5"},
+		{"--group", "dev", "1e3"}, {"--group", "dev", ""},
+	} {
+		assert.Error(t, cmdEcsMaxCount(ctx, service, args, io.Discard, "text", now), "%v", args)
+	}
+	assert.Error(t, cmdClearEcsMaxCount(ctx, service, nil, io.Discard, "text", now))
+	assert.Error(t, cmdClearEcsMaxCount(ctx, service, []string{"--group", "dev", "extra"}, io.Discard, "text", now))
+	assert.Zero(t, db.Calls("get"))
+	assert.Zero(t, db.Calls("update"))
+}
+
 func TestCommandsRejectUnexpectedPositionals(t *testing.T) {
 	_, service := cliFixture(t)
 	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)

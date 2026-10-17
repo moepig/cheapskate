@@ -19,6 +19,7 @@ type Store interface {
 	SetSchedule(ctx context.Context, name string, schedule model.ScheduleSpec) error
 	SetOverride(ctx context.Context, name string, override model.Override, expiresAt int64) error
 	ClearOverride(ctx context.Context, name string) error
+	SetEcsMaxCount(ctx context.Context, name string, maximum int32) error
 	DeleteGroup(ctx context.Context, name string) error
 }
 
@@ -179,6 +180,33 @@ func (s *Service) ClearOverride(ctx context.Context, name string, now time.Time)
 		return model.GroupSpec{}, err
 	}
 	if err := s.store.ClearOverride(ctx, name); err != nil {
+		return model.GroupSpec{}, err
+	}
+	return next, nil
+}
+
+func (s *Service) SetEcsMaxCount(ctx context.Context, name string, maximum int32, now time.Time) (model.GroupSpec, error) {
+	if maximum <= 0 {
+		return model.GroupSpec{}, fmt.Errorf("ecs_max_count must be positive")
+	}
+	return s.updateEcsMaxCount(ctx, name, maximum, now)
+}
+
+func (s *Service) ClearEcsMaxCount(ctx context.Context, name string, now time.Time) (model.GroupSpec, error) {
+	return s.updateEcsMaxCount(ctx, name, 0, now)
+}
+
+func (s *Service) updateEcsMaxCount(ctx context.Context, name string, maximum int32, now time.Time) (model.GroupSpec, error) {
+	group, err := s.requireGroup(ctx, name)
+	if err != nil {
+		return model.GroupSpec{}, err
+	}
+	next := *group
+	next.EcsMaxCount = maximum
+	if err := model.ValidateGroupForWrite(next, now, s.location); err != nil {
+		return model.GroupSpec{}, err
+	}
+	if err := s.store.SetEcsMaxCount(ctx, name, maximum); err != nil {
 		return model.GroupSpec{}, err
 	}
 	return next, nil

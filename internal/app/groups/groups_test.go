@@ -175,3 +175,60 @@ func TestGroupMutationsPreserveRegisteredCountLimit(t *testing.T) {
 	assert.EqualValues(t, 3, group.EcsMaxCount)
 	assert.Equal(t, "3", db.Item("CONFIG", "GROUP#dev")["ecs_max_count"].(*types.AttributeValueMemberN).Value)
 }
+
+// 上限の登録・変更・削除を行い、スケジュールと期限付き override の保存値が維持されることを確認する。
+func TestEcsMaxCountMutationsPreserveOtherSettings(t *testing.T) {
+	db, service := fixture(t)
+	ctx := context.Background()
+	now := time.Now()
+	_, err := service.Schedule(ctx, "dev", model.ScheduleSpec{StartCron: "0 9 * * *", StopCron: "0 20 * * *"}, now)
+	require.NoError(t, err)
+	original, err := service.Override(ctx, "dev", model.OverrideRunning, time.Hour, now)
+	require.NoError(t, err)
+	for _, maximum := range []int32{1, 2147483647, 3} {
+		group, err := service.SetEcsMaxCount(ctx, "dev", maximum, now)
+		require.NoError(t, err)
+		expected := original
+		expected.EcsMaxCount = maximum
+		assert.Equal(t, expected, group)
+		rows, err := service.List(ctx, now)
+		require.NoError(t, err)
+		require.Len(t, rows, 1)
+		assert.Equal(t, expected, rows[0].Group)
+	}
+	group, err := service.ClearEcsMaxCount(ctx, "dev", now)
+	require.NoError(t, err)
+	assert.Equal(t, original, group)
+	assert.NotContains(t, db.Item("CONFIG", "GROUP#dev"), "ecs_max_count")
+}
+
+// 未登録グループ、不正な上限、失効済み override を含む更新では DynamoDB に書き込まない。
+func TestEcsMaxCountRejectsInvalidUpdates(t *testing.T) {
+	db, service := fixture(t)
+	ctx := context.Background()
+	now := time.Now()
+	_, err := service.SetEcsMaxCount(ctx, "missing", 3, now)
+	assert.ErrorIs(t, err, state.ErrGroupNotFound)
+	_, err = service.ClearEcsMaxCount(ctx, "missing", now)
+	assert.ErrorIs(t, err, state.ErrGroupNotFound)
+	_, err = service.Override(ctx, "dev", model.OverrideDisabled, 0, now)
+	require.NoError(t, err)
+	for _, maximum := range []int32{-1, 0} {
+		_, err := service.SetEcsMaxCount(ctx, "dev", maximum, now)
+		assert.ErrorContains(t, err, "must be positive")
+	}
+	assert.Zero(t, db.Calls("update"))
+	_, err = service.SetEcsMaxCount(ctx, "dev", 3, now)
+	require.NoError(t, err)
+	_, err = service.Schedule(ctx, "dev", model.ScheduleSpec{StartCron: "0 9 * * *", StopCron: "0 20 * * *"}, now)
+	require.NoError(t, err)
+	_, err = service.Override(ctx, "dev", model.OverrideRunning, time.Hour, now)
+	require.NoError(t, err)
+	writes := db.Calls("update")
+	_, err = service.SetEcsMaxCount(ctx, "dev", 4, now.Add(time.Hour))
+	assert.ErrorContains(t, err, "override_expires_at must be later than")
+	_, err = service.ClearEcsMaxCount(ctx, "dev", now.Add(time.Hour))
+	assert.ErrorContains(t, err, "override_expires_at must be later than")
+	assert.Equal(t, writes, db.Calls("update"))
+	assert.Equal(t, "3", db.Item("CONFIG", "GROUP#dev")["ecs_max_count"].(*types.AttributeValueMemberN).Value)
+}

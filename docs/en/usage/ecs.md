@@ -19,7 +19,7 @@ Group configuration, service tags, and AWS observations have separate purposes:
 
 The group's running request means keeping the service active. It is distinct from current ECS desiredCount and the startup-count tag. The cheapskate/desired-count tag does not continuously fix running capacity.
 
-For types and defaults, see [Group configuration](group_config.md#ecs-capacity-limit) and [Resource tags](resource_tag.md#ecs-configuration-tags).
+For DynamoDB attributes, CLI operations, and tag types and defaults, see [ECS service configuration](resources/ecs-service.md).
 
 ## Stopping and starting
 

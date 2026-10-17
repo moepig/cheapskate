@@ -29,10 +29,10 @@ RDS と EC2 は遷移中の操作を見送る。ECS はタスクの起動・終�
 
 | リソース | 対象条件 | 起動 | 停止 |
 | --- | --- | --- | --- |
-| RDS DB インスタンス | DB クラスタに所属せず、RDS Custom 以外 | インスタンスを起動 | インスタンスを停止 |
-| Aurora DB クラスタ | engine が aurora で始まる | クラスタを起動 | クラスタを停止 |
-| EC2 インスタンス | Auto Scaling グループに所属しない | インスタンスを起動 | インスタンスを停止 |
-| ECS service | REPLICA、長形式の ARN | 起動台数とスケーリング設定を適用 | desiredCount と登録済みの上下限を 0 にし、Scheduled Scaling を一時停止 |
+| [RDS DB インスタンス](resources/rds-instance.md) | DB クラスタに所属せず、RDS Custom 以外 | インスタンスを起動 | インスタンスを停止 |
+| [Aurora DB クラスタ](resources/rds-cluster.md) | engine が aurora で始まる | クラスタを起動 | クラスタを停止 |
+| [EC2 インスタンス](resources/ec2-instance.md) | Auto Scaling グループに所属しない | インスタンスを起動 | インスタンスを停止 |
+| [ECS service](resources/ecs-service.md) | REPLICA、長形式の ARN | 起動台数とスケーリング設定を適用 | desiredCount と登録済みの上下限を 0 にし、Scheduled Scaling を一時停止 |
 
 RDS DB インスタンスと Aurora DB クラスタは、available を稼働中、stopped を停止済みとして扱う。他の状態では次のサイクルまで待つ。Aurora の所属 DB インスタンスを個別の停止対象にしないこと。
 

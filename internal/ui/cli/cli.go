@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 	_ "time/tzdata"
@@ -36,6 +37,8 @@ Commands:
   schedule --group NAME -start CRON -stop CRON
   override --group NAME running|stopped|disabled [-for DURATION]
   clear-override --group NAME
+  ecs-max-count --group NAME COUNT
+  clear-ecs-max-count --group NAME
   remove --group NAME
 
 Resources belong to a group through the fixed tag cheapskate:group=<group>.
@@ -154,6 +157,10 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return cmdOverride(ctx, service, commandArgs, stdout, *output, time.Now())
 	case "clear-override":
 		return cmdClearOverride(ctx, service, commandArgs, stdout, *output, time.Now())
+	case "ecs-max-count":
+		return cmdEcsMaxCount(ctx, service, commandArgs, stdout, *output, time.Now())
+	case "clear-ecs-max-count":
+		return cmdClearEcsMaxCount(ctx, service, commandArgs, stdout, *output, time.Now())
 	case "remove":
 		return cmdRemove(ctx, service, commandArgs, stdout, *output)
 	default:
@@ -373,6 +380,42 @@ func cmdClearOverride(ctx context.Context, service *groups.Service, args []strin
 		return classify(err)
 	}
 	return writeMutation(stdout, output, "clear-override", next)
+}
+
+func cmdEcsMaxCount(ctx context.Context, service *groups.Service, args []string, stdout io.Writer, output string, now time.Time) error {
+	fs := newFlagSet("ecs-max-count")
+	group := fs.String("group", "", "group name")
+	positionals, err := parseInterleaved(fs, args)
+	if err != nil {
+		return err
+	}
+	if *group == "" {
+		return fmt.Errorf("--group is required")
+	}
+	if len(positionals) != 1 {
+		return fmt.Errorf("ecs-max-count requires exactly one count")
+	}
+	maximum, err := strconv.ParseInt(positionals[0], 10, 32)
+	if err != nil || maximum <= 0 {
+		return fmt.Errorf("ecs_max_count must be an integer between 1 and 2147483647")
+	}
+	next, err := service.SetEcsMaxCount(ctx, *group, int32(maximum), now)
+	if err != nil {
+		return classify(err)
+	}
+	return writeMutation(stdout, output, "ecs-max-count", next)
+}
+
+func cmdClearEcsMaxCount(ctx context.Context, service *groups.Service, args []string, stdout io.Writer, output string, now time.Time) error {
+	group, err := groupFlag("clear-ecs-max-count", args)
+	if err != nil {
+		return err
+	}
+	next, err := service.ClearEcsMaxCount(ctx, group, now)
+	if err != nil {
+		return classify(err)
+	}
+	return writeMutation(stdout, output, "clear-ecs-max-count", next)
 }
 
 func cmdRemove(ctx context.Context, service *groups.Service, args []string, stdout io.Writer, output string) error {

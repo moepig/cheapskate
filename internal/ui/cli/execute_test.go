@@ -94,6 +94,8 @@ func TestExecuteReportsWriteConflicts(t *testing.T) {
 		{[]string{"schedule", "--group", "dev", "-start", "0 8 * * *", "-stop", "0 19 * * *"}, "UpdateItem"},
 		{[]string{"override", "--group", "dev", "running"}, "UpdateItem"},
 		{[]string{"clear-override", "--group", "dev"}, "UpdateItem"},
+		{[]string{"ecs-max-count", "--group", "dev", "3"}, "UpdateItem"},
+		{[]string{"clear-ecs-max-count", "--group", "dev"}, "UpdateItem"},
 		{[]string{"remove", "--group", "dev"}, "DeleteItem"},
 	} {
 		for _, format := range []string{"json", "text"} {
