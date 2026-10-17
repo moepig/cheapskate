@@ -19,7 +19,7 @@ Scheduled Scaling を使用しない service でタグの上下限を維持す�
 
 ### 運用例
 
-上下限管理モードは、利用者が ECS service のタグとして設定する。cheapskate はタグを自動付与・書き換えしない。次の例は、scalable target が登録済みで、グループの要求が running の場合である。
+次の例は、scalable target が登録済みで、グループの要求が running の場合である。
 
 | 運用 | 設定 | cheapskate の動作 |
 | --- | --- | --- |
@@ -46,6 +46,23 @@ DynamoDB のグループ設定、service のタグ、および AWS の現在状�
 グループの running は起動状態を維持する要求である。ECS の現在の desiredCount や、タグの起動台数と同じ意味ではない。タグの cheapskate:desired-count は、稼働中の台数を常時固定する設定ではない。
 
 DynamoDB 属性、CLI 操作、およびタグの型と既定値は、[ECS service の設定](resources/ecs-service.md) を参照。
+
+### 上下限管理モードと AWS の一時停止フラグ
+
+cheapskate:scaling-bounds-mode は、利用者が ECS service のタグとして指定する上下限の管理方法である。cheapskate はこのタグを自動付与・書き換えしない。
+
+ScheduledScalingSuspended は、AWS Application Auto Scaling の scalable target に設定する一時停止フラグである。true は Scheduled Scaling の一時停止、false は有効化を表す。cheapskate はグループの要求と上下限管理モードに応じて、この AWS フラグを制御する。
+
+scalable target が登録済みの場合の対応を、以下に示す。
+
+| 場面 | 上下限管理モード | ScheduledScalingSuspended に適用する値 |
+| --- | --- | --- |
+| 稼働中（起動設定完了後） | tags | true |
+| 稼働中（起動設定完了後） | scheduled | false |
+| 停止要求を適用するとき | どちらのモードでも | true |
+| 起動台数の初期設定中 | どちらのモードでも | true |
+
+このため、タグが scheduled のままでも、停止中や起動台数の初期設定中は AWS の ScheduledScalingSuspended=true になる。起動設定の最後にモードに対応する値を適用する。グループの要求が disabled の場合は、AWS フラグを変更しない。
 
 ## 停止と起動
 

@@ -19,7 +19,7 @@ Both modes suspend Scheduled Scaling while the service is stopped to prevent sch
 
 ### Operational examples
 
-The user sets bounds mode as a tag on the ECS service. cheapskate does not add or rewrite the tag. These examples assume a registered scalable target and a running group request.
+These examples assume a registered scalable target and a running group request.
 
 | Operation | Configuration | cheapskate behavior |
 | --- | --- | --- |
@@ -46,6 +46,23 @@ Group configuration, service tags, and AWS observations have separate purposes:
 The group's running request means keeping the service active. It is distinct from current ECS desiredCount and the startup-count tag. The cheapskate:desired-count tag does not continuously fix running capacity.
 
 For DynamoDB attributes, CLI operations, and tag types and defaults, see [ECS service configuration](resources/ecs-service.md).
+
+### Bounds mode and the AWS suspension flag
+
+cheapskate:scaling-bounds-mode is the bounds management method that the user specifies as an ECS service tag. cheapskate does not add or rewrite this tag.
+
+ScheduledScalingSuspended is a suspension flag on the AWS Application Auto Scaling scalable target. A value of true suspends Scheduled Scaling; false enables it. cheapskate controls this AWS flag according to the group request and bounds mode.
+
+For a registered scalable target, the mapping is:
+
+| Situation | Bounds mode | Value applied to ScheduledScalingSuspended |
+| --- | --- | --- |
+| Running, after startup configuration completes | tags | true |
+| Running, after startup configuration completes | scheduled | false |
+| Applying a stop request | Either mode | true |
+| Initializing startup capacity | Either mode | true |
+
+The tag can therefore remain scheduled while AWS ScheduledScalingSuspended is true during shutdown or startup initialization. The final startup update applies the value corresponding to bounds mode. A disabled group request leaves the AWS flag unchanged.
 
 ## Stopping and starting
 
