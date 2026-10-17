@@ -126,8 +126,8 @@ func TestSeedCreatesClusterTaskDefinitionAndTagsEveryService(t *testing.T) {
 
 	require.NoError(t, Seed(context.Background(), ecsAPI, taggingAPI))
 
-	assert.ElementsMatch(t, []string{"cheapskate:group", "cheapskate/desired-count"}, taggedARNs["arn:svc-api"])
-	assert.ElementsMatch(t, []string{"cheapskate:group", "cheapskate/desired-count", "cheapskate/scaling-min", "cheapskate/scaling-max"}, taggedARNs["arn:svc-worker"])
+	assert.ElementsMatch(t, []string{"cheapskate:group", "cheapskate:desired-count"}, taggedARNs["arn:svc-api"])
+	assert.ElementsMatch(t, []string{"cheapskate:group", "cheapskate:desired-count", "cheapskate:scaling-min", "cheapskate:scaling-max"}, taggedARNs["arn:svc-worker"])
 	assert.ElementsMatch(t, []string{"env"}, taggedARNs["arn:svc-batch"])
 }
 

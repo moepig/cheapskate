@@ -437,8 +437,8 @@ func TestEcsReconcileEnforcesRegisteredCountLimit(t *testing.T) {
 		"default count":             {limit: 1, desired: 1},
 		"at limit":                  {limit: 3, tags: map[string]string{model.EcsDesiredCountTagKey: "3"}, desired: 3},
 		"missing limit":             {wantErr: "ecs_max_count must be registered"},
-		"desired exceeds limit":     {limit: 3, tags: map[string]string{model.EcsDesiredCountTagKey: "1000"}, wantErr: "cheapskate/desired-count=1000 exceeds group ecs_max_count=3"},
-		"scaling max exceeds limit": {limit: 3, tags: map[string]string{model.EcsDesiredCountTagKey: "2", model.EcsScalingMaxTagKey: "1000"}, wantErr: "cheapskate/scaling-max=1000 exceeds group ecs_max_count=3"},
+		"desired exceeds limit":     {limit: 3, tags: map[string]string{model.EcsDesiredCountTagKey: "1000"}, wantErr: "cheapskate:desired-count=1000 exceeds group ecs_max_count=3"},
+		"scaling max exceeds limit": {limit: 3, tags: map[string]string{model.EcsDesiredCountTagKey: "2", model.EcsScalingMaxTagKey: "1000"}, wantErr: "cheapskate:scaling-max=1000 exceeds group ecs_max_count=3"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			ctx := context.Background()
@@ -447,7 +447,7 @@ func TestEcsReconcileEnforcesRegisteredCountLimit(t *testing.T) {
 			store := state.New(api, "table")
 			require.NoError(t, store.CreateGroup(ctx, model.GroupSpec{Name: "dev", Override: model.OverrideRunning, EcsMaxCount: test.limit}))
 			resource := ecsReconcileResource()
-			resource.Tags = map[string]string{model.GroupTagKey: "dev", "cheapskate/ecs_max_count": "1000"}
+			resource.Tags = map[string]string{model.GroupTagKey: "dev", "cheapskate:ecs_max_count": "1000"}
 			for key, value := range test.tags {
 				resource.Tags[key] = value
 			}

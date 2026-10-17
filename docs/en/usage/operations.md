@@ -85,11 +85,11 @@ Use the same command to change the limit. CLI and web-console schedule and overr
 
 ### Suspending and resuming Scheduled Scaling
 
-To suspend, set the service's cheapskate/scheduled-scaling-paused tag to true and confirm ScheduledScalingSuspended=true after a successful cycle.
+To suspend, set the service's cheapskate:scheduled-scaling-paused tag to true and confirm ScheduledScalingSuspended=true after a successful cycle.
 
-Before resuming, confirm that cheapskate/scaling-min and cheapskate/scaling-max specify the intended normal range. Resuming applies those bounds, and AWS adjusts capacity outside the range. To resume:
+Before resuming, confirm that cheapskate:scaling-min and cheapskate:scaling-max specify the intended normal range. Resuming applies those bounds, and AWS adjusts capacity outside the range. To resume:
 
-1. Set cheapskate/scheduled-scaling-paused to false or remove it.
+1. Set cheapskate:scheduled-scaling-paused to false or remove it.
 2. Set the group's request to running.
 3. After a successful cycle, inspect show or the web console for ScheduledScalingSuspended=false and normal bounds.
 

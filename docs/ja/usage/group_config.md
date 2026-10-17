@@ -27,7 +27,7 @@ override の値は running、stopped、disabled のいずれかである。overr
 
 ## ECS 台数上限
 
-ecs_max_count は、所属する各 ECS service の起動台数タグ cheapskate/desired-count と通常の上限タグ cheapskate/scaling-max の値を検証する DynamoDB 属性である。Number 型の正の int32、1～2147483647 を登録する。ECS の起動や稼働中の設定更新には登録が必要である。停止にはこの上限を適用しない。
+ecs_max_count は、所属する各 ECS service の起動台数タグ cheapskate:desired-count と通常の上限タグ cheapskate:scaling-max の値を検証する DynamoDB 属性である。Number 型の正の int32、1～2147483647 を登録する。ECS の起動や稼働中の設定更新には登録が必要である。停止にはこの上限を適用しない。
 
 グループ全体の合計台数ではなく、service ごとに適用する。Scheduled Scaling が設定する上下限と現在台数は、この検証を通らない。
 

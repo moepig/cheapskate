@@ -92,7 +92,7 @@ resource "aws_dynamodb_table_item" "group" {
 
 Item uses DynamoDB JSON including attribute types. Number values also use strings in N. For Terraform arguments, see [aws_dynamodb_table_item](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/dynamodb_table_item) and the [table data source](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/dynamodb_table).
 
-The three groups that allow startup have ecs_max_count=4. For ECS this must cover the cheapskate/desired-count and cheapskate/scaling-max tag values. It applies per service rather than to the group's total task count.
+The three groups that allow startup have ecs_max_count=4. For ECS this must cover the cheapskate:desired-count and cheapskate:scaling-max tag values. It applies per service rather than to the group's total task count.
 
 All items use pk=CONFIG. Their requests are:
 

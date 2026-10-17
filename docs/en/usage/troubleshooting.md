@@ -44,10 +44,10 @@ ECS configuration and current state are separate values. Check according to the 
 | Symptom | Check or remedy |
 | --- | --- |
 | Startup or repair fails | Check ecs_max_count, tag types, count/bounds constraints, and the group limit |
-| Startup-count tag change does not change capacity | cheapskate/desired-count applies only from all-zero counts or 0/0 bounds |
+| Startup-count tag change does not change capacity | cheapskate:desired-count applies only from all-zero counts or 0/0 bounds |
 | runningCount differs from desiredCount | Task transitions are asynchronous; inspect ECS events and later cycles |
 | Resuming Scheduled Scaling changes count | Normal bounds may have adjusted an out-of-range desiredCount |
-| Bounds differ from normal tags | A false cheapskate/scheduled-scaling-paused tag retains Scheduled Scaling changes; use true to maintain tag bounds |
+| Bounds differ from normal tags | A false cheapskate:scheduled-scaling-paused tag retains Scheduled Scaling changes; use true to maintain tag bounds |
 | Suspension cannot be cleared while stopped | A stopped request maintains ScheduledScalingSuspended=true |
 | Service restarts after Scheduled Scaling sets zero | Use cheapskate's stop schedule or stopped override to remain at zero |
 

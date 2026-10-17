@@ -44,10 +44,10 @@ ECS の設定と現在状態は別の値である。症状ごとの確認項目�
 | 症状 | 確認と対処 |
 | --- | --- |
 | 起動または設定修復がエラーになる | ecs_max_count の登録、タグ値の型、通常の上下限と起動台数の関係、グループ上限の超過を確認 |
-| タグの起動台数へ変わらない | cheapskate/desired-count は停止状態または上下限 0/0 からの起動時だけ適用 |
+| タグの起動台数へ変わらない | cheapskate:desired-count は停止状態または上下限 0/0 からの起動時だけ適用 |
 | runningCount が desiredCount と異なる | タスクの起動・終了は非同期。AWS のイベントと後続サイクルを確認 |
 | Scheduled Scaling の再開時に台数が変わる | 通常の上下限を適用した結果、範囲外の desiredCount が調整されていないか確認 |
-| 上下限が通常のタグ値と異なる | cheapskate/scheduled-scaling-paused タグが false なら Scheduled Scaling による変更を維持。タグ範囲を維持するなら true を指定 |
+| 上下限が通常のタグ値と異なる | cheapskate:scheduled-scaling-paused タグが false なら Scheduled Scaling による変更を維持。タグ範囲を維持するなら true を指定 |
 | 停止中に一時停止を解除できない | グループ要求が stopped の間は ScheduledScalingSuspended=true を維持 |
 | Scheduled Scaling で 0 台にしても再起動する | 0 台を維持する時間帯は cheapskate の停止スケジュールまたは stopped override を使用 |
 

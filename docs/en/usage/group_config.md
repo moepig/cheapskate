@@ -27,7 +27,7 @@ A stored expiration at or before current time makes the override inactive. Attri
 
 ## ECS capacity limit
 
-The DynamoDB attribute ecs_max_count validates the startup-count tag cheapskate/desired-count and normal-maximum tag cheapskate/scaling-max for each member ECS service. Register a positive int32 Number from 1 through 2147483647. Startup and running configuration updates require this value. Stopping does not apply this limit.
+The DynamoDB attribute ecs_max_count validates the startup-count tag cheapskate:desired-count and normal-maximum tag cheapskate:scaling-max for each member ECS service. Register a positive int32 Number from 1 through 2147483647. Startup and running configuration updates require this value. Stopping does not apply this limit.
 
 The limit applies per service, not to the group's total task count. Scheduled Scaling bounds and current capacity do not pass through this validation.
 

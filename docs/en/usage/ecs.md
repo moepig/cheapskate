@@ -11,13 +11,13 @@ Group configuration, service tags, and AWS observations have separate purposes:
 | DynamoDB | start_cron, stop_cron, override, override_expires_at | Select running, stopped, or disabled using current time and DEFAULT_TIMEZONE |
 | DynamoDB | ecs_max_count | Validate startup count and normal maximum applied by cheapskate |
 | ECS service tags | cheapskate:group | Name of the DynamoDB group |
-| ECS service tags | cheapskate/desired-count | Startup count from all-zero counts or 0/0 bounds |
-| ECS service tags | cheapskate/scaling-min, cheapskate/scaling-max | Normal bounds applied at the end of startup, during suspension, and when resuming |
-| ECS service tags | cheapskate/scheduled-scaling-paused | Requested Scheduled Scaling suspension |
+| ECS service tags | cheapskate:desired-count | Startup count from all-zero counts or 0/0 bounds |
+| ECS service tags | cheapskate:scaling-min, cheapskate:scaling-max | Normal bounds applied at the end of startup, during suspension, and when resuming |
+| ECS service tags | cheapskate:scheduled-scaling-paused | Requested Scheduled Scaling suspension |
 | Current ECS state | desiredCount, runningCount, pendingCount | Configured, running, and pending task counts |
 | Current Application Auto Scaling state | MinCapacity, MaxCapacity, ScheduledScalingSuspended | Applied bounds and suspension flag |
 
-The group's running request means keeping the service active. It is distinct from current ECS desiredCount and the startup-count tag. The cheapskate/desired-count tag does not continuously fix running capacity.
+The group's running request means keeping the service active. It is distinct from current ECS desiredCount and the startup-count tag. The cheapskate:desired-count tag does not continuously fix running capacity.
 
 For DynamoDB attributes, CLI operations, and tag types and defaults, see [ECS service configuration](resources/ecs-service.md).
 
@@ -29,13 +29,13 @@ ECS is stopped only when desiredCount, runningCount, and pendingCount are all ze
 
 A stopped group request applies MinCapacity=0, MaxCapacity=0, and ScheduledScalingSuspended=true. Suspension applies while stopped even when the tag requests false.
 
-A running group request initializes capacity only when all ECS counts are zero or both bounds are zero. It first pins bounds to cheapskate/desired-count and suspends Scheduled Scaling. It reads ECS capacity again and changes desiredCount only if necessary. The final update applies normal bounds and the tag's suspension request together.
+A running group request initializes capacity only when all ECS counts are zero or both bounds are zero. It first pins bounds to cheapskate:desired-count and suspends Scheduled Scaling. It reads ECS capacity again and changes desiredCount only if necessary. The final update applies normal bounds and the tag's suspension request together.
 
 Completed startup configuration does not mean all tasks have started. Updates whose settings already match are omitted.
 
 ### Without a scalable target
 
-Stopping sets desiredCount=0. Starting sets cheapskate/desired-count only when all counts are zero. An active service, including one with pending tasks, is not reset to startup capacity. A scalable target is not created.
+Stopping sets desiredCount=0. Starting sets cheapskate:desired-count only when all counts are zero. An active service, including one with pending tasks, is not reset to startup capacity. A scalable target is not created.
 
 ## Scaling during normal operation
 
@@ -54,7 +54,7 @@ After resuming, Scheduled Scaling changes to bounds and counts are retained. Set
 
 ### Suspension scope
 
-cheapskate/scheduled-scaling-paused=true persists across service starts and stops. cheapskate does not rewrite the tag. Clear the request by setting false or removing the tag.
+cheapskate:scheduled-scaling-paused=true persists across service starts and stops. cheapskate does not rewrite the tag. Clear the request by setting false or removing the tag.
 
 Suspension prevents new scheduled actions from starting. It does not cancel an action already underway or replay actions whose execution times passed during suspension. Resuming enables future executions. See [AWS scaling suspension and resumption](https://docs.aws.amazon.com/autoscaling/application/userguide/application-auto-scaling-suspend-resume-scaling.html).
 
@@ -77,9 +77,9 @@ flowchart TD
     observe --> desired{"Group request"}
     desired -->|stopped| stop["Converge to MinCapacity=0, MaxCapacity=0,<br/>ScheduledScalingSuspended=true"]
     desired -->|running| initialize{"All counts zero or<br/>MinCapacity=MaxCapacity=0?"}
-    initialize -->|Yes| start["Pin bounds to cheapskate/desired-count<br/>ScheduledScalingSuspended=true<br/>Set ECS desiredCount if needed"]
-    start --> apply["Apply cheapskate/scaling-min and cheapskate/scaling-max<br/>and cheapskate/scheduled-scaling-paused<br/>Omit matching updates"]
-    initialize -->|No| paused{"cheapskate/scheduled-scaling-paused<br/>true?"}
+    initialize -->|Yes| start["Pin bounds to cheapskate:desired-count<br/>ScheduledScalingSuspended=true<br/>Set ECS desiredCount if needed"]
+    start --> apply["Apply cheapskate:scaling-min and cheapskate:scaling-max<br/>and cheapskate:scheduled-scaling-paused<br/>Omit matching updates"]
+    initialize -->|No| paused{"cheapskate:scheduled-scaling-paused<br/>true?"}
     paused -->|Yes| apply
     paused -->|No| resume{"AWS<br/>ScheduledScalingSuspended=true?"}
     resume -->|Yes| apply
@@ -90,7 +90,7 @@ flowchart TD
 
 A failed operation leaves applied AWS settings in place. The next cycle reads group configuration, tags, and current state again. Neither DynamoDB nor tags store execution history or startup progress.
 
-A positive fixed range can represent either normal configuration or partial startup. It is not used to infer an execution phase. Normal bounds and the suspension request are applied instead. Tag changes during partial startup retain applied capacity within the new normal bounds. A changed cheapskate/desired-count takes effect at the next start from all-zero counts or 0/0 bounds.
+A positive fixed range can represent either normal configuration or partial startup. It is not used to infer an execution phase. Normal bounds and the suspension request are applied instead. Tag changes during partial startup retain applied capacity within the new normal bounds. A changed cheapskate:desired-count takes effect at the next start from all-zero counts or 0/0 bounds.
 
 A later cycle that reads stopped or disabled follows that request instead of resuming old startup work. For overlapping invocation behavior, see [Start and stop behavior](resource_flow.md#failures-and-overlapping-invocations).
 
@@ -110,10 +110,10 @@ Unless a change is shown explicitly, the service tags are:
 | ECS service tag | Registered value |
 | --- | --- |
 | cheapskate:group | dev |
-| cheapskate/desired-count | 2 |
-| cheapskate/scaling-min | 1 |
-| cheapskate/scaling-max | 3 |
-| cheapskate/scheduled-scaling-paused | false |
+| cheapskate:desired-count | 2 |
+| cheapskate:scaling-min | 1 |
+| cheapskate:scaling-max | 3 |
+| cheapskate:scheduled-scaling-paused | false |
 
 The tables show possible AWS observations. Updating configuration does not require runningCount to match immediately.
 
@@ -136,10 +136,10 @@ DynamoDB keeps override=running and ecs_max_count=3. Membership stays cheapskate
 
 | ECS service tag | Before | After |
 | --- | --- | --- |
-| cheapskate/desired-count | 2 | 1 |
-| cheapskate/scaling-min | 2 | 1 |
-| cheapskate/scaling-max | 2 | 3 |
-| cheapskate/scheduled-scaling-paused | true | true |
+| cheapskate:desired-count | 2 | 1 |
+| cheapskate:scaling-min | 2 | 1 |
+| cheapskate:scaling-max | 2 | 3 |
+| cheapskate:scheduled-scaling-paused | true | true |
 
 Applying normal bounds while retaining in-range capacity produces these observations:
 

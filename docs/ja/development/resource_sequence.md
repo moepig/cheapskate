@@ -200,7 +200,7 @@ sequenceDiagram
     else scheduling strategy が REPLICA でも空でもない
         Adapter-->>Reconciler: エラー
     else 対応する service
-        Adapter->>Adapter: cheapskate/desired-count・cheapskate/scaling-min・<br/>cheapskate/scaling-max・cheapskate/scheduled-scaling-paused を検証
+        Adapter->>Adapter: cheapskate:desired-count・cheapskate:scaling-min・<br/>cheapskate:scaling-max・cheapskate:scheduled-scaling-paused を検証
         Note over Adapter,AutoScaling: 不正なタグの場合はここでエラーを返す
         Adapter->>AutoScaling: DescribeScalableTargets(対象 service)
         AutoScaling-->>Adapter: scalable target または target なし
@@ -220,10 +220,10 @@ Ref の分割または DescribeServices が失敗した場合もエラーを返�
 | --- | --- |
 | NeedsStop | AWS の上下限が 0/0 でない、または ScheduledScalingSuspended=false |
 | NeedsStart | desiredCount・runningCount・pendingCount がすべて 0、または上下限が 0/0 |
-| NeedsStart | AWS の ScheduledScalingSuspended と cheapskate/scheduled-scaling-paused タグが異なる |
-| NeedsStart | cheapskate/scheduled-scaling-paused=true で、AWS の上下限が cheapskate/scaling-min と cheapskate/scaling-max タグ値と異なる |
+| NeedsStart | AWS の ScheduledScalingSuspended と cheapskate:scheduled-scaling-paused タグが異なる |
+| NeedsStart | cheapskate:scheduled-scaling-paused=true で、AWS の上下限が cheapskate:scaling-min と cheapskate:scaling-max タグ値と異なる |
 
-正の固定範囲から起動途中かどうかを推測しない。cheapskate/scheduled-scaling-paused=false の通常稼働中は、Scheduled Scaling による上下限変更を再適用の理由にしない。
+正の固定範囲から起動途中かどうかを推測しない。cheapskate:scheduled-scaling-paused=false の通常稼働中は、Scheduled Scaling による上下限変更を再適用の理由にしない。
 
 ### 停止
 
@@ -249,7 +249,7 @@ sequenceDiagram
     Adapter-->>Reconciler: nil またはエラー
 ```
 
-cheapskate/scheduled-scaling-paused タグ値によらず AWS の ScheduledScalingSuspended=true を適用し、タグ自体は変更しない。ecs_max_count による停止の拒否は行わない。target がある場合は UpdateService と rollback を追加しない。
+cheapskate:scheduled-scaling-paused タグ値によらず AWS の ScheduledScalingSuspended=true を適用し、タグ自体は変更しない。ecs_max_count による停止の拒否は行わない。target がある場合は UpdateService と rollback を追加しない。
 
 ### 起動の初期設定
 
@@ -263,29 +263,29 @@ sequenceDiagram
     participant AutoScaling as Application Auto Scaling
     Reconciler->>Adapter: Start(resource)
     Adapter->>Adapter: Ref、タグ、ecs_max_count を検証
-    Note over Adapter,EcsAPI: DynamoDB の ecs_max_count が未登録、または<br/>cheapskate/desired-count・cheapskate/scaling-max タグが上限超過ならエラー
+    Note over Adapter,EcsAPI: DynamoDB の ecs_max_count が未登録、または<br/>cheapskate:desired-count・cheapskate:scaling-max タグが上限超過ならエラー
     Adapter->>EcsAPI: DescribeServices(cluster, service)
     EcsAPI-->>Adapter: 現在の service
     Adapter->>AutoScaling: DescribeScalableTargets(対象 service)
     AutoScaling-->>Adapter: scalable target または target なし
     alt target がなく、desiredCount・runningCount・pendingCount がすべて 0
-        opt AWS の desiredCount が cheapskate/desired-count タグ値と異なる
-            Adapter->>EcsAPI: UpdateService(desiredCount=cheapskate/desired-count タグ値)
+        opt AWS の desiredCount が cheapskate:desired-count タグ値と異なる
+            Adapter->>EcsAPI: UpdateService(desiredCount=cheapskate:desired-count タグ値)
             EcsAPI-->>Adapter: 応答
         end
     else target があり、初期設定が必要
-        opt AWS の上下限が cheapskate/desired-count タグ値に固定されていない、<br/>または ScheduledScalingSuspended=false
-            Adapter->>AutoScaling: RegisterScalableTarget(MinCapacity と MaxCapacity に<br/>cheapskate/desired-count タグ値、ScheduledScalingSuspended=true)
+        opt AWS の上下限が cheapskate:desired-count タグ値に固定されていない、<br/>または ScheduledScalingSuspended=false
+            Adapter->>AutoScaling: RegisterScalableTarget(MinCapacity と MaxCapacity に<br/>cheapskate:desired-count タグ値、ScheduledScalingSuspended=true)
             AutoScaling-->>Adapter: 応答
         end
         Adapter->>EcsAPI: DescribeServices(cluster, service)
         EcsAPI-->>Adapter: 固定後の desiredCount
-        opt AWS の desiredCount が cheapskate/desired-count タグ値と異なる
-            Adapter->>EcsAPI: UpdateService(desiredCount=cheapskate/desired-count タグ値)
+        opt AWS の desiredCount が cheapskate:desired-count タグ値と異なる
+            Adapter->>EcsAPI: UpdateService(desiredCount=cheapskate:desired-count タグ値)
             EcsAPI-->>Adapter: 応答
         end
-        opt 通常の上下限タグが cheapskate/desired-count タグ値と異なる、<br/>または cheapskate/scheduled-scaling-paused=false
-            Adapter->>AutoScaling: RegisterScalableTarget(MinCapacity=cheapskate/scaling-min タグ値、<br/>MaxCapacity=cheapskate/scaling-max タグ値、<br/>ScheduledScalingSuspended=cheapskate/scheduled-scaling-paused タグ値)
+        opt 通常の上下限タグが cheapskate:desired-count タグ値と異なる、<br/>または cheapskate:scheduled-scaling-paused=false
+            Adapter->>AutoScaling: RegisterScalableTarget(MinCapacity=cheapskate:scaling-min タグ値、<br/>MaxCapacity=cheapskate:scaling-max タグ値、<br/>ScheduledScalingSuspended=cheapskate:scheduled-scaling-paused タグ値)
             AutoScaling-->>Adapter: 応答
         end
     end
@@ -294,7 +294,7 @@ sequenceDiagram
 
 この図は成功経路であり、各 API が失敗した時点で後続の呼び出しを中止してエラーを返す。service が見つからない場合や REPLICA 以外の場合もエラーとなる。固定後の再観測は、RegisterScalableTarget が capacity を上下限内へ調整する動作を考慮したものである。
 
-cheapskate/scheduled-scaling-paused=false による解除は最後の RegisterScalableTarget だけで行う。一時停止要求のタグが true で、通常の上下限タグがともに起動台数タグと同じ場合は、最初の固定で通常設定も成立するため最後の RegisterScalableTarget を省略する。稼働中で初期設定が不要な場合は、次の設定再適用シーケンスを使用する。
+cheapskate:scheduled-scaling-paused=false による解除は最後の RegisterScalableTarget だけで行う。一時停止要求のタグが true で、通常の上下限タグがともに起動台数タグと同じ場合は、最初の固定で通常設定も成立するため最後の RegisterScalableTarget を省略する。稼働中で初期設定が不要な場合は、次の設定再適用シーケンスを使用する。
 
 ### 稼働中の設定再適用
 
@@ -313,11 +313,11 @@ sequenceDiagram
     Adapter->>AutoScaling: DescribeScalableTargets(対象 service)
     AutoScaling-->>Adapter: 現在の target
     Adapter->>Adapter: 初期設定が不要であることを判定
-    alt cheapskate/scheduled-scaling-paused=true で、一時停止または通常範囲が未適用
-        Adapter->>AutoScaling: RegisterScalableTarget(MinCapacity=cheapskate/scaling-min タグ値、<br/>MaxCapacity=cheapskate/scaling-max タグ値、ScheduledScalingSuspended=true)
+    alt cheapskate:scheduled-scaling-paused=true で、一時停止または通常範囲が未適用
+        Adapter->>AutoScaling: RegisterScalableTarget(MinCapacity=cheapskate:scaling-min タグ値、<br/>MaxCapacity=cheapskate:scaling-max タグ値、ScheduledScalingSuspended=true)
         AutoScaling-->>Adapter: 応答またはエラー
-    else cheapskate/scheduled-scaling-paused=false かつ AWS の ScheduledScalingSuspended=true
-        Adapter->>AutoScaling: RegisterScalableTarget(MinCapacity=cheapskate/scaling-min タグ値、<br/>MaxCapacity=cheapskate/scaling-max タグ値、ScheduledScalingSuspended=false)
+    else cheapskate:scheduled-scaling-paused=false かつ AWS の ScheduledScalingSuspended=true
+        Adapter->>AutoScaling: RegisterScalableTarget(MinCapacity=cheapskate:scaling-min タグ値、<br/>MaxCapacity=cheapskate:scaling-max タグ値、ScheduledScalingSuspended=false)
         AutoScaling-->>Adapter: 応答またはエラー
     else 設定が一致している
         Note over Adapter,AutoScaling: 変更 API を呼ばない
@@ -338,7 +338,7 @@ sequenceDiagram
     participant EcsAPI as ECS
     participant AutoScaling as Application Auto Scaling
     Note over Reconciler,AutoScaling: 最初のサイクル（初期設定の途中）
-    Adapter->>AutoScaling: RegisterScalableTarget(MinCapacity と MaxCapacity に<br/>cheapskate/desired-count タグ値、ScheduledScalingSuspended=true)
+    Adapter->>AutoScaling: RegisterScalableTarget(MinCapacity と MaxCapacity に<br/>cheapskate:desired-count タグ値、ScheduledScalingSuspended=true)
     AutoScaling-->>Adapter: 成功
     Adapter->>EcsAPI: DescribeServices(cluster, service)
     EcsAPI-->>Adapter: エラー
@@ -365,8 +365,8 @@ sequenceDiagram
 | すべてのタスク数が 0、または上下限が 0/0 | 起動の初期設定を行う |
 | 正の desiredCount と一時停止中の正の固定範囲 | 通常の上下限と一時停止要求を適用する。設定台数がその範囲内なら維持する |
 | 通常の上下限タグが起動台数タグと等しく、AWS の ScheduledScalingSuspended だけが一時停止要求のタグと異なる | 通常の上下限と一時停止要求を適用する |
-| 最後の更新の応答喪失後、cheapskate/scheduled-scaling-paused=true で通常設定が一致 | 追加操作を行わない |
-| 最後の更新の応答喪失後、cheapskate/scheduled-scaling-paused=false で Scheduled Scaling が上下限を変更 | 変更された範囲を維持する |
+| 最後の更新の応答喪失後、cheapskate:scheduled-scaling-paused=true で通常設定が一致 | 追加操作を行わない |
+| 最後の更新の応答喪失後、cheapskate:scheduled-scaling-paused=false で Scheduled Scaling が上下限を変更 | 変更された範囲を維持する |
 
 古い snapshot に基づく invocation は古い要求を適用しうる。最新の要求への収束は、その invocation の終了後に成功する後続サイクルで行う。disabled、管理終了、および cheapskate 自体の実行停止では、適用済みの AWS フラグと上下限を復元しない。
 

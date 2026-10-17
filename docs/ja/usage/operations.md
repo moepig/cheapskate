@@ -85,11 +85,11 @@ cheapskate-cli ecs-max-count --group dev 4
 
 ### Scheduled Scaling の一時停止と再開
 
-一時停止は、service の cheapskate/scheduled-scaling-paused タグを true に設定し、後続サイクルで ScheduledScalingSuspended=true を確認する。
+一時停止は、service の cheapskate:scheduled-scaling-paused タグを true に設定し、後続サイクルで ScheduledScalingSuspended=true を確認する。
 
-再開前に、cheapskate/scaling-min と cheapskate/scaling-max が目的の通常範囲であることを確認する。再開時にその範囲が適用され、範囲外の台数は AWS によって調整される。再開手順は、次のとおりである。
+再開前に、cheapskate:scaling-min と cheapskate:scaling-max が目的の通常範囲であることを確認する。再開時にその範囲が適用され、範囲外の台数は AWS によって調整される。再開手順は、次のとおりである。
 
-1. cheapskate/scheduled-scaling-paused を false に変更するか削除する。
+1. cheapskate:scheduled-scaling-paused を false に変更するか削除する。
 2. グループの要求を running にする。
 3. 正常なサイクルの後、show または Web コンソールで ScheduledScalingSuspended=false と通常の上下限を確認する。
 
