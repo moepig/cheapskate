@@ -41,6 +41,11 @@ Commands:
   clear-ecs-max-count --group NAME
   remove --group NAME
 
+Short options:
+  -c NAME        Alias for -context NAME
+  -o text|json   Alias for -output text|json
+  -g NAME        Alias for --group NAME
+
 Resources belong to a group through the fixed tag cheapskate:group=<group>.
 Contexts and the current selection are saved in the user config directory under cheapskate/config.json.
 Use -config or CHEAPSKATE_CONFIG to select another config file.
@@ -90,8 +95,10 @@ func run(args []string, stdout, stderr io.Writer) error {
 	global := newFlagSet("cheapskate-cli")
 	configFile := global.String("config", "", "CLI config file path (or CHEAPSKATE_CONFIG)")
 	contextName := global.String("context", "", "context for this invocation")
+	global.StringVar(contextName, "c", "", "alias for -context")
 	table := global.String("table", "", "DynamoDB state table name")
 	output := global.String("output", "text", "output format: text or json")
+	global.StringVar(output, "o", "text", "alias for -output")
 	if err := global.Parse(args); err != nil {
 		return err
 	}
@@ -172,6 +179,13 @@ func newFlagSet(name string) *flag.FlagSet {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	return fs
+}
+
+// 指定された FlagSet にグループ名の通常オプションと省略形を登録し、共通の値を返す。
+func groupNameFlag(fs *flag.FlagSet) *string {
+	group := fs.String("group", "", "group name")
+	fs.StringVar(group, "g", "", "alias for --group")
+	return group
 }
 
 func parseInterleaved(fs *flag.FlagSet, args []string) ([]string, error) {
@@ -266,7 +280,7 @@ type showOutput struct {
 
 func cmdShow(ctx context.Context, service *groups.Service, args []string, stdout, stderr io.Writer, output string, now time.Time) error {
 	fs := newFlagSet("show")
-	group := fs.String("group", "", "group name")
+	group := groupNameFlag(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -317,7 +331,7 @@ func cmdShow(ctx context.Context, service *groups.Service, args []string, stdout
 
 func cmdSchedule(ctx context.Context, service *groups.Service, args []string, stdout io.Writer, output string, now time.Time) error {
 	fs := newFlagSet("schedule")
-	group := fs.String("group", "", "group name")
+	group := groupNameFlag(fs)
 	start := fs.String("start", "", "5-field start cron")
 	stop := fs.String("stop", "", "5-field stop cron")
 	if err := fs.Parse(args); err != nil {
@@ -338,7 +352,7 @@ func cmdSchedule(ctx context.Context, service *groups.Service, args []string, st
 
 func cmdOverride(ctx context.Context, service *groups.Service, args []string, stdout io.Writer, output string, now time.Time) error {
 	fs := newFlagSet("override")
-	group := fs.String("group", "", "group name")
+	group := groupNameFlag(fs)
 	duration := fs.Duration("for", 0, "override duration")
 	positionals, err := parseInterleaved(fs, args)
 	if err != nil {
@@ -384,7 +398,7 @@ func cmdClearOverride(ctx context.Context, service *groups.Service, args []strin
 
 func cmdEcsMaxCount(ctx context.Context, service *groups.Service, args []string, stdout io.Writer, output string, now time.Time) error {
 	fs := newFlagSet("ecs-max-count")
-	group := fs.String("group", "", "group name")
+	group := groupNameFlag(fs)
 	positionals, err := parseInterleaved(fs, args)
 	if err != nil {
 		return err
@@ -435,7 +449,7 @@ func cmdRemove(ctx context.Context, service *groups.Service, args []string, stdo
 
 func groupFlag(command string, args []string) (string, error) {
 	fs := newFlagSet(command)
-	group := fs.String("group", "", "group name")
+	group := groupNameFlag(fs)
 	if err := fs.Parse(args); err != nil {
 		return "", err
 	}

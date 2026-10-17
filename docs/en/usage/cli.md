@@ -12,12 +12,12 @@ cheapskate-cli [-config PATH] [-context NAME] [-table TABLE] [-output text|json]
 
 Global options are:
 
-| Option | Default | Purpose |
-| --- | --- | --- |
-| -config | CHEAPSKATE_CONFIG, then the OS-specific default path | CLI config file path |
-| -context | Saved current context | Context for this invocation; does not change the saved selection |
-| -table | Selected context, then CHEAPSKATE_TABLE, then STATE_TABLE_NAME | DynamoDB table name |
-| -output | text | text or json output |
+| Option | Short option | Default | Purpose |
+| --- | --- | --- | --- |
+| -config | None | CHEAPSKATE_CONFIG, then the OS-specific default path | CLI config file path |
+| -context | -c | Saved current context | Context for this invocation; does not change the saved selection |
+| -table | None | Selected context, then CHEAPSKATE_TABLE, then STATE_TABLE_NAME | DynamoDB table name |
+| -output | -o | text | text or json output |
 
 The selected context supplies AWS profile, region, and schedule time zone when configured. Otherwise, AWS credentials and region use AWS SDK configuration, and the time zone comes from DEFAULT_TIMEZONE, defaulting to UTC. Context settings take precedence over environment variables; -table overrides the context's table.
 
@@ -62,6 +62,14 @@ The default file locations are:
 With -output json, get-contexts returns the CLI config object, set-context returns the context name in name and the saved context fields, and use-context and current-context return an object containing current_context.
 
 ## Commands
+
+All commands that accept --group also accept -g.
+
+To display the app group using the dev context and JSON output:
+
+```console
+cheapskate-cli -c dev -o json show -g app
+```
 
 Arguments, effects, and prerequisites are:
 

@@ -12,12 +12,12 @@ cheapskate-cli [-config PATH] [-context NAME] [-table TABLE] [-output text|json]
 
 全体オプションと接続先の決定方法を、以下に示す。
 
-| オプション | 既定値 | 用途 |
-| --- | --- | --- |
-| -config | CHEAPSKATE_CONFIG、次に OS ごとの既定パス | CLI 設定ファイルのパス |
-| -context | 保存済みの選択中 context | 今回の実行で使う context。保存済みの選択は変更しない |
-| -table | 選択中 context、次に CHEAPSKATE_TABLE、STATE_TABLE_NAME | DynamoDB テーブル名 |
-| -output | text | text または json の出力形式 |
+| オプション | 省略形 | 既定値 | 用途 |
+| --- | --- | --- | --- |
+| -config | なし | CHEAPSKATE_CONFIG、次に OS ごとの既定パス | CLI 設定ファイルのパス |
+| -context | -c | 保存済みの選択中 context | 今回の実行で使う context。保存済みの選択は変更しない |
+| -table | なし | 選択中 context、次に CHEAPSKATE_TABLE、STATE_TABLE_NAME | DynamoDB テーブル名 |
+| -output | -o | text | text または json の出力形式 |
 
 AWS profile、リージョン、およびスケジュールのタイムゾーンには、選択中 context の設定を使用する。未設定の項目については、AWS の認証情報とリージョンは AWS SDK の設定、タイムゾーンは DEFAULT_TIMEZONE を使用する。タイムゾーンの既定値は UTC である。context の設定は環境変数より優先し、-table は context のテーブル名より優先する。
 
@@ -62,6 +62,14 @@ cheapskate-cli config current-context
 -output json を指定した場合、get-contexts は CLI 設定オブジェクト、set-context は context 名の name と保存済みの context のフィールド、use-context と current-context は current_context を含むオブジェクトを返す。
 
 ## コマンド
+
+--group を受け取るすべてのコマンドでは、省略形の -g も使用できる。
+
+dev context を使用し、app グループを JSON で表示する例を、以下に示す。
+
+```console
+cheapskate-cli -c dev -o json show -g app
+```
 
 コマンドの引数、変更内容、および前提条件を、以下に示す。
 

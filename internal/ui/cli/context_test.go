@@ -41,7 +41,8 @@ func TestExecuteContextPersistence(t *testing.T) {
 	assert.Equal(t, "dev", saved.CurrentContext)
 	assert.Equal(t, map[string]string{"table": "dev-table", "profile": "dev-profile", "region": "us-west-2", "timezone": "Asia/Tokyo"}, saved.Contexts["dev"])
 	assert.Equal(t, map[string]string{"table": "prod-table"}, saved.Contexts["prod"])
-	assert.JSONEq(t, string(data), executeOK(t, "-output", "json", "config", "get-contexts"))
+	assert.JSONEq(t, string(data), executeOK(t, "-output", "text", "-o", "json", "config", "get-contexts"))
+	assert.JSONEq(t, string(data), executeOK(t, "-o", "text", "-output", "json", "config", "get-contexts"))
 	if runtime.GOOS != "windows" {
 		info, err := os.Stat(path)
 		require.NoError(t, err)
@@ -78,6 +79,10 @@ func TestExecuteUsesContext(t *testing.T) {
 	}{
 		{"saved selection", "dev", "env-table", "state-table", "dev-table", "DEV_KEY", "us-west-2", nil},
 		{"temporary context", "dev", "env-table", "state-table", "prod-table", "PROD_KEY", "eu-central-1", []string{"-context", "prod"}},
+		{"short context option", "dev", "env-table", "state-table", "prod-table", "PROD_KEY", "eu-central-1", []string{"-c", "prod"}},
+		{"short context equals", "dev", "env-table", "state-table", "prod-table", "PROD_KEY", "eu-central-1", []string{"-c=prod"}},
+		{"short context last", "dev", "env-table", "state-table", "prod-table", "PROD_KEY", "eu-central-1", []string{"-context", "dev", "-c", "prod"}},
+		{"long context last", "dev", "env-table", "state-table", "prod-table", "PROD_KEY", "eu-central-1", []string{"-c", "dev", "-context", "prod"}},
 		{"table flag", "dev", "env-table", "state-table", "flag-table", "DEV_KEY", "us-west-2", []string{"-table", "flag-table"}},
 		{"switched selection", "prod", "env-table", "state-table", "prod-table", "PROD_KEY", "eu-central-1", nil},
 		{"context with SDK defaults", "defaults", "env-table", "state-table", "defaults-table", "test", "ap-northeast-1", nil},

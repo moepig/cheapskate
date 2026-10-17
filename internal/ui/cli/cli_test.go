@@ -73,14 +73,14 @@ func TestMutationCommands(t *testing.T) {
 	ctx := context.Background()
 	var output bytes.Buffer
 
-	require.NoError(t, cmdSchedule(ctx, service, []string{"--group", "dev", "-start", "0 9 * * *", "-stop", "0 20 * * *"}, &output, "json", now))
+	require.NoError(t, cmdSchedule(ctx, service, []string{"-g", "dev", "-start", "0 9 * * *", "-stop", "0 20 * * *"}, &output, "json", now))
 	output.Reset()
-	require.NoError(t, cmdOverride(ctx, service, []string{"--group", "dev", "disabled", "-for", "2h"}, &output, "json", now))
+	require.NoError(t, cmdOverride(ctx, service, []string{"-g", "dev", "disabled", "-for", "2h"}, &output, "json", now))
 	assert.Contains(t, output.String(), `"override": "disabled"`)
 	output.Reset()
-	require.NoError(t, cmdClearOverride(ctx, service, []string{"--group", "dev"}, &output, "json", now))
+	require.NoError(t, cmdClearOverride(ctx, service, []string{"-g", "dev"}, &output, "json", now))
 	output.Reset()
-	require.NoError(t, cmdRemove(ctx, service, []string{"--group", "dev"}, &output, "json"))
+	require.NoError(t, cmdRemove(ctx, service, []string{"-g", "dev"}, &output, "json"))
 }
 
 func TestOverrideForMustBePositiveWhenSpecified(t *testing.T) {
@@ -100,7 +100,7 @@ func TestEcsMaxCountCommands(t *testing.T) {
 	_, err := service.Override(ctx, "dev", model.OverrideDisabled, 0, now)
 	require.NoError(t, err)
 	var output bytes.Buffer
-	require.NoError(t, cmdEcsMaxCount(ctx, service, []string{"3", "--group", "dev"}, &output, "json", now))
+	require.NoError(t, cmdEcsMaxCount(ctx, service, []string{"3", "-g", "dev"}, &output, "json", now))
 	var result struct {
 		Command string    `json:"command"`
 		Group   groupJSON `json:"group"`
@@ -113,7 +113,7 @@ func TestEcsMaxCountCommands(t *testing.T) {
 	require.NoError(t, cmdEcsMaxCount(ctx, service, []string{"--group", "dev", "2147483647"}, &output, "text", now))
 	assert.Contains(t, output.String(), "ecs_max_count=2147483647")
 	output.Reset()
-	require.NoError(t, cmdClearEcsMaxCount(ctx, service, []string{"--group", "dev"}, &output, "json", now))
+	require.NoError(t, cmdClearEcsMaxCount(ctx, service, []string{"-g", "dev"}, &output, "json", now))
 	assert.Contains(t, output.String(), `"command": "clear-ecs-max-count"`)
 	assert.NotContains(t, output.String(), "ecs_max_count")
 	assert.NotContains(t, db.Item("CONFIG", "GROUP#dev"), "ecs_max_count")
@@ -152,7 +152,7 @@ func TestShowJSONAndInvalidStoredGroupExitCode(t *testing.T) {
 	_, err := service.Override(context.Background(), "dev", model.OverrideRunning, 0, now)
 	require.NoError(t, err)
 	var stdout, stderr bytes.Buffer
-	require.NoError(t, cmdShow(context.Background(), service, []string{"--group", "dev"}, &stdout, &stderr, "json", now))
+	require.NoError(t, cmdShow(context.Background(), service, []string{"-g=dev"}, &stdout, &stderr, "json", now))
 	assert.Contains(t, stdout.String(), `"name": "dev"`)
 	assert.Empty(t, stderr.String())
 

@@ -37,7 +37,7 @@ func TestExecuteListAndShowExitCodes(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			serveExecuteDynamo(t, test.response)
-			args := []string{"-table", "table", "-output", test.format, test.command}
+			args := []string{"-table", "table", "-o", test.format, test.command}
 			if test.command == "show" {
 				args = append(args, "--group", "broken")
 			}
@@ -125,6 +125,7 @@ func TestExecuteArgumentErrorsAndHelp(t *testing.T) {
 		{[]string{"-h"}, 0, Usage},
 		{nil, 1, "missing command"},
 		{[]string{"-output", "yaml", "list"}, 1, "invalid -output"},
+		{[]string{"-o=yaml", "list"}, 1, "invalid -output"},
 	} {
 		t.Run(test.want, func(t *testing.T) {
 			serveExecuteDynamo(t)
