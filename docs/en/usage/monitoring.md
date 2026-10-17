@@ -26,16 +26,15 @@ The reconciler and web console emit structured logs to stderr. Principal reconci
 | describe-resource-started / describe-resource-finished | debug | Start and end of state inspection before an action |
 | decide-action-started / decide-action-finished | debug | Start and end of action decisions |
 | apply-action-started / apply-action-finished | debug | Start and end of action requests |
-| describe-resource-after-action-started / describe-resource-after-action-finished | debug | Start and end of state inspection after an action |
 | notify-action-started / notify-action-finished | debug | Start and end of notification attempts |
-| resource-discovered | debug | Discovered resource's group, resource_id, resource_arn, and resource_type |
+| resource-discovered | debug | Discovered resource's group, resource_id, and resource_arn |
 | summary | info | Resources inspected, successful operations, and group/resource error counts |
 | action-started | info | Resource and state immediately before requesting a start, stop, or ECS configuration repair |
-| action-finished | info | Action outcome, desired state, and observed states before and after the action |
-| resource-unchanged | info | Desired and observed states of a resource requiring no changes |
+| action-finished | info | Action outcome, desired state, and observed state before the action |
+| resource-unchanged | info | Desired and observed states of a resource requiring no changes, and the reason |
 | resource-skipped | info | Resource and state when processing is skipped for disabled, transitioning, or not-found |
 | group-error | error | Group configuration failure |
-| resource-error | error | State inspection before or after an action, or operation failure |
+| resource-error | error | State inspection or operation failure for an individual resource |
 
 Set LOG_LEVEL=debug to also emit debug records. Each operation's completion includes success and error on failure. Notifications include attempt for each publish attempt. Discovery completion includes the resources count, even when zero. resource-discovered records appear in ARN order and include resources excluded from processing because of invalid or disabled groups.
 
@@ -45,19 +44,19 @@ Resource info records are emitted as processing progresses. Principal action-res
 | --- | --- |
 | group | Resource's group |
 | resource_id / resource_arn | Target resource identifier / ARN |
-| service | AWS service: ec2, ecs, or rds |
-| resource_type | Resource type: ec2-instance, ecs-service, rds-instance, or rds-cluster |
 | desired | Desired state: running or stopped; empty for disabled |
 | action | Requested operation: start or stop |
-| observed_before / observed_after | Observed state before / after the action |
-| detail_before / detail_after | AWS status or ECS counts and scaling configuration before / after the action |
+| observed | Common state used to decide the action: running, stopped, transitioning, or not-found; null for disabled resources |
+| aws_state | Status read from AWS, or ECS task counts and scaling configuration |
+| reason | Reason for leaving a resource unchanged or skipping it: desired-state-matched, disabled, transitioning, or not-found |
 | success | Whether the action request succeeded; does not indicate transition completion |
 | error | Action request error |
-| observation_error | State inspection error after the action |
 
-After every attempted action, state is read once more and action-finished records both observations. observed_after reflects that read without waiting for the desired state to be reached. An ECS repair can leave both states running while detail_before and detail_after show configuration changes.
+observed classifies AWS observations into a state shared across resource types; aws_state contains the underlying status or task counts and scaling configuration. Both reflect the values at the time of the decision. action-finished records the action request's outcome without reading state again for logging. Inspect the resulting state in the next cycle, with CLI show, or in the web console.
 
-If the post-action inspection fails, observed_after is null. A successful action request still counts as successful and triggers SNS notification; the inspection failure counts as an error. Resources requiring no action use the same observation for observed_before and observed_after. Disabled resources are not inspected, so both values are null.
+For resource-unchanged, reason=desired-state-matched means the observed state matches the desired state and no configuration repair is needed. For resource-skipped, reason is disabled, transitioning, or not-found.
+
+Identify the AWS service and resource type from resource_id or resource_arn.
 
 Logs provide the ongoing operational record; DynamoDB stores no operation or error history.
 

@@ -95,7 +95,7 @@ func Run(ctx context.Context, _ json.RawMessage, deps *Deps, now time.Time) (sum
 	}
 	sort.Slice(resources, func(i, j int) bool { return resources[i].ARN < resources[j].ARN })
 	for _, resource := range resources {
-		log.DebugContext(ctx, "resource-discovered", "group", resource.Tags[model.GroupTagKey], "resource_id", resource.ID(), "resource_arn", resource.ARN, "resource_type", resource.Type)
+		log.DebugContext(ctx, "resource-discovered", "group", resource.Tags[model.GroupTagKey], "resource_id", resource.ID(), "resource_arn", resource.ARN)
 	}
 	finishDiscovery(nil, "resources", len(resources))
 
@@ -103,8 +103,7 @@ func Run(ctx context.Context, _ json.RawMessage, deps *Deps, now time.Time) (sum
 	for _, resource := range resources {
 		groupName := resource.Tags[model.GroupTagKey]
 		result := Result{Group: groupName, ResourceID: resource.ID()}
-		info, _ := model.Info(resource.Type)
-		resourceLog := log.With("group", groupName, "resource_id", result.ResourceID, "resource_arn", resource.ARN, "resource_type", resource.Type, "service", info.ARNService)
+		resourceLog := log.With("group", groupName, "resource_id", result.ResourceID, "resource_arn", resource.ARN)
 		if groupName == "" {
 			result.Error = fmt.Sprintf("resource %s has an empty %s tag", resource.ARN, model.GroupTagKey)
 			summary.Errors = append(summary.Errors, result)
@@ -133,7 +132,7 @@ func Run(ctx context.Context, _ json.RawMessage, deps *Deps, now time.Time) (sum
 		result.Desired = group.desired
 		if group.desired == model.DesiredNone {
 			result.Skipped = "disabled"
-			resourceLog.InfoContext(ctx, "resource-skipped", "desired", group.desired, "observed_before", nil, "observed_after", nil, "reason", result.Skipped)
+			resourceLog.InfoContext(ctx, "resource-skipped", "desired", group.desired, "observed", nil, "reason", result.Skipped)
 			continue
 		}
 
@@ -148,7 +147,7 @@ func Run(ctx context.Context, _ json.RawMessage, deps *Deps, now time.Time) (sum
 		summary.Reconciled++
 		finishDescribe := startStep(ctx, resourceLog, "describe-resource")
 		observation, err := target.Describe(ctx, resource)
-		finishDescribe(err, "observed", observation.State, "needs_start", observation.NeedsStart, "needs_stop", observation.NeedsStop, "detail", observation.Detail)
+		finishDescribe(err, "observed", observation.State, "needs_start", observation.NeedsStart, "needs_stop", observation.NeedsStop, "aws_state", observation.Detail)
 		if err != nil {
 			result.Error = fmt.Sprintf("resource %s: describe: %v", resource.ARN, err)
 			summary.Errors = append(summary.Errors, result)
@@ -168,39 +167,23 @@ func Run(ctx context.Context, _ json.RawMessage, deps *Deps, now time.Time) (sum
 		if action == model.ActionNone {
 			if observation.State == model.StateTransitioning || observation.State == model.StateNotFound {
 				result.Skipped = string(observation.State)
-				resourceLog.InfoContext(ctx, "resource-skipped", "desired", group.desired, "observed_before", observation.State, "observed_after", observation.State, "reason", result.Skipped, "detail", observation.Detail)
+				resourceLog.InfoContext(ctx, "resource-skipped", "desired", group.desired, "observed", observation.State, "reason", result.Skipped, "aws_state", observation.Detail)
 			} else {
-				resourceLog.InfoContext(ctx, "resource-unchanged", "desired", group.desired, "observed_before", observation.State, "observed_after", observation.State, "detail", observation.Detail)
+				resourceLog.InfoContext(ctx, "resource-unchanged", "desired", group.desired, "observed", observation.State, "reason", "desired-state-matched", "aws_state", observation.Detail)
 			}
 			continue
 		}
 		finishAction := startStep(ctx, resourceLog, "apply-action", "action", action)
-		resourceLog.InfoContext(ctx, "action-started", "action", action, "desired", group.desired, "observed_before", observation.State, "detail_before", observation.Detail)
+		resourceLog.InfoContext(ctx, "action-started", "action", action, "desired", group.desired, "observed", observation.State, "aws_state", observation.Detail)
 		actionErr := performAction(ctx, resource, action, target)
 		finishAction(actionErr)
 
-		finishDescribeAfter := startStep(ctx, resourceLog, "describe-resource-after-action")
-		after, afterErr := target.Describe(ctx, resource)
-		finishDescribeAfter(afterErr, "observed", after.State, "needs_start", after.NeedsStart, "needs_stop", after.NeedsStop, "detail", after.Detail)
-		var observedAfter any
-		if afterErr == nil {
-			observedAfter = after.State
-		}
 		at := now.UTC().Format(time.RFC3339)
-		actionArgs := []any{"action", action, "desired", group.desired, "observed_before", observation.State, "observed_after", observedAfter, "detail_before", observation.Detail, "detail_after", after.Detail, "success", actionErr == nil, "at", at}
+		actionArgs := []any{"action", action, "desired", group.desired, "observed", observation.State, "aws_state", observation.Detail, "success", actionErr == nil, "at", at}
 		if actionErr != nil {
 			actionArgs = append(actionArgs, "error", actionErr.Error())
 		}
-		if afterErr != nil {
-			actionArgs = append(actionArgs, "observation_error", afterErr.Error())
-		}
 		resourceLog.InfoContext(ctx, "action-finished", actionArgs...)
-		if afterErr != nil {
-			observationResult := result
-			observationResult.Error = fmt.Sprintf("resource %s: describe after %s: %v", resource.ARN, action, afterErr)
-			summary.Errors = append(summary.Errors, observationResult)
-			logResultError(log, observationResult)
-		}
 		if actionErr != nil {
 			result.Error = fmt.Sprintf("resource %s: %s: %v", resource.ARN, action, actionErr)
 			summary.Errors = append(summary.Errors, result)

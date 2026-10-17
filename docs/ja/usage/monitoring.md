@@ -26,16 +26,15 @@ reconciler と Web コンソールは構造化ログを stderr に出力する�
 | describe-resource-started / describe-resource-finished | debug | 操作前の状態取得の開始・終了 |
 | decide-action-started / decide-action-finished | debug | 操作判定の開始・終了 |
 | apply-action-started / apply-action-finished | debug | 操作要求の開始・終了 |
-| describe-resource-after-action-started / describe-resource-after-action-finished | debug | 操作後の状態取得の開始・終了 |
 | notify-action-started / notify-action-finished | debug | 通知の開始・終了 |
-| resource-discovered | debug | 検索で検出されたリソースの group、resource_id、resource_arn、resource_type |
+| resource-discovered | debug | 検索で検出されたリソースの group、resource_id、resource_arn |
 | summary | info | 状態確認に到達したリソース数、成功した操作数、グループ・リソースのエラー数 |
 | action-started | info | 起動・停止または ECS 設定の修復を要求する直前のリソースと状態 |
-| action-finished | info | 操作の成否、期待状態、および操作前後の観測状態 |
-| resource-unchanged | info | 変更不要と判定したリソースの期待状態と観測状態 |
+| action-finished | info | 操作の成否、期待状態、および操作前の観測状態 |
+| resource-unchanged | info | 変更不要と判定したリソースの期待状態、観測状態、および理由 |
 | resource-skipped | info | disabled、transitioning、not-found によって処理を見送ったリソースと状態 |
 | group-error | error | グループ設定のエラー |
-| resource-error | error | 個別リソースの操作前後の状態取得・操作エラー |
+| resource-error | error | 個別リソースの状態取得・操作エラー |
 
 LOG_LEVEL=debug を指定すると、debug レベルのレコードも出力する。各処理の終了には success と、失敗時の error を含む。通知は試行ごとに attempt を含む。リソース検索の終了には検出件数 resources を含み、0 件の場合も記録する。resource-discovered は ARN 順に出力し、無効なグループや disabled のために処理対象から外れるリソースも含む。
 
@@ -45,19 +44,19 @@ LOG_LEVEL=debug を指定すると、debug レベルのレコードも出力す�
 | --- | --- |
 | group | 所属グループ |
 | resource_id / resource_arn | 対象リソースの識別子 / ARN |
-| service | AWS サービス種別。ec2、ecs、rds |
-| resource_type | リソース種別。ec2-instance、ecs-service、rds-instance、rds-cluster |
 | desired | 期待する状態。running、stopped。disabled は空文字列 |
 | action | 要求した操作。start、stop |
-| observed_before / observed_after | 操作前 / 操作後の観測状態 |
-| detail_before / detail_after | 操作前 / 操作後の AWS ステータスや ECS 台数・スケーリング設定 |
+| observed | 操作判定用の共通状態。running、stopped、transitioning、not-found。disabled は null |
+| aws_state | AWS から取得したステータス、または ECS のタスク数・スケーリング設定 |
+| reason | 変更不要または処理を見送った理由。desired-state-matched、disabled、transitioning、not-found |
 | success | 操作要求の成否。状態遷移の完了を表さない |
 | error | 操作要求のエラー |
-| observation_error | 操作後の状態取得エラー |
 
-操作の成否にかかわらず、操作後に状態を 1 回再取得し、action-finished に操作前後の値を出力する。observed_after は再取得時点の観測値であり、期待状態への遷移完了を待たない。ECS の設定修復では操作前後の状態がともに running でも、detail_before と detail_after で設定の変化を確認できる。
+observed は AWS の観測値をリソース種別に共通する状態へ分類した値であり、aws_state は分類元のステータスやタスク数・スケーリング設定を表す。いずれも操作判定時の値である。action-finished は操作要求の成否を記録し、ログ出力のための操作後の再取得は行わない。操作後の状態は次のサイクル、CLI の show、または Web コンソールで確認する。
 
-操作後の状態取得に失敗した場合、observed_after は null となる。操作要求が成功していれば成功件数への計上と SNS 通知は行い、状態取得の失敗はエラー件数へ計上する。操作を行わないリソースでは、observed_before と observed_after に同じ観測値を出力する。disabled は状態取得も行わないため、両方が null となる。
+resource-unchanged の reason=desired-state-matched は、観測状態が期待状態と一致し、設定の修復も不要であることを表す。resource-skipped の reason は、disabled、transitioning、not-found のいずれかである。
+
+AWS サービスとリソース種別は resource_id または resource_arn から判別する。
 
 DynamoDB に操作・エラー履歴を保存しないため、継続的な記録にはログを使用する。
 
