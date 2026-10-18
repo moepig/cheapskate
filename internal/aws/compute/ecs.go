@@ -3,7 +3,6 @@ package compute
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -108,18 +107,9 @@ func (t *EcsServiceTarget) Start(ctx context.Context, res model.Resource) error 
 	if err != nil {
 		return err
 	}
-	config, err := ecsConfigFromTags(res.Tags)
+	config, err := ecsConfigForStart(res)
 	if err != nil {
 		return err
-	}
-	if res.EcsMaxCount <= 0 {
-		return fmt.Errorf("ecs service %s: group ecs_max_count must be registered before start", res.Ref)
-	}
-	if config.desired > res.EcsMaxCount {
-		return fmt.Errorf("ecs service %s: %s=%d exceeds group ecs_max_count=%d", res.Ref, model.EcsDesiredCountTagKey, config.desired, res.EcsMaxCount)
-	}
-	if config.maximum > res.EcsMaxCount {
-		return fmt.Errorf("ecs service %s: %s=%d exceeds group ecs_max_count=%d", res.Ref, model.EcsScalingMaxTagKey, config.maximum, res.EcsMaxCount)
 	}
 	current, err := t.service(ctx, cluster, service)
 	if err != nil {
@@ -203,39 +193,6 @@ func ecsNeedsInitialization(service *ecstypes.Service, scalable *aastypes.Scalab
 		(scalable != nil && ecsBoundsEqual(scalable, 0, 0))
 }
 
-type ecsBoundsMode string
-
-const (
-	ecsBoundsModeTags      ecsBoundsMode = "tags"
-	ecsBoundsModeScheduled ecsBoundsMode = "scheduled"
-)
-
-type ecsConfig struct {
-	desired    int32
-	minimum    int32
-	maximum    int32
-	boundsMode ecsBoundsMode
-}
-
-func ecsConfigFromTags(tags map[string]string) (ecsConfig, error) {
-	desired, err := desiredCountFromTags(tags)
-	if err != nil {
-		return ecsConfig{}, err
-	}
-	minimum, maximum, err := scalingBoundsFromTags(tags, desired)
-	if err != nil {
-		return ecsConfig{}, err
-	}
-	mode := ecsBoundsModeScheduled
-	if modeValue, present := tags[model.EcsScalingBoundsModeTagKey]; present {
-		mode = ecsBoundsMode(modeValue)
-		if mode != ecsBoundsModeTags && mode != ecsBoundsModeScheduled {
-			return ecsConfig{}, fmt.Errorf("tag %s=%q must be tags or scheduled", model.EcsScalingBoundsModeTagKey, modeValue)
-		}
-	}
-	return ecsConfig{desired: desired, minimum: minimum, maximum: maximum, boundsMode: mode}, nil
-}
-
 // ecs-service の Ref を、ECS API が個別の引数として要求する cluster と service へ分解する
 // この分解を必要とするのは ECS API の呼び出し側に限るため、Ref の文法を宣言するドメイン (model の ecs-service の RefPattern) ではなく、ここに置く
 //
@@ -248,68 +205,6 @@ func splitEcsRef(ref string) (cluster, service string, err error) {
 		return "", "", fmt.Errorf("ecs ref must be '<cluster>/<service>': %q", ref)
 	}
 	return cluster, service, nil
-}
-
-// model.EcsDesiredCountTagKey を読み、未設定の場合は 1 とする
-func desiredCountFromTags(tags map[string]string) (int32, error) {
-	n, ok, err := tagInt32(tags, model.EcsDesiredCountTagKey)
-	if err != nil {
-		return 0, err
-	}
-	if !ok {
-		return 1, nil
-	}
-	if n <= 0 {
-		return 0, fmt.Errorf("tag %s=%d must be positive", model.EcsDesiredCountTagKey, n)
-	}
-	return n, nil
-}
-
-// model.EcsScalingMinTagKey と EcsScalingMaxTagKey を読み、未設定の場合はそれぞれ独立に desiredCount を既定値とする
-func scalingBoundsFromTags(tags map[string]string, desiredCount int32) (minimum, maximum int32, err error) {
-	minimum = desiredCount
-	if n, ok, err := tagInt32(tags, model.EcsScalingMinTagKey); err != nil {
-		return 0, 0, err
-	} else if ok {
-		minimum = n
-	}
-	maximum = desiredCount
-	if n, ok, err := tagInt32(tags, model.EcsScalingMaxTagKey); err != nil {
-		return 0, 0, err
-	} else if ok {
-		maximum = n
-	}
-	// 3 つのタグは min <= desired-count <= max を満たさなければならない
-	// desiredCount が上下限の外にある場合、UpdateService による変更の直後に Auto Scaling が上下限まで引き戻すため、指定した台数は実現しないまま、Start は成功として記録される
-	// min > max もこの不等式が成立しない場合の 1 つであるため、検査はこの 1 つで足りる
-	// 不正なタグは 1 つの値だけでは特定できない (min の既定値は desired-count である) ため、3 つの値をまとめて示す
-	if desiredCount < minimum || desiredCount > maximum {
-		return 0, 0, fmt.Errorf("tags must satisfy %s <= %s <= %s, got %d <= %d <= %d",
-			model.EcsScalingMinTagKey, model.EcsDesiredCountTagKey, model.EcsScalingMaxTagKey,
-			minimum, desiredCount, maximum)
-	}
-	return minimum, maximum, nil
-}
-
-// tags[key] を非負の int32 として解釈する
-// タグが存在しない場合、および空の場合は ok が false となる
-// この場合は不正な値と区別する。不正な値は既定値へ倒さず、エラーとする
-func tagInt32(tags map[string]string, key string) (n int32, ok bool, err error) {
-	v, present := tags[key]
-	if !present {
-		return 0, false, nil
-	}
-	if v == "" {
-		return 0, false, fmt.Errorf("tag %s must not be empty", key)
-	}
-	parsed, err := strconv.ParseInt(v, 10, 32)
-	if err != nil {
-		return 0, false, fmt.Errorf("tag %s=%q is not an integer", key, v)
-	}
-	if parsed < 0 {
-		return 0, false, fmt.Errorf("tag %s=%q must not be negative", key, v)
-	}
-	return int32(parsed), true, nil
 }
 
 func (t *EcsServiceTarget) scalableTarget(ctx context.Context, cluster, service string) (*aastypes.ScalableTarget, error) {

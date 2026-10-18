@@ -409,23 +409,6 @@ func TestEcsRejectsInvalidTagsBeforeModification(t *testing.T) {
 	}
 }
 
-func TestEcsDefaultConfiguration(t *testing.T) {
-	config, err := ecsConfigFromTags(nil)
-	require.NoError(t, err)
-	assert.Equal(t, ecsConfig{desired: 1, minimum: 1, maximum: 1, boundsMode: ecsBoundsModeScheduled}, config)
-}
-
-func TestEcsConfigurationAcceptsInt32LimitAndRejectsOverflow(t *testing.T) {
-	config, err := ecsConfigFromTags(map[string]string{
-		model.EcsDesiredCountTagKey: "2147483647", model.EcsScalingMinTagKey: "2147483647", model.EcsScalingMaxTagKey: "2147483647",
-	})
-	require.NoError(t, err)
-	assert.EqualValues(t, 2147483647, config.desired)
-
-	_, err = ecsConfigFromTags(map[string]string{model.EcsDesiredCountTagKey: "2147483648"})
-	assert.ErrorContains(t, err, "not an integer")
-}
-
 // 登録レコードから上限を読み、上限内の起動だけが更新 API と通知へ到達することを確認する。
 // タグや探索結果に含まれる上限値は、登録レコードの上限を変更できない。
 func TestEcsReconcileEnforcesRegisteredCountLimit(t *testing.T) {
@@ -485,13 +468,23 @@ func TestEcsReconcileEnforcesRegisteredCountLimit(t *testing.T) {
 	}
 }
 
-// 上限が未登録または負の場合、読み取りを含む AWS API を呼ばず起動を拒否する。
-func TestEcsStartRejectsMissingOrInvalidLimitBeforeAPICalls(t *testing.T) {
-	for _, limit := range []int32{0, -1} {
-		t.Run(fmt.Sprint(limit), func(t *testing.T) {
+// 上限の未登録・負数・超過を指定し、読み取りを含む AWS API を呼ばず起動を拒否することを確認する。
+func TestEcsStartRejectsInvalidCountLimitBeforeAPICalls(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		limit   int32
+		tags    map[string]string
+		wantErr string
+	}{
+		{name: "missing limit", wantErr: "ecs_max_count must be registered"},
+		{name: "negative limit", limit: -1, wantErr: "ecs_max_count must be registered"},
+		{name: "desired exceeds limit", limit: 3, tags: map[string]string{model.EcsDesiredCountTagKey: "4"}, wantErr: "cheapskate:desired-count=4 exceeds group ecs_max_count=3"},
+		{name: "scaling max exceeds limit", limit: 3, tags: map[string]string{model.EcsScalingMaxTagKey: "4"}, wantErr: "cheapskate:scaling-max=4 exceeds group ecs_max_count=3"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
 			controller := gomock.NewController(t)
 			target := &EcsServiceTarget{Ecs: mocks.NewMockEcsAPI(controller), AutoScaling: mocks.NewMockAutoScalingAPI(controller)}
-			assert.ErrorContains(t, target.Start(context.Background(), model.Resource{Ref: "dev/api", EcsMaxCount: limit}), "ecs_max_count must be registered")
+			assert.ErrorContains(t, target.Start(context.Background(), model.Resource{Ref: "dev/api", EcsMaxCount: test.limit, Tags: test.tags}), test.wantErr)
 		})
 	}
 }
