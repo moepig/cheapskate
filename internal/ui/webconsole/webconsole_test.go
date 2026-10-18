@@ -3,6 +3,7 @@ package webconsole
 import (
 	"context"
 	"errors"
+	"html/template"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -16,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
 
+	"cheapskate/internal/app/groups"
 	"cheapskate/internal/app/port"
 	"cheapskate/internal/app/port/porttest"
 	"cheapskate/internal/core/model"
@@ -322,9 +324,37 @@ func TestClearOverrideAndRemoveForms(t *testing.T) {
 	assert.Nil(t, db.Item("CONFIG", "GROUP#dev"))
 }
 
+// スケジュール、タグ、観測結果、観測エラーを含むページを描画し、各値がエスケープされることを確認する。
 func TestRenderedValuesAreEscaped(t *testing.T) {
-	assert.NotContains(t, string(describeGroup(model.GroupSpec{StartCron: `<script>`, StopCron: `</script>`})), "<script>")
-	assert.NotContains(t, string(describeResourceConfig(model.Resource{Type: model.TypeEcsService, Tags: map[string]string{model.EcsDesiredCountTagKey: `<img>`}})), "<img>")
+	_, _, server := webFixture(t)
+	page := view{Detail: groups.GroupDetail{
+		Group: model.GroupSpec{Name: "dev", StartCron: `<script>`, StopCron: `</script>`},
+		Resources: []groups.ResourceRow{
+			{
+				Resource: model.Resource{Type: model.TypeEcsService, Tags: map[string]string{model.EcsDesiredCountTagKey: `<img>`}},
+				Live:     &model.Observation{State: model.StateRunning, Detail: `<iframe>`},
+			},
+			{LiveErr: errors.New(`<svg>`)},
+		},
+	}}
+	for _, tmpl := range []*template.Template{server.index, server.group} {
+		page.Rows = []groups.GroupRow{{Name: "dev", Group: page.Detail.Group}}
+		response := httptest.NewRecorder()
+		server.render(response, httptest.NewRequest(http.MethodGet, "/", nil), tmpl, page)
+
+		require.Equal(t, http.StatusOK, response.Code)
+		body := response.Body.String()
+		assert.Contains(t, body, "start: &lt;script&gt;")
+		assert.Contains(t, body, "stop: &lt;/script&gt;")
+		for _, tag := range []string{"script", "img", "iframe", "svg"} {
+			assert.NotContains(t, body, "<"+tag+">")
+		}
+		if tmpl == server.group {
+			assert.Contains(t, body, "desired: &lt;img&gt;")
+			assert.Contains(t, body, "running (&lt;iframe&gt;)")
+			assert.Contains(t, body, `<span class="danger">&lt;svg&gt;</span>`)
+		}
+	}
 }
 
 func TestSourceIP(t *testing.T) {

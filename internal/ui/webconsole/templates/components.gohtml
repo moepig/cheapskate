@@ -1,0 +1,5 @@
+{{define "schedule"}}{{if .StartCron}}start: {{.StartCron}}<br>stop: {{.StopCron}}{{else}}<span class="muted">-</span>{{end}}{{end}}
+
+{{define "resourceConfig"}}{{range $index, $value := .Config}}{{if $index}}<br>{{end}}{{$value.Label}}: {{$value.Value}}{{else}}<span class="muted">-</span>{{end}}{{end}}
+
+{{define "live"}}{{if .LiveErr}}<span class="danger">{{.LiveErr}}</span>{{else}}{{with .Live}}{{.State}}{{if .Detail}} ({{.Detail}}){{end}}{{else}}<span class="muted">-</span>{{end}}{{end}}{{end}}

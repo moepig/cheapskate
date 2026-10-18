@@ -7,7 +7,7 @@
   <tr>
     <td>{{if .ConfigErr}}<strong>{{.Name}}</strong>{{else}}<a href="{{$.Base}}/group?name={{.Name}}"><strong>{{.Name}}</strong></a>{{end}}</td>
     {{if .ConfigErr}}<td colspan="2" class="danger">config error: {{.ConfigErr}}</td>{{else}}
-    <td>{{groupDesc .Group}}</td>
+    <td>{{template "schedule" .Group}}</td>
     <td>{{with ovDesc .Group}}{{.}}{{else}}<span class="muted">-</span>{{end}}</td>{{end}}
   </tr>
   {{else}}<tr><td colspan="3" class="muted">No groups yet.</td></tr>{{end}}

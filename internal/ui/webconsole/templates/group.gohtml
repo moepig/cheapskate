@@ -3,7 +3,7 @@
 <p class="muted">All schedules and dates use {{.TZName}}.</p>
 <table>
   <tr><th>Membership tag</th><td><code>cheapskate:group={{.Detail.Group.Name}}</code></td></tr>
-  <tr><th>Schedule</th><td>{{groupDesc .Detail.Group}}</td></tr>
+  <tr><th>Schedule</th><td>{{template "schedule" .Detail.Group}}</td></tr>
   <tr><th>Override</th><td>{{with ovDesc .Detail.Group}}{{.}}{{else}}<span class="muted">-</span>{{end}}</td></tr>
   <tr><th>ECS maximum task count per service</th><td>{{if .Detail.Group.EcsMaxCount}}{{.Detail.Group.EcsMaxCount}}{{else}}<span class="muted">Not configured; ECS start is blocked</span>{{end}}</td></tr>
 </table>
@@ -12,7 +12,7 @@
 <div class="table-wrap"><table>
   <tr><th>Type</th><th>Name</th><th>Tag config</th><th>Current state</th></tr>
   {{range .Detail.Resources}}
-  <tr><td>{{.Resource.Type}}</td><td><code>{{.Resource.Ref}}</code></td><td>{{cfgDesc .Resource}}</td><td>{{liveDesc .}}</td></tr>
+  <tr><td>{{.Resource.Type}}</td><td><code>{{.Resource.Ref}}</code></td><td>{{template "resourceConfig" .Resource}}</td><td>{{template "live" .}}</td></tr>
   {{else}}<tr><td colspan="4" class="muted">No resources tagged for this group.</td></tr>{{end}}
 </table></div>
 

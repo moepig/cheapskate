@@ -46,9 +46,6 @@ func New(store groups.Store, discoverer port.Discoverer, describers map[model.Re
 		}
 	}
 	functions := template.FuncMap{
-		"groupDesc": describeGroup,
-		"cfgDesc":   describeResourceConfig,
-		"liveDesc":  describeLive,
 		"ovDesc": func(group model.GroupSpec) string {
 			if group.Override == "" {
 				return ""
@@ -61,7 +58,7 @@ func New(store groups.Store, discoverer port.Discoverer, describers map[model.Re
 		},
 	}
 	parse := func(page string) *template.Template {
-		return template.Must(template.New("base.gohtml").Funcs(functions).ParseFS(templateFS, "templates/base.gohtml", "templates/"+page))
+		return template.Must(template.New("base.gohtml").Funcs(functions).ParseFS(templateFS, "templates/base.gohtml", "templates/components.gohtml", "templates/"+page))
 	}
 	return &Server{
 		service: groups.New(store, discoverer, describers, location),
@@ -213,39 +210,6 @@ func (s *Server) render(response http.ResponseWriter, request *http.Request, pag
 	if err := page.Execute(response, data); err != nil {
 		s.fail(response, request, http.StatusInternalServerError, err.Error())
 	}
-}
-
-func describeGroup(group model.GroupSpec) template.HTML {
-	if group.StartCron == "" {
-		return `<span class="muted">-</span>`
-	}
-	return template.HTML("start: " + template.HTMLEscapeString(group.StartCron) + "<br>stop: " + template.HTMLEscapeString(group.StopCron))
-}
-
-func describeResourceConfig(resource model.Resource) template.HTML {
-	config := resource.Config()
-	if len(config) == 0 {
-		return `<span class="muted">-</span>`
-	}
-	lines := make([]string, 0, len(config))
-	for _, value := range config {
-		lines = append(lines, template.HTMLEscapeString(value.Label+": "+value.Value))
-	}
-	return template.HTML(strings.Join(lines, "<br>"))
-}
-
-func describeLive(row groups.ResourceRow) template.HTML {
-	if row.LiveErr != nil {
-		return template.HTML(`<span class="danger">` + template.HTMLEscapeString(row.LiveErr.Error()) + `</span>`)
-	}
-	if row.Live == nil {
-		return `<span class="muted">-</span>`
-	}
-	text := string(row.Live.State)
-	if row.Live.Detail != "" {
-		text += " (" + row.Live.Detail + ")"
-	}
-	return template.HTML(template.HTMLEscapeString(text))
 }
 
 func (s *Server) logRequests(next http.Handler) http.Handler {
