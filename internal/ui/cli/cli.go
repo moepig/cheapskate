@@ -13,13 +13,9 @@ import (
 	"time"
 	_ "time/tzdata"
 
-	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
-
 	"cheapskate/internal/app/groups"
 	"cheapskate/internal/core/model"
 	"cheapskate/internal/state"
-	"cheapskate/internal/wire"
 )
 
 var Usage = `cheapskate-cli — cheapskate configuration CLI
@@ -68,7 +64,11 @@ func Main(args []string) {
 }
 
 func Execute(args []string, stdout, stderr io.Writer) int {
-	err := run(args, stdout, stderr)
+	return execute(args, stdout, stderr, newGroupService)
+}
+
+func execute(args []string, stdout, stderr io.Writer, createService serviceFactory) int {
+	err := run(args, stdout, stderr, createService)
 	if err == nil {
 		return 0
 	}
@@ -88,10 +88,10 @@ func Execute(args []string, stdout, stderr io.Writer) int {
 }
 
 func Run(args []string, out io.Writer) error {
-	return run(args, out, io.Discard)
+	return run(args, out, io.Discard, newGroupService)
 }
 
-func run(args []string, stdout, stderr io.Writer) error {
+func run(args []string, stdout, stderr io.Writer, createService serviceFactory) error {
 	global := newFlagSet("cheapskate-cli")
 	configFile := global.String("config", "", "CLI config file path (or CHEAPSKATE_CONFIG)")
 	contextName := global.String("context", "", "context for this invocation")
@@ -136,23 +136,12 @@ func run(args []string, stdout, stderr io.Writer) error {
 	}
 
 	ctx := context.Background()
-	var awsOptions []func(*config.LoadOptions) error
-	if selected.Profile != "" {
-		awsOptions = append(awsOptions, config.WithSharedConfigProfile(selected.Profile))
-	}
-	if selected.Region != "" {
-		awsOptions = append(awsOptions, config.WithRegion(selected.Region))
-	}
-	cfg, err := config.LoadDefaultConfig(ctx, awsOptions...)
+	service, err := createService(ctx, serviceOptions{
+		table: tableName, profile: selected.Profile, region: selected.Region, location: location,
+	})
 	if err != nil {
-		return fmt.Errorf("load AWS config: %w", err)
+		return err
 	}
-	service := groups.New(
-		state.New(dynamodb.NewFromConfig(cfg), tableName),
-		wire.Discoverer(cfg, nil),
-		wire.Describers(cfg),
-		location,
-	)
 	switch command {
 	case "list":
 		return cmdList(ctx, service, commandArgs, stdout, stderr, *output, time.Now())
