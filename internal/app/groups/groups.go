@@ -23,7 +23,10 @@ type Store interface {
 	DeleteGroup(ctx context.Context, name string) error
 }
 
-var ErrInvalidConfig = errors.New("invalid group configuration")
+var (
+	ErrInvalidConfig = errors.New("invalid group configuration")
+	ErrInvalidInput  = errors.New("invalid group input")
+)
 
 type Service struct {
 	store      Store
@@ -101,10 +104,10 @@ func (s *Service) Show(ctx context.Context, name string, now time.Time) (GroupDe
 
 func (s *Service) Schedule(ctx context.Context, name string, schedule model.ScheduleSpec, now time.Time) (model.GroupSpec, error) {
 	if err := model.ValidGroupName(name); err != nil {
-		return model.GroupSpec{}, err
+		return model.GroupSpec{}, fmt.Errorf("%w: %w", ErrInvalidInput, err)
 	}
 	if schedule.StartCron == "" || schedule.StopCron == "" {
-		return model.GroupSpec{}, fmt.Errorf("schedule start_cron and stop_cron are required")
+		return model.GroupSpec{}, fmt.Errorf("%w: schedule start_cron and stop_cron are required", ErrInvalidInput)
 	}
 	existing, err := s.store.GetGroup(ctx, name)
 	if err != nil {
@@ -117,7 +120,7 @@ func (s *Service) Schedule(ctx context.Context, name string, schedule model.Sche
 		next.EcsMaxCount = existing.EcsMaxCount
 	}
 	if err := model.ValidateGroupForWrite(next, now, s.location); err != nil {
-		return model.GroupSpec{}, err
+		return model.GroupSpec{}, fmt.Errorf("%w: %w", ErrInvalidInput, err)
 	}
 	if existing == nil {
 		if err := s.store.CreateGroup(ctx, next); err != nil {
@@ -131,13 +134,13 @@ func (s *Service) Schedule(ctx context.Context, name string, schedule model.Sche
 
 func (s *Service) Override(ctx context.Context, name string, override model.Override, duration time.Duration, now time.Time) (model.GroupSpec, error) {
 	if err := model.ValidGroupName(name); err != nil {
-		return model.GroupSpec{}, err
+		return model.GroupSpec{}, fmt.Errorf("%w: %w", ErrInvalidInput, err)
 	}
 	if err := override.Validate(); err != nil {
-		return model.GroupSpec{}, err
+		return model.GroupSpec{}, fmt.Errorf("%w: %w", ErrInvalidInput, err)
 	}
 	if duration < 0 {
-		return model.GroupSpec{}, fmt.Errorf("override duration must not be negative")
+		return model.GroupSpec{}, fmt.Errorf("%w: override duration must not be negative", ErrInvalidInput)
 	}
 	existing, err := s.store.GetGroup(ctx, name)
 	if err != nil {
@@ -156,7 +159,7 @@ func (s *Service) Override(ctx context.Context, name string, override model.Over
 		next.OverrideExpiresAt = now.Add(duration).Unix()
 	}
 	if err := model.ValidateGroupForWrite(next, now, s.location); err != nil {
-		return model.GroupSpec{}, err
+		return model.GroupSpec{}, fmt.Errorf("%w: %w", ErrInvalidInput, err)
 	}
 	if existing == nil {
 		if err := s.store.CreateGroup(ctx, next); err != nil {
@@ -177,7 +180,7 @@ func (s *Service) ClearOverride(ctx context.Context, name string, now time.Time)
 	next.Override = ""
 	next.OverrideExpiresAt = 0
 	if err := model.ValidateGroupForWrite(next, now, s.location); err != nil {
-		return model.GroupSpec{}, err
+		return model.GroupSpec{}, fmt.Errorf("%w: %w", ErrInvalidInput, err)
 	}
 	if err := s.store.ClearOverride(ctx, name); err != nil {
 		return model.GroupSpec{}, err
@@ -187,7 +190,7 @@ func (s *Service) ClearOverride(ctx context.Context, name string, now time.Time)
 
 func (s *Service) SetEcsMaxCount(ctx context.Context, name string, maximum int32, now time.Time) (model.GroupSpec, error) {
 	if maximum <= 0 {
-		return model.GroupSpec{}, fmt.Errorf("ecs_max_count must be positive")
+		return model.GroupSpec{}, fmt.Errorf("%w: ecs_max_count must be positive", ErrInvalidInput)
 	}
 	return s.updateEcsMaxCount(ctx, name, maximum, now)
 }
@@ -204,7 +207,7 @@ func (s *Service) updateEcsMaxCount(ctx context.Context, name string, maximum in
 	next := *group
 	next.EcsMaxCount = maximum
 	if err := model.ValidateGroupForWrite(next, now, s.location); err != nil {
-		return model.GroupSpec{}, err
+		return model.GroupSpec{}, fmt.Errorf("%w: %w", ErrInvalidInput, err)
 	}
 	if err := s.store.SetEcsMaxCount(ctx, name, maximum); err != nil {
 		return model.GroupSpec{}, err
@@ -235,7 +238,7 @@ func (s *Service) validGroup(ctx context.Context, name string, now time.Time) (*
 
 func (s *Service) requireGroup(ctx context.Context, name string) (*model.GroupSpec, error) {
 	if err := model.ValidGroupName(name); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", ErrInvalidInput, err)
 	}
 	group, err := s.store.GetGroup(ctx, name)
 	if err != nil {

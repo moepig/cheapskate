@@ -2,6 +2,7 @@ package webconsole
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -123,6 +124,49 @@ func TestConditionalWriteConflictReturnsHTTP409(t *testing.T) {
 	postForm(t, server, url.Values{
 		"action": {"schedule"}, "group": {"dev"}, "start": {"0 8 * * *"}, "stop": {"0 19 * * *"},
 	}, http.StatusConflict)
+}
+
+// 読み取り・作成・更新・削除を失敗させ、保存処理の障害が HTTP 500 として返ることを確認する。
+func TestStorageFailuresReturnHTTP500(t *testing.T) {
+	for _, operation := range []string{"get", "put", "update", "delete"} {
+		t.Run(operation, func(t *testing.T) {
+			db, _, server := webFixture(t)
+			form := url.Values{"action": {"schedule"}, "group": {"dev"}, "start": {"0 9 * * *"}, "stop": {"0 20 * * *"}}
+			if operation == "update" || operation == "delete" {
+				_, err := server.service.Schedule(context.Background(), "dev", model.ScheduleSpec{StartCron: "0 9 * * *", StopCron: "0 20 * * *"}, server.now())
+				require.NoError(t, err)
+			}
+			if operation == "delete" {
+				form.Set("action", "remove")
+			}
+			db.FailOn(operation, "group#dev", errors.New("DynamoDB temporarily unavailable"))
+
+			postForm(t, server, form, http.StatusInternalServerError)
+		})
+	}
+}
+
+// 不正な変更要求を送り、入力エラーが HTTP 400、未登録グループが HTTP 404 となることを確認する。
+func TestInvalidOperationsReturnClientErrors(t *testing.T) {
+	for name, form := range map[string]url.Values{
+		"missing cron":     {"action": {"schedule"}, "start": {"0 9 * * *"}},
+		"invalid cron":     {"action": {"schedule"}, "start": {"invalid"}, "stop": {"0 20 * * *"}},
+		"invalid override": {"action": {"override"}, "override": {"invalid"}},
+		"invalid until":    {"action": {"override"}, "override": {"stopped"}, "until": {"invalid"}},
+		"past until":       {"action": {"override"}, "override": {"stopped"}, "until": {"2026-09-03T11:00"}},
+		"clear only state": {"action": {"clear-override"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, _, server := webFixture(t)
+			_, err := server.service.Override(context.Background(), "dev", model.OverrideRunning, 0, server.now())
+			require.NoError(t, err)
+			form.Set("group", "dev")
+
+			postForm(t, server, form, http.StatusBadRequest)
+		})
+	}
+	_, _, server := webFixture(t)
+	postForm(t, server, url.Values{"action": {"remove"}, "group": {"missing"}}, http.StatusNotFound)
 }
 
 func TestCrossOriginMutationIsRejected(t *testing.T) {

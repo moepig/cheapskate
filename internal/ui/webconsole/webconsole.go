@@ -162,14 +162,14 @@ func (s *Server) handleOp(response http.ResponseWriter, request *http.Request) {
 	case "override":
 		override, parseErr := model.ParseOverride(request.PostFormValue("override"))
 		if parseErr != nil {
-			err = parseErr
+			err = fmt.Errorf("%w: %w", groups.ErrInvalidInput, parseErr)
 			break
 		}
 		var duration time.Duration
 		if rawUntil := request.PostFormValue("until"); rawUntil != "" {
 			until, parseErr := time.ParseInLocation("2006-01-02T15:04", rawUntil, s.location)
 			if parseErr != nil || !until.After(now) {
-				err = fmt.Errorf("invalid future date/time %q", rawUntil)
+				err = fmt.Errorf("%w: invalid future date/time %q", groups.ErrInvalidInput, rawUntil)
 				break
 			}
 			duration = until.Sub(now)
@@ -188,11 +188,14 @@ func (s *Server) handleOp(response http.ResponseWriter, request *http.Request) {
 		return
 	}
 	if err != nil {
-		status := http.StatusBadRequest
-		if errors.Is(err, state.ErrConflict) {
+		status := http.StatusInternalServerError
+		switch {
+		case errors.Is(err, state.ErrConflict):
 			status = http.StatusConflict
-		} else if errors.Is(err, state.ErrGroupNotFound) {
+		case errors.Is(err, state.ErrGroupNotFound):
 			status = http.StatusNotFound
+		case errors.Is(err, groups.ErrInvalidInput), errors.Is(err, state.ErrInvalidGroup), errors.Is(err, groups.ErrInvalidConfig):
+			status = http.StatusBadRequest
 		}
 		s.fail(response, request, status, err.Error())
 		return
