@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"log/slog"
 	"os"
@@ -37,7 +38,7 @@ const defaultMetricsNamespace = "cheapskate"
 //
 // 解釈できない METRICS_ENABLED は既定へ倒さず起動を失敗させる
 // 既定へ倒すと、無効化したつもりの設定が有効なまま課金され、それを検知する手段が請求書だけになる
-func metricsEmitter(logger *slog.Logger) (cloudwatch.Emitter, error) {
+func metricsEmitter(output io.Writer) (cloudwatch.Emitter, error) {
 	namespace := os.Getenv("METRICS_NAMESPACE")
 	if namespace == "" {
 		namespace = defaultMetricsNamespace
@@ -49,6 +50,8 @@ func metricsEmitter(logger *slog.Logger) (cloudwatch.Emitter, error) {
 			return cloudwatch.Emitter{}, fmt.Errorf("invalid METRICS_ENABLED %q: want a boolean (true/false, 1/0)", raw)
 		}
 	}
+	// メトリクスの出力レベルは通常ログの設定から独立させる。
+	logger := slog.New(slog.NewJSONHandler(output, nil))
 	return cloudwatch.Emitter{Log: logger, Namespace: namespace, Enabled: enabled}, nil
 }
 
@@ -86,7 +89,7 @@ func main() {
 		log.Fatal(err)
 	}
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
-	metrics, err := metricsEmitter(logger)
+	metrics, err := metricsEmitter(os.Stderr)
 	if err != nil {
 		log.Fatal(err)
 	}
