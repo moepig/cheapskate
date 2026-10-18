@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -61,6 +62,28 @@ func TestScheduleAndOverrideFormsUseApplicationService(t *testing.T) {
 	assert.Equal(t, "disabled", item["override"].(*types.AttributeValueMemberS).Value)
 	assert.Equal(t, "0 9 * * *", item["start_cron"].(*types.AttributeValueMemberS).Value)
 	assert.NotNil(t, item["override_expires_at"])
+}
+
+// 年 2500 と年 9999 の現地日時を送信し、指定した期限が Unix 秒で保存されることを確認する。
+func TestOverrideFormPreservesDistantExpiry(t *testing.T) {
+	for _, zone := range []string{"UTC", "Asia/Tokyo"} {
+		t.Run(zone, func(t *testing.T) {
+			location, err := time.LoadLocation(zone)
+			require.NoError(t, err)
+			api, db := statemocks.NewDynaStore(gomock.NewController(t))
+			server := New(state.New(api, "table"), porttest.NewDiscoverer(), nil, "", []string{"example.com"}, location, nil)
+			server.now = func() time.Time { return time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC) }
+			postForm(t, server, url.Values{"action": {"schedule"}, "group": {"dev"}, "start": {"0 9 * * *"}, "stop": {"0 20 * * *"}}, http.StatusSeeOther)
+			for _, raw := range []string{"2500-01-01T00:00", "9999-12-31T23:59"} {
+				postForm(t, server, url.Values{"action": {"override"}, "group": {"dev"}, "override": {"stopped"}, "until": {raw}}, http.StatusSeeOther)
+
+				want, err := time.ParseInLocation("2006-01-02T15:04", raw, location)
+				require.NoError(t, err)
+				stored := db.Item("CONFIG", "GROUP#dev")["override_expires_at"].(*types.AttributeValueMemberN).Value
+				assert.Equal(t, strconv.FormatInt(want.Unix(), 10), stored)
+			}
+		})
+	}
 }
 
 func TestGroupDetailRendersScheduleResourcesStateAndBasePath(t *testing.T) {

@@ -165,16 +165,16 @@ func (s *Server) handleOp(response http.ResponseWriter, request *http.Request) {
 			err = fmt.Errorf("%w: %w", groups.ErrInvalidInput, parseErr)
 			break
 		}
-		var duration time.Duration
+		var expiresAt int64
 		if rawUntil := request.PostFormValue("until"); rawUntil != "" {
 			until, parseErr := time.ParseInLocation("2006-01-02T15:04", rawUntil, s.location)
 			if parseErr != nil || !until.After(now) {
 				err = fmt.Errorf("%w: invalid future date/time %q", groups.ErrInvalidInput, rawUntil)
 				break
 			}
-			duration = until.Sub(now)
+			expiresAt = until.Unix()
 		}
-		_, err = s.service.Override(request.Context(), name, override, duration, now)
+		_, err = s.service.OverrideUntil(request.Context(), name, override, expiresAt, now)
 		message = "override saved"
 	case "clear-override":
 		_, err = s.service.ClearOverride(request.Context(), name, now)

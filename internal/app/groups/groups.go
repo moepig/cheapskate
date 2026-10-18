@@ -133,14 +133,23 @@ func (s *Service) Schedule(ctx context.Context, name string, schedule model.Sche
 }
 
 func (s *Service) Override(ctx context.Context, name string, override model.Override, duration time.Duration, now time.Time) (model.GroupSpec, error) {
+	if duration < 0 {
+		return model.GroupSpec{}, fmt.Errorf("%w: override duration must not be negative", ErrInvalidInput)
+	}
+	var expiresAt int64
+	if duration > 0 {
+		expiresAt = now.Add(duration).Unix()
+	}
+	return s.OverrideUntil(ctx, name, override, expiresAt, now)
+}
+
+// Unix 秒の expiresAt を期限として override を保存し、更新後の設定を返す。0 は期限なしを表す。
+func (s *Service) OverrideUntil(ctx context.Context, name string, override model.Override, expiresAt int64, now time.Time) (model.GroupSpec, error) {
 	if err := model.ValidGroupName(name); err != nil {
 		return model.GroupSpec{}, fmt.Errorf("%w: %w", ErrInvalidInput, err)
 	}
 	if err := override.Validate(); err != nil {
 		return model.GroupSpec{}, fmt.Errorf("%w: %w", ErrInvalidInput, err)
-	}
-	if duration < 0 {
-		return model.GroupSpec{}, fmt.Errorf("%w: override duration must not be negative", ErrInvalidInput)
 	}
 	existing, err := s.store.GetGroup(ctx, name)
 	if err != nil {
@@ -152,11 +161,11 @@ func (s *Service) Override(ctx context.Context, name string, override model.Over
 		next.Override = override
 		next.OverrideExpiresAt = 0
 	}
-	if duration > 0 {
+	if expiresAt != 0 {
 		if existing == nil {
 			return model.GroupSpec{}, fmt.Errorf("%w: %s", state.ErrGroupNotFound, name)
 		}
-		next.OverrideExpiresAt = now.Add(duration).Unix()
+		next.OverrideExpiresAt = expiresAt
 	}
 	if err := model.ValidateGroupForWrite(next, now, s.location); err != nil {
 		return model.GroupSpec{}, fmt.Errorf("%w: %w", ErrInvalidInput, err)
