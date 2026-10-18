@@ -4,7 +4,7 @@
 
 ## バイナリ
 
-`go build` を包む 3 つのターゲットがある。
+`go build` を実行する 3 つのターゲットがある。
 
 ```console
 make build       # go build ./... の実行
@@ -14,7 +14,7 @@ make webconsole  # bin/webconsole を作成
 
 ## コンテナイメージ
 
-reconciler と Web コンソールは別々のイメージであり、バイナリを 1 つずつ含む。どちらも同じ `Dockerfile` から `--target` で選択してビルドする。
+reconciler と Web コンソールは別々のイメージであり、バイナリを 1 つずつ含む。どちらも同じ `Dockerfile` から `--target` で選択してビルドする。Web コンソールをデプロイしない場合、ビルドと push は reconciler のみでよい。
 
 イメージのビルドターゲットと、それぞれが含むバイナリの対応を、以下にまとめる。
 
@@ -32,9 +32,13 @@ make image-webconsole                        # cheapskate-webconsole:dev のみ
 make image PLATFORM=linux/amd64 TAG=v0.1.0   # x86 版
 ```
 
-ベースイメージは `public.ecr.aws/lambda/provided:al2023` である。Go ビルダー、Lambda ベースイメージ、Dockerfile frontend はタグと digest の両方で固定する。タグは更新対象を人が読めるようにし、digest は同じビルド入力が移動しないようにする。バイナリはどちらも `/var/runtime/bootstrap` として配置されるため、`ImageConfig.EntryPoint` による上書きを要しない。Web コンソールをデプロイしない場合、ビルドと push は reconciler のみでよい。
+バイナリはどちらも `/var/runtime/bootstrap` として配置する。このため、`ImageConfig.EntryPoint` による上書きは不要である。
 
-Dockerfile はホストプラットフォームから `GOARCH` でクロスコンパイルするため、異アーキテクチャのビルドにエミュレーションを要しない。Go のビルドステージは 2 つのイメージで共有するため、両方をビルドしても依存のダウンロードは 1 回で済む。
+ビルド入力はタグと digest の両方で固定する。対象は Go ビルダー、Lambda ベースイメージ、および Dockerfile frontend である。タグは更新対象のバージョンを示し、digest は参照する内容を固定する。Lambda ベースイメージは `public.ecr.aws/lambda/provided:al2023` である。
+
+Dockerfile はホストプラットフォームから `GOARCH` でクロスコンパイルする。このため、異なるアーキテクチャ向けのビルドにエミュレーションは不要である。
+
+Go のビルドステージは 2 つのイメージで共有する。このため、両方をビルドしても依存のダウンロードは 1 回で済む。
 
 ビルドコンテキストは `.dockerignore` の allowlist により `Dockerfile`、モジュールファイル、`cmd/`、`internal/` に限定する。Dockerfile も `COPY . .` を使わず、必要なディレクトリだけを明示してコピーする。開発用ファイルや資格情報を誤ってコンテキストやイメージへ含めず、無関係な変更によるキャッシュ無効化も避けるためである。
 
@@ -42,7 +46,7 @@ Dockerfile はホストプラットフォームから `GOARCH` でクロスコ�
 
 Web コンソールのイメージには、Lambda Web Adapter の実行ファイルが `/opt/extensions/lambda-adapter` として入る。バージョンタグと digest は `Dockerfile` で固定してある。これは go.mod の外にある唯一の実行時依存であり、更新は Go モジュールとは別に Dependabot の docker 更新で行う。
 
-アダプタが呼び出しイベントを HTTP へ変換する仕組みと、本体側がアダプタに依存する箇所は、[Lambda 実行](../architecture/overview.md#lambda-実行) を参照。Dependabot による更新がリリースに至る経路は、[release.md](release.md) の依存の更新を参照。
+アダプタが呼び出しイベントを HTTP へ変換する仕組みと、Web コンソール本体との関係は、[Lambda 実行](../architecture/overview.md#lambda-実行)を参照する。Dependabot による更新方法は、[リリースと依存の更新](release.md)の依存の更新を参照する。
 
 ## イメージのテスト
 
@@ -52,9 +56,12 @@ Web コンソールのイメージには、Lambda Web Adapter の実行ファイ
 make image-test   # 両イメージをビルドし、それぞれ Lambda RIE 上で起動して呼び出す
 ```
 
-イメージの破損やハンドラの欠落を検出する。必要な前提は docker のみであり、エミュレータと使い捨ての state テーブルはテストと一緒に立ち上がる。投入するペイロードと期待する応答は、[test.md](test.md) のイメージのテストを参照。
+イメージの破損やハンドラの欠落を検出する。実行には Docker が必要であり、エミュレータと使い捨ての state テーブルはテストと一緒に立ち上がる。投入するペイロードと期待する応答は、[テスト](test.md)のイメージのテストを参照する。
 
 ## ECR への push
+
+> [!IMPORTANT]
+> イメージのプラットフォームは、Lambda 関数のアーキテクチャと一致させること (`arm64` ↔ `linux/arm64`)。不一致のイメージは関数の作成または更新の時点で拒否される。
 
 リポジトリはイメージごとに 1 つ作成する。作成から push までの実行例を、以下に示す。
 
@@ -68,6 +75,3 @@ make push \
 ```
 
 `make push` は両イメージについて `docker build`、`docker login`、`docker push` を実行する。片方のみを対象とする場合は `make push-reconciler` または `make push-webconsole` を使い、対応する `ECR_REPO_*` だけを指定する。
-
-> [!IMPORTANT]
-> イメージのプラットフォームは、Lambda 関数のアーキテクチャと一致させること (`arm64` ↔ `linux/arm64`)。不一致のイメージは関数の作成または更新の時点で拒否される。

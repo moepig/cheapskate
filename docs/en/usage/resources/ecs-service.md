@@ -50,19 +50,21 @@ In addition to the shared cheapskate:group tag, set these tags on the ECS servic
 
 | Tag | Default | Meaning and constraint |
 | --- | --- | --- |
-| cheapskate:desired-count | 1 | Startup count from all-zero counts or 0/0 bounds; 1–2147483647 |
+| cheapskate:desired-count | 1 | Startup count; 1–2147483647 |
 | cheapskate:scaling-min | cheapskate:desired-count | Normal MinCapacity; 0–2147483647 |
 | cheapskate:scaling-max | cheapskate:desired-count | Normal MaxCapacity; 0–2147483647 |
 | cheapskate:scaling-bounds-mode | scheduled | Bounds management mode |
+
+The startup count applies when desiredCount, runningCount, and pendingCount are all zero, or when registered scaling bounds are 0/0.
+
+Defaults apply only to absent tags; empty strings are invalid. Tag counts must satisfy cheapskate:scaling-min <= cheapskate:desired-count <= cheapskate:scaling-max. All tags are validated whether or not a scalable target exists; invalid tags prevent stopping too.
 
 The bounds management modes behave as follows:
 
 | Value | Behavior |
 | --- | --- |
 | tags | Maintains tag bounds; suspends Scheduled Scaling |
-| scheduled | Retains post-startup bounds changes; enables Scheduled Scaling |
-
-Defaults apply only to absent tags; empty strings are invalid. Tag counts must satisfy cheapskate:scaling-min <= cheapskate:desired-count <= cheapskate:scaling-max. All tags are validated whether or not a scalable target exists; invalid tags prevent stopping too.
+| scheduled | Keeps later bounds changes; enables Scheduled Scaling |
 
 For service api in cluster dev, set a startup count of 2 and normal bounds of 1–3:
 

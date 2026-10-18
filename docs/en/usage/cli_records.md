@@ -17,11 +17,19 @@ cheapskate-cli config set-context dev \
 cheapskate-cli config use-context dev
 ```
 
-The remaining commands use the selected dev context. In resource-tagging examples, -context dev selects the CLI connection, while --group dev selects the DynamoDB group. If the context specifies --profile, supply the same --profile to AWS CLI tagging commands. Replace example ARNs, account IDs, and resource names with actual values.
+The remaining commands use the selected dev context. In resource-tagging examples, -context dev selects the CLI connection, while --group dev selects the DynamoDB group.
 
-The CLI saves group configuration without creating, tagging, starting, or stopping AWS resources. Register the group before setting cheapskate:group=<group-name> on member resources. For ECS, also register the capacity limit before tagging the service. The reconciler later reads the configuration and tags to apply the current request.
+If the context specifies --profile, supply the same --profile to AWS CLI tagging commands.
 
-For ECS, register the group's DynamoDB ecs_max_count attribute with cheapskate-cli ecs-max-count --group NAME COUNT before allowing startup. See [Registering an ECS capacity limit](operations.md#registering-an-ecs-capacity-limit).
+Replace example ARNs, account IDs, and resource names with actual values.
+
+DynamoDB stores one item per group, with pk=CONFIG and sk=GROUP#<group-name>.
+
+The CLI saves group configuration without creating, tagging, starting, or stopping AWS resources.
+
+Register the group before setting cheapskate:group=<group-name> on member resources. For ECS, also register the capacity limit before tagging the service. The reconciler later reads the configuration and tags to apply the current request.
+
+For ECS, register the group's DynamoDB ecs_max_count attribute with cheapskate-cli ecs-max-count --group NAME COUNT before allowing startup. The cheapskate:desired-count and cheapskate:scaling-max tag values must be within this Number limit. See [Registering an ECS capacity limit](operations.md#registering-an-ecs-capacity-limit).
 
 ## Weekday operation
 
@@ -43,7 +51,11 @@ The resulting DynamoDB JSON item is below. S denotes a String attribute.
 }
 ```
 
-For an existing group, schedule updates only cron attributes and preserves the override and ECS limit. Resources tagged cheapskate:group=dev receive running requests from weekday 09:00 and stopped requests from 18:00. Friday's stopped state continues until Monday morning. Registration at weekday 10:00 selects running in the next cycle rather than waiting for another cron occurrence.
+Schedule creates one dev item. For an existing group, it updates only the two cron attributes and preserves the override and ECS limit.
+
+Resources tagged cheapskate:group=dev receive running requests from weekday 09:00 and stopped requests from 18:00. Friday's stopped state continues until Monday morning.
+
+Registration at weekday 10:00 selects running in the next cycle rather than waiting for another cron occurrence.
 
 ## Indefinite overrides
 
@@ -63,9 +75,13 @@ All items use pk=CONFIG. Stored settings and effects are:
 | GROUP#always-off | stopped | Keep resources stopped |
 | GROUP#unmanaged | disabled | Skip inspection and changes |
 
-An indefinite override omits override_expires_at. Omitting -for also makes a running override indefinite. Applied to an existing group, it preserves the schedule and ECS limit and removes any old expiration. Disabled itself does not change AWS state.
+An indefinite override omits override_expires_at. Omitting -for also makes a running override indefinite.
+
+Applied to an existing group, it preserves the schedule and ECS limit and removes any old expiration. Disabled itself does not change AWS state.
 
 ## Timed overrides
+
+Timed overrides require a schedule, including stopped and disabled overrides.
 
 For a dev group with a schedule, this example sets a running override at 17:00 on 2026-09-14 that expires at 20:00. The duration is measured from actual command execution:
 
@@ -86,20 +102,24 @@ Execution at 17:00:00 produces this item. N denotes a Number; expiration is stor
 }
 ```
 
-The override remains active beyond the 18:00 stop time. A cycle at or after 20:00 ignores it and selects stopped from the schedule. Expiration leaves attributes in DynamoDB; TTL does not delete them. Timed stopped and disabled overrides work the same way and also require a schedule.
+This update adds override and override_expires_at to the same dev item without increasing the item count.
 
-Clear or replace an expired override before another configuration update. These operations preserve the ECS limit.
+The override remains active beyond the 18:00 stop time. A cycle at or after 20:00 ignores it and selects stopped from the schedule.
+
+Expiration leaves attributes in DynamoDB; TTL does not delete them. Clear or replace an expired override before another configuration update. These operations preserve the ECS limit.
 
 ## Clearing an override and inspecting results
 
-To return dev to its schedule and inspect resources:
+Clearing an override requires a schedule. To return dev to its schedule and inspect resources:
 
 ```sh
 cheapskate-cli clear-override --group dev
 cheapskate-cli -output json show --group dev
 ```
 
-Clear-override removes override and override_expires_at while preserving cron attributes and the ECS limit. Show reads configuration and current AWS state without changing resources or waiting for transitions.
+Clear-override removes override and override_expires_at while preserving cron attributes and the ECS limit. Subsequent cycles that read the configuration follow the schedule.
+
+Show reads configuration and current AWS state without changing resources or waiting for transitions.
 
 > [!NOTE]
 > An override-only group cannot clear its override. Add a schedule or replace the override first. For group removal, follow [Ending management](operations.md#ending-management).

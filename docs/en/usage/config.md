@@ -6,10 +6,10 @@ This document defines connection, time-zone, monitoring, and HTTP settings for t
 
 AWS credentials, region, and endpoints use AWS SDK configuration. Application environment variables shared across executables are:
 
-| Variable | Required | Default | Purpose |
+| Variable | Required by | Default | Purpose |
 | --- | --- | --- | --- |
 | STATE_TABLE_NAME | Reconciler and web console | None | DynamoDB table name |
-| DEFAULT_TIMEZONE | No | UTC | IANA time zone for schedules and web dates |
+| DEFAULT_TIMEZONE | None | UTC | IANA time zone for schedules and web dates |
 
 An invalid DEFAULT_TIMEZONE prevents the reconciler and web console from starting. Use the same value in the CLI, reconciler, and web console.
 

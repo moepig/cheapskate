@@ -1,6 +1,6 @@
 # Aurora DB クラスタの設定
 
-本ドキュメントはAurora DB クラスタの対象条件、グループ設定の適用先、およびタグの設定先を示す。cheapskate のリソースタイプ名は rds-cluster である。
+本ドキュメントは Aurora DB クラスタの対象条件、グループ設定の適用先、およびタグの設定先を示す。cheapskate のリソースタイプ名は rds-cluster である。
 
 ## 対象条件
 

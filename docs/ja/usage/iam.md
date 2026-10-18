@@ -1,28 +1,36 @@
 # IAM 権限
 
-本ページではcheapskate の reconciler、CLI、および Web コンソールに付与する IAM 権限を説明する。AWS リソースの配置先と用途は、[AWS リソースと IAM](aws_resources.md#配置する-aws-リソース)を参照。
+本ページでは cheapskate の reconciler、CLI、および Web コンソールに付与する IAM 権限を説明する。AWS リソースの配置先と用途は、[AWS リソースと IAM](aws_resources.md#配置する-aws-リソース)を参照。
 
 ## ポリシー例の前提
 
 以下は同一アカウント・同一リージョンの既存リソースを管理するロールに付与するポリシー例である。リソースの作成、イメージの登録、およびタグの付与は配置時の権限で行う。
 
-PARTITION、REGION、ACCOUNT は配置先に置き換える。通常の AWS パーティションは aws である。TABLE は STATE_TABLE_NAME、GROUP は許可する所属タグ値とする。DB_INSTANCE、DB_CLUSTER、CLUSTER、SERVICE、INSTANCE_ID は実際の識別子に置き換える。SCALABLE_TARGET_ID は登録済み scalable target の ARN の末尾である。FUNCTION_NAME と TOPIC は対象の Lambda 関数名と通知先 topic 名に置き換える。
+PARTITION、REGION、ACCOUNT は配置先に置き換える。通常の AWS パーティションは aws である。
 
-IAM ポリシーの Resource には対象 ARN を列挙する。複数ある場合は配列にする。所属タグの StringEquals には許可するグループ名を列挙する。所属タグ条件を持つ Statement では、ARN が一致してもタグが削除されたり許可外のグループへ変更されたりするとアクセスを許可しない。異なるグループに異なる ARN を許可する場合は Statement を分ける。
+TABLE は STATE_TABLE_NAME、GROUP は許可する所属タグ値とする。
 
-役割ごとに組み合わせる権限を、以下に示す。JSON 全体の例はそれぞれ単独のポリシーとして使用できる。Statement 単体の例は対象ロールのポリシーの Statement 配列へ追加する。
+DB_INSTANCE、DB_CLUSTER、CLUSTER、SERVICE、INSTANCE_ID は実際の識別子に置き換える。SCALABLE_TARGET_ID は登録済み scalable target の ARN の末尾である。
 
-| 役割 | 権限の区分 |
-| --- | --- |
-| reconciler | 共通参照、reconciler、ログ、任意機能 |
-| CLI | 設定操作。show の使用時は共通参照も必要 |
-| Web コンソール | 設定操作と共通参照。Lambda 配置時はログも必要 |
+FUNCTION_NAME と TOPIC は対象の Lambda 関数名と通知先 topic 名に置き換える。
 
-reconciler には共通のリソース参照権限と reconciler の権限を付与する。各 Lambda のログ配信権限も必要である。通知または暗号化を使う場合は、該当機能の追加権限も付与する。
+IAM ポリシーの Resource には対象 ARN を列挙する。複数ある場合は配列にする。所属タグの StringEquals には許可するグループ名を列挙する。所属タグ条件を持つ Statement では、ARN が一致してもタグが削除されたり許可外のグループへ変更されたりするとアクセスを許可しない。
 
-CLI には CLI と Web コンソールの権限を付与する。show でリソース状態を表示する場合は、共通のリソース参照権限も付与する。
+異なるグループに異なる ARN を許可する場合は Statement を分ける。
 
-Web コンソールには CLI と Web コンソールの権限および共通のリソース参照権限を付与する。Lambda に配置する場合は、その関数のログ配信権限も付与する。
+役割ごとに組み合わせる権限を、以下に示す。
+
+| 権限 | 対象ロール | 必要となる条件 |
+| --- | --- | --- |
+| [共通のリソース参照](#共通のリソース参照権限) | reconciler、Web コンソール | 常時 |
+| [共通のリソース参照](#共通のリソース参照権限) | CLI | show で状態を表示する場合 |
+| [設定操作](#cli-と-web-コンソールの権限) | CLI、Web コンソール | 常時 |
+| [設定読み取りとリソース更新](#reconciler-の権限) | reconciler | 常時 |
+| [ログ配信](#lambda-のログ配信) | 各 Lambda | 関数ごとに付与 |
+| [SNS 通知](#sns-通知) | reconciler | 通知を使う場合 |
+| [暗号化](#sns-通知と暗号化の追加権限) | reconciler | 対象機能で暗号化を使う場合 |
+
+JSON 全体の例はそれぞれ単独のポリシーとして使用できる。Statement 単体の例は対象ロールのポリシーの Statement 配列へ追加する。
 
 管理しないリソース種別のアクションと Statement は削除する。ECS を管理する場合は、scalable target が未登録の service でも DescribeScalableTargets が必要である。RegisterScalableTarget は登録済みの対象を更新する場合だけ必要となる。
 
@@ -34,53 +42,28 @@ Web コンソールには CLI と Web コンソールの権限および共通の
 
 | サービス | IAM アクション | Resource のリソース部 | Condition または制限 |
 | --- | --- | --- | --- |
-| DynamoDB | dynamodb:Query | table/TABLE | dynamodb:LeadingKeys=CONFIG |
-| DynamoDB | dynamodb:GetItem | table/TABLE | dynamodb:LeadingKeys=CONFIG |
-| DynamoDB | dynamodb:PutItem | table/TABLE | dynamodb:LeadingKeys=CONFIG |
-| DynamoDB | dynamodb:UpdateItem | table/TABLE | dynamodb:LeadingKeys=CONFIG |
-| DynamoDB | dynamodb:DeleteItem | table/TABLE | dynamodb:LeadingKeys=CONFIG |
-| Resource Groups Tagging API | tag:GetResources | * | aws:RequestedRegion |
-| RDS DB instance | rds:DescribeDBInstances | db:DB_INSTANCE | aws:ResourceTag/cheapskate:group |
-| RDS DB instance | rds:StartDBInstance | db:DB_INSTANCE | aws:ResourceTag/cheapskate:group |
-| RDS DB instance | rds:StopDBInstance | db:DB_INSTANCE | aws:ResourceTag/cheapskate:group |
-| RDS DB cluster の参照 | rds:DescribeDBClusters | * | aws:RequestedRegion |
-| RDS DB cluster の操作 | rds:StartDBCluster | cluster:DB_CLUSTER | aws:ResourceTag/cheapskate:group |
-| RDS DB cluster の操作 | rds:StopDBCluster | cluster:DB_CLUSTER | aws:ResourceTag/cheapskate:group |
-| ECS | ecs:DescribeServices | service/CLUSTER/SERVICE | aws:ResourceTag/cheapskate:group |
-| ECS | ecs:UpdateService | service/CLUSTER/SERVICE | aws:ResourceTag/cheapskate:group |
-| Application Auto Scaling | application-autoscaling:DescribeScalableTargets | * | aws:RequestedRegion |
-| Application Auto Scaling | application-autoscaling:RegisterScalableTarget | scalable-target/SCALABLE_TARGET_ID | Resource の scalable target ARN で限定 |
-| EC2 | ec2:DescribeInstances | * | aws:RequestedRegion |
-| EC2 | ec2:StartInstances | instance/INSTANCE_ID | aws:ResourceTag/cheapskate:group |
-| EC2 | ec2:StopInstances | instance/INSTANCE_ID | aws:ResourceTag/cheapskate:group |
-| SNS | sns:Publish | TOPIC | Resource の topic ARN で限定 |
-| CloudWatch Logs | logs:CreateLogStream | log-group:/aws/lambda/FUNCTION_NAME:log-stream:* | Resource のロググループ名で限定 |
-| CloudWatch Logs | logs:PutLogEvents | log-group:/aws/lambda/FUNCTION_NAME:log-stream:* | Resource のロググループ名で限定 |
-
-各アクションの公式リファレンスを以下に示す。
-
-- [dynamodb:Query](https://docs.aws.amazon.com/service-authorization/latest/reference/list_dynamodb.html#list_dynamodb-action-Query)
-- [dynamodb:GetItem](https://docs.aws.amazon.com/service-authorization/latest/reference/list_dynamodb.html#list_dynamodb-action-GetItem)
-- [dynamodb:PutItem](https://docs.aws.amazon.com/service-authorization/latest/reference/list_dynamodb.html#list_dynamodb-action-PutItem)
-- [dynamodb:UpdateItem](https://docs.aws.amazon.com/service-authorization/latest/reference/list_dynamodb.html#list_dynamodb-action-UpdateItem)
-- [dynamodb:DeleteItem](https://docs.aws.amazon.com/service-authorization/latest/reference/list_dynamodb.html#list_dynamodb-action-DeleteItem)
-- [tag:GetResources](https://docs.aws.amazon.com/service-authorization/latest/reference/list_resourcegroupstaggingapi.html#list_resourcegroupstaggingapi-action-GetResources)
-- [rds:DescribeDBInstances](https://docs.aws.amazon.com/service-authorization/latest/reference/list_rds.html#list_rds-action-DescribeDBInstances)
-- [rds:StartDBInstance](https://docs.aws.amazon.com/service-authorization/latest/reference/list_rds.html#list_rds-action-StartDBInstance)
-- [rds:StopDBInstance](https://docs.aws.amazon.com/service-authorization/latest/reference/list_rds.html#list_rds-action-StopDBInstance)
-- [rds:DescribeDBClusters](https://docs.aws.amazon.com/service-authorization/latest/reference/list_rds.html#list_rds-action-DescribeDBClusters)
-- [rds:StartDBCluster](https://docs.aws.amazon.com/service-authorization/latest/reference/list_rds.html#list_rds-action-StartDBCluster)
-- [rds:StopDBCluster](https://docs.aws.amazon.com/service-authorization/latest/reference/list_rds.html#list_rds-action-StopDBCluster)
-- [ecs:DescribeServices](https://docs.aws.amazon.com/service-authorization/latest/reference/list_ecs.html#list_ecs-action-DescribeServices)
-- [ecs:UpdateService](https://docs.aws.amazon.com/service-authorization/latest/reference/list_ecs.html#list_ecs-action-UpdateService)
-- [application-autoscaling:DescribeScalableTargets](https://docs.aws.amazon.com/service-authorization/latest/reference/list_application-autoscaling.html#list_application-autoscaling-action-DescribeScalableTargets)
-- [application-autoscaling:RegisterScalableTarget](https://docs.aws.amazon.com/service-authorization/latest/reference/list_application-autoscaling.html#list_application-autoscaling-action-RegisterScalableTarget)
-- [ec2:DescribeInstances](https://docs.aws.amazon.com/service-authorization/latest/reference/list_ec2.html#list_ec2-action-DescribeInstances)
-- [ec2:StartInstances](https://docs.aws.amazon.com/service-authorization/latest/reference/list_ec2.html#list_ec2-action-StartInstances)
-- [ec2:StopInstances](https://docs.aws.amazon.com/service-authorization/latest/reference/list_ec2.html#list_ec2-action-StopInstances)
-- [sns:Publish](https://docs.aws.amazon.com/service-authorization/latest/reference/list_sns.html#list_sns-action-Publish)
-- [logs:CreateLogStream](https://docs.aws.amazon.com/service-authorization/latest/reference/list_logs.html#list_logs-action-CreateLogStream)
-- [logs:PutLogEvents](https://docs.aws.amazon.com/service-authorization/latest/reference/list_logs.html#list_logs-action-PutLogEvents)
+| DynamoDB | [dynamodb:Query](https://docs.aws.amazon.com/service-authorization/latest/reference/list_dynamodb.html#list_dynamodb-action-Query) | table/TABLE | dynamodb:LeadingKeys=CONFIG |
+| DynamoDB | [dynamodb:GetItem](https://docs.aws.amazon.com/service-authorization/latest/reference/list_dynamodb.html#list_dynamodb-action-GetItem) | table/TABLE | dynamodb:LeadingKeys=CONFIG |
+| DynamoDB | [dynamodb:PutItem](https://docs.aws.amazon.com/service-authorization/latest/reference/list_dynamodb.html#list_dynamodb-action-PutItem) | table/TABLE | dynamodb:LeadingKeys=CONFIG |
+| DynamoDB | [dynamodb:UpdateItem](https://docs.aws.amazon.com/service-authorization/latest/reference/list_dynamodb.html#list_dynamodb-action-UpdateItem) | table/TABLE | dynamodb:LeadingKeys=CONFIG |
+| DynamoDB | [dynamodb:DeleteItem](https://docs.aws.amazon.com/service-authorization/latest/reference/list_dynamodb.html#list_dynamodb-action-DeleteItem) | table/TABLE | dynamodb:LeadingKeys=CONFIG |
+| Resource Groups Tagging API | [tag:GetResources](https://docs.aws.amazon.com/service-authorization/latest/reference/list_resourcegroupstaggingapi.html#list_resourcegroupstaggingapi-action-GetResources) | * | aws:RequestedRegion |
+| RDS DB instance | [rds:DescribeDBInstances](https://docs.aws.amazon.com/service-authorization/latest/reference/list_rds.html#list_rds-action-DescribeDBInstances) | db:DB_INSTANCE | aws:ResourceTag/cheapskate:group |
+| RDS DB instance | [rds:StartDBInstance](https://docs.aws.amazon.com/service-authorization/latest/reference/list_rds.html#list_rds-action-StartDBInstance) | db:DB_INSTANCE | aws:ResourceTag/cheapskate:group |
+| RDS DB instance | [rds:StopDBInstance](https://docs.aws.amazon.com/service-authorization/latest/reference/list_rds.html#list_rds-action-StopDBInstance) | db:DB_INSTANCE | aws:ResourceTag/cheapskate:group |
+| RDS DB cluster の参照 | [rds:DescribeDBClusters](https://docs.aws.amazon.com/service-authorization/latest/reference/list_rds.html#list_rds-action-DescribeDBClusters) | * | aws:RequestedRegion |
+| RDS DB cluster の操作 | [rds:StartDBCluster](https://docs.aws.amazon.com/service-authorization/latest/reference/list_rds.html#list_rds-action-StartDBCluster) | cluster:DB_CLUSTER | aws:ResourceTag/cheapskate:group |
+| RDS DB cluster の操作 | [rds:StopDBCluster](https://docs.aws.amazon.com/service-authorization/latest/reference/list_rds.html#list_rds-action-StopDBCluster) | cluster:DB_CLUSTER | aws:ResourceTag/cheapskate:group |
+| ECS | [ecs:DescribeServices](https://docs.aws.amazon.com/service-authorization/latest/reference/list_ecs.html#list_ecs-action-DescribeServices) | service/CLUSTER/SERVICE | aws:ResourceTag/cheapskate:group |
+| ECS | [ecs:UpdateService](https://docs.aws.amazon.com/service-authorization/latest/reference/list_ecs.html#list_ecs-action-UpdateService) | service/CLUSTER/SERVICE | aws:ResourceTag/cheapskate:group |
+| Application Auto Scaling | [application-autoscaling:DescribeScalableTargets](https://docs.aws.amazon.com/service-authorization/latest/reference/list_application-autoscaling.html#list_application-autoscaling-action-DescribeScalableTargets) | * | aws:RequestedRegion |
+| Application Auto Scaling | [application-autoscaling:RegisterScalableTarget](https://docs.aws.amazon.com/service-authorization/latest/reference/list_application-autoscaling.html#list_application-autoscaling-action-RegisterScalableTarget) | scalable-target/SCALABLE_TARGET_ID | Resource の scalable target ARN で限定 |
+| EC2 | [ec2:DescribeInstances](https://docs.aws.amazon.com/service-authorization/latest/reference/list_ec2.html#list_ec2-action-DescribeInstances) | * | aws:RequestedRegion |
+| EC2 | [ec2:StartInstances](https://docs.aws.amazon.com/service-authorization/latest/reference/list_ec2.html#list_ec2-action-StartInstances) | instance/INSTANCE_ID | aws:ResourceTag/cheapskate:group |
+| EC2 | [ec2:StopInstances](https://docs.aws.amazon.com/service-authorization/latest/reference/list_ec2.html#list_ec2-action-StopInstances) | instance/INSTANCE_ID | aws:ResourceTag/cheapskate:group |
+| SNS | [sns:Publish](https://docs.aws.amazon.com/service-authorization/latest/reference/list_sns.html#list_sns-action-Publish) | TOPIC | Resource の topic ARN で限定 |
+| CloudWatch Logs | [logs:CreateLogStream](https://docs.aws.amazon.com/service-authorization/latest/reference/list_logs.html#list_logs-action-CreateLogStream) | log-group:/aws/lambda/FUNCTION_NAME:log-stream:* | Resource のロググループ名で限定 |
+| CloudWatch Logs | [logs:PutLogEvents](https://docs.aws.amazon.com/service-authorization/latest/reference/list_logs.html#list_logs-action-PutLogEvents) | log-group:/aws/lambda/FUNCTION_NAME:log-stream:* | Resource のロググループ名で限定 |
 
 rds:DescribeDBClusters は resource ID からクラスタを解決するため、クラスタ名を指定しない照会を使う。
 
@@ -309,7 +292,7 @@ ecs:UpdateService には desiredCount のみの変更に限定する条件キー
 }
 ```
 
-閲覧だけに使用する場合は、PutItem、UpdateItem、および DeleteItem を除く。Terraform で設定を管理し CLI を確認だけに使う場合も同様である。管理インターフェースにはreconciler のリソース更新権限と SNS 通知権限を付与しない。
+閲覧だけに使用する場合は、PutItem、UpdateItem、および DeleteItem を除く。Terraform で設定を管理し CLI を確認だけに使う場合も同様である。管理インターフェースには reconciler のリソース更新権限と SNS 通知権限を付与しない。
 
 DynamoDB の設定変更は次の reconciler サイクルの起動・停止要求を変更する。この設定変更権限は管理対象の運転状態を変更できる権限として扱う。
 

@@ -8,7 +8,17 @@ For steps to compare saved configuration with current AWS state, see [Daily oper
 
 ## Structured logs
 
-The reconciler and web console emit structured logs to stderr. Principal reconciler records are:
+The reconciler and web console emit structured logs to stderr. Logs provide the ongoing operational record; DynamoDB stores no operation or error history.
+
+### Cycle results
+
+A cycle that completes group reads and resource discovery emits summary after resource processing. Individual group and resource failures do not fail the Lambda invocation, so inspect summary error counts as well.
+
+A global read failure returns a Lambda error without summary.
+
+### Log records
+
+Principal reconciler records are:
 
 | Record | Level | Content |
 | --- | --- | --- |
@@ -22,18 +32,24 @@ The reconciler and web console emit structured logs to stderr. Principal reconci
 | apply-action-started / apply-action-finished | debug | Start and end of action requests |
 | notify-action-started / notify-action-finished | debug | Start and end of notification attempts |
 | resource-discovered | debug | Discovered resource's group, resource_id, and resource_arn |
-| resource-discovery-skipped | warn | Original resource_arn and reason for an excluded RDS cluster candidate |
-| summary | info | Resources inspected, successful operations, and group/resource error counts |
-| action-started | info | Resource and state immediately before requesting a start, stop, or ECS configuration repair |
-| action-finished | info | Action outcome, desired state, and observed state before the action |
-| resource-unchanged | info | Desired and observed states of a resource requiring no changes, and the reason |
-| resource-skipped | info | Resource and state when processing is skipped for disabled, transitioning, or not-found |
+| resource-discovery-skipped | warn | Excluded RDS cluster candidate's resource_arn and reason |
+| summary | info | Resource/action counts and group/resource error counts |
+| action-started | info | Resource and state immediately before an action request |
+| action-finished | info | Action outcome, desired state, and pre-action observed state |
+| resource-unchanged | info | Desired/observed states and reason for no changes |
+| resource-skipped | info | Resource, state, and reason for skipping |
 | group-error | error | Group configuration failure |
-| resource-error | error | State inspection or operation failure for an individual resource |
+| resource-error | error | Individual resource inspection or action failure |
 
-Set LOG_LEVEL=debug to also emit debug records. Each operation's completion includes success and error on failure. Notifications include attempt for each publish attempt. Discovery completion includes the resources count, even when zero. resource-discovered records appear in ARN order and include resources excluded from processing because of invalid or disabled groups.
+Action records cover starts, stops, and ECS configuration repairs. The summary reports counts of inspected resources, successful actions, and group/resource errors.
+
+Set LOG_LEVEL=debug to also emit debug records. Each operation's completion includes success and error on failure. Notifications include attempt for each publish attempt.
+
+Discovery completion includes the resources count, even when zero. resource-discovered records appear in ARN order and include resources excluded from processing because of invalid or disabled groups.
 
 The reason for resource-discovery-skipped is not-found or membership-tag-missing.
+
+### Resource state and action results
 
 Resource info records are emitted as processing progresses. Principal action-result fields are:
 
@@ -43,21 +59,19 @@ Resource info records are emitted as processing progresses. Principal action-res
 | resource_id / resource_arn | Target resource identifier / ARN |
 | desired | Desired state: running or stopped; empty for disabled |
 | action | Requested operation: start or stop |
-| observed | Common state for action decisions; null for disabled resources |
-| aws_state | Status read from AWS, or ECS task counts and scaling configuration |
+| observed | Decision state; null for disabled resources |
+| aws_state | AWS status or ECS task counts and scaling settings |
 | reason | Reason for leaving a resource unchanged or skipping it |
-| success | Whether the action request succeeded; does not indicate transition completion |
+| success | Whether the action request succeeded |
 | error | Action request error |
 
-observed classifies AWS observations as running, stopped, transitioning, or not-found. aws_state contains the underlying status or task counts and scaling configuration. Both reflect the values at the time of the decision. action-finished records the action request's outcome without reading state again for logging. Inspect the resulting state in the next cycle, with CLI show, or in the web console.
+observed classifies AWS observations as running, stopped, transitioning, or not-found. aws_state contains the underlying status or task counts and scaling configuration. Both reflect the values at the time of the decision.
+
+success indicates request acceptance rather than transition completion. action-finished records the action request's outcome without reading state again for logging. Inspect the resulting state in the next cycle, with CLI show, or in the web console.
 
 For resource-unchanged, reason=desired-state-matched means the observed state matches the desired state and no configuration repair is needed. For resource-skipped, reason is disabled, transitioning, or not-found.
 
 Identify the AWS service and resource type from resource_id or resource_arn.
-
-Logs provide the ongoing operational record; DynamoDB stores no operation or error history.
-
-A cycle that completes group reads and resource discovery emits summary after resource processing. A global read failure returns a Lambda error without summary. Individual group and resource failures do not fail the Lambda invocation, so inspect summary error counts as well.
 
 ## CloudWatch metrics
 
@@ -76,8 +90,8 @@ ReconcileErrors and ReconcileAborted can drive error detection. Provision CloudW
 
 ## SNS notifications
 
+Provision an SNS topic and subscriptions separately and grant sns:Publish to the reconciler. For variables, see [Runtime configuration](config.md#reconciler).
+
 NOTIFICATION_TOPIC_ARN enables notifications after successful starts, stops, or ECS configuration repairs. Success means the configuration request was accepted, not that tasks or instances completed their transitions.
 
 A failed publish is retried once in the same invocation. If that also fails, the failure is logged without reversing the successful operation. Error and recovery notifications are not sent. Overlap and retries can duplicate notifications; response loss can also cause missing notifications.
-
-Provision an SNS topic and subscriptions separately and grant sns:Publish to the reconciler. For variables, see [Runtime configuration](config.md#reconciler).

@@ -19,58 +19,23 @@ Provision resources according to their purposes:
 
 cheapskate does not provision these resources automatically. For deployment steps, see [Setup](setup.md).
 
-## Policy prerequisites
+## IAM permissions
 
-For IAM permission details, see [Policy prerequisites](iam.md#policy-prerequisites).
+Choose the permission scope for its configuration and policy examples.
 
-## Resources and conditions by action
-
-For IAM permission details, see [Resources and conditions by action](iam.md#resources-and-conditions-by-action).
-
-## Shared resource inspection
-
-For IAM permission details, see [Shared resource inspection](iam.md#shared-resource-inspection).
-
-## Reconciler permissions
-
-For IAM permission details, see [Reconciler permissions](iam.md#reconciler-permissions).
-
-### DynamoDB
-
-For IAM permission details, see [DynamoDB](iam.md#dynamodb).
-
-### RDS and EC2
-
-For IAM permission details, see [RDS and EC2](iam.md#rds-and-ec2).
-
-### ECS and Application Auto Scaling
-
-For IAM permission details, see [ECS and Application Auto Scaling](iam.md#ecs-and-application-auto-scaling).
-
-## CLI and web-console permissions
-
-For IAM permission details, see [CLI and web-console permissions](iam.md#cli-and-web-console-permissions).
-
-## Lambda logging
-
-For IAM permission details, see [Lambda logging](iam.md#lambda-logging).
-
-## Optional notification and encryption permissions
-
-For IAM permission details, see [Optional notification and encryption permissions](iam.md#optional-notification-and-encryption-permissions).
-
-### SNS notifications
-
-For IAM permission details, see [SNS notifications](iam.md#sns-notifications).
-
-### SNS encryption
-
-For IAM permission details, see [SNS encryption](iam.md#sns-encryption).
-
-### Starting instances with encrypted EBS volumes
-
-For IAM permission details, see [Starting instances with encrypted EBS volumes](iam.md#starting-instances-with-encrypted-ebs-volumes).
-
-## Execution-role trust and periodic invocation
-
-For IAM permission details, see [Execution-role trust and periodic invocation](iam.md#execution-role-trust-and-periodic-invocation).
+| Permission scope | Content |
+| --- | --- |
+| <a id="policy-prerequisites"></a>[Policy prerequisites](iam.md#policy-prerequisites) | Scope and placeholder values |
+| <a id="resources-and-conditions-by-action"></a>[Resources and conditions by action](iam.md#resources-and-conditions-by-action) | Actions, Resource, and Condition |
+| <a id="shared-resource-inspection"></a>[Shared resource inspection](iam.md#shared-resource-inspection) | Inspection for the reconciler and administration interfaces |
+| <a id="reconciler-permissions"></a>[Reconciler permissions](iam.md#reconciler-permissions) | Resource start and stop permissions |
+| <a id="dynamodb"></a>[DynamoDB](iam.md#dynamodb) | Reconciler Query access to the CONFIG partition |
+| <a id="rds-and-ec2"></a>[RDS and EC2](iam.md#rds-and-ec2) | Reconciler ARN and membership-tag conditions |
+| <a id="ecs-and-application-auto-scaling"></a>[ECS and Application Auto Scaling](iam.md#ecs-and-application-auto-scaling) | Existing scalable target updates and ARN lookup |
+| <a id="cli-and-web-console-permissions"></a>[CLI and web-console permissions](iam.md#cli-and-web-console-permissions) | Group configuration reads and writes |
+| <a id="lambda-logging"></a>[Lambda logging](iam.md#lambda-logging) | Log stream creation and delivery |
+| <a id="optional-notification-and-encryption-permissions"></a>[Optional notification and encryption permissions](iam.md#optional-notification-and-encryption-permissions) | Additional permissions for notifications and encryption |
+| <a id="sns-notifications"></a>[SNS notifications](iam.md#sns-notifications) | Publishing to the SNS topic |
+| <a id="sns-encryption"></a>[SNS encryption](iam.md#sns-encryption) | KMS permissions for encrypted topics |
+| <a id="starting-instances-with-encrypted-ebs-volumes"></a>[Starting instances with encrypted EBS volumes](iam.md#starting-instances-with-encrypted-ebs-volumes) | KMS grants for EBS volumes |
+| <a id="execution-role-trust-and-periodic-invocation"></a>[Execution-role trust and periodic invocation](iam.md#execution-role-trust-and-periodic-invocation) | Role trust and periodic invocation permissions |

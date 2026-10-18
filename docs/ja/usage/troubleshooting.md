@@ -4,7 +4,9 @@
 
 ## 最初に確認する情報
 
-CLI の show または Web コンソールで、グループ設定、リソースの所属タグ、および AWS の現在状態を確認する。状態取得のエラーはshow の JSON 出力の live_error で確認する。reconciler のログではsummary のエラー数と、該当する group-error・resource-error を確認する。確認方法は[ログ・メトリクス・通知](monitoring.md)を参照。
+CLI の show または Web コンソールで、グループ設定、リソースの所属タグ、および AWS の現在状態を確認する。状態取得のエラーは show の JSON 出力の live_error で確認する。
+
+reconciler のログでは summary のエラー数と、該当する group-error・resource-error を確認する。確認方法は[ログ・メトリクス・通知](monitoring.md)を参照。
 
 ## 設定保存のエラー
 
@@ -12,16 +14,20 @@ CLI の show または Web コンソールで、グループ設定、リソー�
 
 | 症状 | 確認と対処 |
 | --- | --- |
-| 不正なグループとして表示される | 未知属性、DynamoDB の属性型、cron の組、override 値、有効期限を確認 |
+| 不正なグループとして表示される | 属性と値の制約を確認（下記） |
 | 期限付き override を保存できない | 両方の cron を登録し、期限を未来に設定 |
 | 失効後にスケジュールを変更できない | clear-override で失効した override を解除するか、新しい override に置き換える |
 | override を解除できない | スケジュールを追加してから解除。代替手順は下記を参照 |
 | HTTP 409 または書き込み時の CLI 終了コード 2 | 再読み込みして設定を確認し、意図した変更を明示的に再実行 |
 | Web コンソールが HTTP 403 を返す | 転送される Host と ALLOWED_HOSTS、フォーム送信元の Origin を確認 |
 
+不正なグループでは、未知属性、DynamoDB の属性型、cron の組、override 値、有効期限を確認する。
+
 override だけのグループは別の override に置き換えるか、管理終了後に削除する。
 
-値と属性の制約は、[グループ設定](group_config.md)を参照。CLI と Web コンソールで修復できないアイテムはバックアップし、意図的に削除・再作成する。同名グループの削除・再作成と他の設定変更を同時に行わないこと。
+値と属性の制約は、[グループ設定](group_config.md)を参照。同名グループの削除・再作成と他の設定変更を同時に行わないこと。
+
+CLI と Web コンソールで修復できないアイテムはバックアップし、意図的に削除・再作成する。
 
 ## 起動・停止の未反映
 
@@ -45,13 +51,20 @@ ECS の設定と現在状態は別の値である。症状ごとの確認項目�
 
 | 症状 | 確認と対処 |
 | --- | --- |
-| 起動または設定修復がエラーになる | ecs_max_count の登録、タグ値の型、通常の上下限と起動台数の関係、グループ上限の超過を確認 |
-| タグの起動台数へ変わらない | cheapskate:desired-count は停止状態または上下限 0/0 からの起動時だけ適用 |
+| 起動または設定修復がエラーになる | 上限とタグの制約を確認（下記） |
+| タグの起動台数へ変わらない | 起動台数の適用条件を確認（下記） |
 | runningCount が desiredCount と異なる | タスクの起動・終了は非同期。AWS のイベントと後続サイクルを確認 |
 | Scheduled Scaling の再開時に台数が変わる | 通常の上下限を適用した結果、範囲外の desiredCount が調整されていないか確認 |
 | 上下限が通常のタグ値と異なる | 上下限管理モードの値を確認。モードごとの扱いは下記を参照 |
 | 停止中に一時停止を解除できない | グループ要求が stopped の間は ScheduledScalingSuspended=true を維持 |
 | Scheduled Scaling で 0 台にしても再起動する | 0 台を維持する時間帯は cheapskate の停止スケジュールまたは stopped override を使用 |
+
+起動または設定修復のエラーでは、ecs_max_count の登録、タグ値の型、通常の上下限と起動台数の関係、グループ上限の超過を確認する。
+
+起動台数タグ cheapskate:desired-count の適用は、次のいずれかを満たす起動時に限る。
+
+- desiredCount、runningCount、pendingCount がすべて 0
+- スケーリング上下限が 0/0
 
 cheapskate:scaling-bounds-mode=scheduled は Scheduled Scaling による上下限変更を維持する。タグの上下限を維持する場合は tags を指定する。
 
@@ -59,7 +72,15 @@ cheapskate:scaling-bounds-mode=scheduled は Scheduled Scaling による上下�
 
 ## サイクル全体の中断
 
-Lambda 呼び出しがエラーになり summary が出ない場合は、DynamoDB の読み込みまたはリソース検出のエラーを確認する。dynamodb:Query、tag:GetResources、および DB クラスタを検出する場合の rds:DescribeDBClusters の権限と到達性を確認する。ログに示された ARN の形式とクラスタ照合のエラーも確認する。resource ID による照会を含む参照権限は、[IAM の共通リソース参照権限](iam.md#共通のリソース参照権限)を参照。全体の読み込みに失敗したサイクルでは、個別リソースの変更は始まらない。
+Lambda 呼び出しがエラーになり summary が出ない場合は、DynamoDB の読み込みまたはリソース検出のエラーを確認する。全体の読み込みに失敗したサイクルでは、個別リソースの変更は始まらない。
+
+次の権限と到達性を確認する。
+
+- dynamodb:Query
+- tag:GetResources
+- rds:DescribeDBClusters（DB クラスタを検出する場合）
+
+ログに示された ARN の形式とクラスタ照合のエラーも確認する。resource ID による照会を含む参照権限は、[IAM の共通リソース参照権限](iam.md#共通のリソース参照権限)を参照。
 
 ## 通知・メトリクスの欠落
 

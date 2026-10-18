@@ -17,21 +17,29 @@ Every group requires a schedule, an override, or both. Supported combinations ar
 | Schedule and indefinite override | start_cron, stop_cron, override |
 | Schedule and timed override | start_cron, stop_cron, override, override_expires_at |
 
+### Cron and time zones
+
 Both cron expressions use five fields and must have reachable past and future occurrences. Searches are limited to 400 years in each direction. Time zones are not stored per group; the DEFAULT_TIMEZONE runtime setting applies.
 
 When an offset change repeats a local time, each occurrence is a candidate. Nonexistent local times do not fire. Start and stop occurrences are compared as absolute instants.
 
-override accepts running, stopped, or disabled. override_expires_at is an integer Unix timestamp in seconds, from 1 through 253402300799. New or updated configurations require an expiration in the future. For an indefinite override, omit the attribute; do not store zero or NULL.
+### Override values and expiration
+
+override accepts running, stopped, or disabled.
+
+override_expires_at is an integer Unix timestamp in seconds, from 1 through 253402300799. New or updated configurations require an expiration in the future. For an indefinite override, omit the attribute; do not store zero or NULL.
 
 A stored expiration at or before current time makes the override inactive. Attributes are not automatically deleted. Before changing configuration through the CLI or web console, clear an expired override or replace it with a new override.
 
 ## ECS capacity limit
 
-The DynamoDB attribute ecs_max_count validates the startup-count tag cheapskate:desired-count and normal-maximum tag cheapskate:scaling-max for each member ECS service. Register a positive int32 Number from 1 through 2147483647. Startup and running configuration updates require this value. Stopping does not apply this limit.
+The DynamoDB attribute ecs_max_count validates the startup-count tag cheapskate:desired-count and normal-maximum tag cheapskate:scaling-max for each member ECS service. The limit does not apply to the group's total task count. Scheduled Scaling bounds and current capacity also bypass this validation.
 
-The limit applies per service, not to the group's total task count. Scheduled Scaling bounds and current capacity do not pass through this validation.
+Register a positive int32 Number from 1 through 2147483647. Startup and running configuration updates require this value. Stopping does not apply this limit.
 
-A group used only for stopping, or containing only RDS, Aurora, and EC2 resources, can omit the attribute. Omit unused attributes rather than storing 0 or NULL. An invalid attribute type or value invalidates the entire group and prevents processing of all its resources, including stops.
+A group used only for stopping, or containing only RDS, Aurora, and EC2 resources, can omit the attribute. Omit unused attributes rather than storing 0 or NULL.
+
+An invalid attribute type or value invalidates the entire group and prevents processing of all its resources, including stops.
 
 Use the CLI ecs-max-count command to register or change the limit and clear-ecs-max-count to remove the attribute. Both require an existing group and preserve its schedule and override. The web console displays the value and retains it during schedule and override changes. For registration, changes, and removal, see [ECS service configuration](resources/ecs-service.md#dynamodb-and-cli).
 

@@ -15,26 +15,38 @@ Global options are:
 | Option | Short option | Default | Purpose |
 | --- | --- | --- | --- |
 | -config | None | CHEAPSKATE_CONFIG, then the OS-specific default path | CLI config file path |
-| -context | -c | Saved current context | Context for this invocation; does not change the saved selection |
-| -table | None | Selected context, then CHEAPSKATE_TABLE, then STATE_TABLE_NAME | DynamoDB table name |
+| -context | -c | Saved current context | Context for this invocation only |
+| -table | None | Selected context, then environment variables | DynamoDB table name |
 | -output | -o | text | text or json output |
 
-The selected context supplies AWS profile, region, and schedule time zone when configured. Otherwise, AWS credentials and region use AWS SDK configuration, and the time zone comes from DEFAULT_TIMEZONE, defaulting to UTC. Context settings take precedence over environment variables; -table overrides the context's table.
+The selected context supplies AWS profile and region when configured. Unset values use AWS SDK configuration.
+
+The selected context also supplies the schedule time zone. If unset, it uses DEFAULT_TIMEZONE, which defaults to UTC.
+
+Context settings take precedence over environment variables; -table overrides the context's table. Without a context table, the table name comes from CHEAPSKATE_TABLE, then STATE_TABLE_NAME. -context applies only to this invocation and does not change the saved selection.
 
 ## Contexts
 
-A context is a named set of connection settings. Contexts and the current selection are saved as JSON and reused on later invocations. Config commands operate locally without requiring AWS credentials or a table in the environment.
+A context is a named set of connection settings. Contexts and the current selection are saved as JSON and reused on later invocations.
+
+Config commands operate locally without requiring AWS credentials or a table in the environment.
+
+### Registering and selecting contexts
 
 The context commands are:
 
 | Command | Arguments | Behavior |
 | --- | --- | --- |
-| config set-context | NAME [options] | Create or update a context; omitted fields retain their saved values |
+| config set-context | NAME [options] | Create or update a context |
 | config use-context | NAME | Save the current selection; the context must exist |
-| config get-contexts | None | List contexts in name order; mark the current selection with * |
+| config get-contexts | None | List by name; mark current selection with * |
 | config current-context | None | Display the saved selection; fail if none is selected |
 
-New contexts require --table. Optional settings are the AWS shared config profile name, AWS region, and IANA schedule time zone. An empty optional value clears that setting. set-context does not change the current selection. Credentials remain in AWS SDK configuration; the CLI saves the profile name.
+New contexts require --table. Optional settings are the AWS shared config profile name, AWS region, and IANA schedule time zone. Omitted fields retain their saved values; an empty optional value clears that setting.
+
+set-context does not change the current selection. Use use-context to save the selection.
+
+Credentials remain in AWS SDK configuration; the CLI saves the profile name.
 
 The set-context options are:
 
@@ -44,6 +56,8 @@ The set-context options are:
 | --profile PROFILE | AWS shared configuration profile |
 | --region REGION | AWS region |
 | --timezone ZONE | IANA schedule time zone |
+
+Use the same schedule time zone as the reconciler and web console.
 
 To register and select a context, then temporarily use another context:
 
@@ -56,7 +70,9 @@ cheapskate-cli -context prod list
 cheapskate-cli config current-context
 ```
 
-The final command prints dev because -context applies only to that invocation. Use the same schedule time zone as the reconciler and web console.
+The final command prints dev because -context applies only to that invocation.
+
+### Configuration file
 
 The default file locations are:
 
@@ -67,7 +83,13 @@ The default file locations are:
 | macOS | ~/Library/Application Support/cheapskate/config.json |
 | Windows | %AppData%\cheapskate\config.json |
 
--config overrides CHEAPSKATE_CONFIG. A missing file means no saved contexts; it is created when saving a context or selection. Invalid files produce an error. The file contains current_context and a contexts object keyed by name; context fields are table, profile, region, and timezone.
+-config overrides CHEAPSKATE_CONFIG.
+
+A missing file means no saved contexts; it is created when saving a context or selection. Invalid files produce an error.
+
+The file contains current_context and a contexts object keyed by name; context fields are table, profile, region, and timezone.
+
+### JSON output from context commands
 
 With -output json, the context commands return:
 
@@ -93,23 +115,33 @@ Arguments, effects, and prerequisites are:
 | Command | Arguments | Behavior and prerequisites |
 | --- | --- | --- |
 | list | None | List group configuration |
-| show | --group NAME | Display group configuration, member tags, and current AWS state |
+| show | --group NAME | Display group settings, member tags, and AWS state |
 | schedule | --group NAME -start CRON -stop CRON | Create a group or update both cron attributes |
-| override | --group NAME running, stopped, or disabled [-for DURATION] | Set override; indefinite overrides can create groups; timed overrides require an existing schedule |
+| override | --group NAME running, stopped, or disabled [-for DURATION] | Set override |
 | clear-override | --group NAME | Remove override and expiration; requires a schedule |
-| ecs-max-count | --group NAME COUNT | Register or change ecs_max_count on an existing group; COUNT is an integer from 1 through 2147483647 |
+| ecs-max-count | --group NAME COUNT | Register or change ecs_max_count on an existing group |
 | clear-ecs-max-count | --group NAME | Remove the ecs_max_count attribute from an existing group |
 | remove | --group NAME | Delete the entire group item |
 
--for takes a positive duration such as 2h or 30m. Omitting it creates an indefinite override. The CLI does not create, tag, start, or stop AWS resources. Configuration changes take effect in later reconciler cycles.
+Indefinite overrides can create groups. Timed overrides require an existing schedule.
 
-The ecs-max-count command does not create groups; create one first with schedule or an indefinite override. The clear-ecs-max-count command removes the attribute instead of storing 0 and does not stop current resources. ECS startup and running configuration updates require registering a limit again. All DynamoDB group configuration fields can be registered through the CLI.
+-for takes a positive duration such as 2h or 30m. Omitting it creates an indefinite override.
+
+The CLI does not create, tag, start, or stop AWS resources. Configuration changes take effect in later reconciler cycles.
+
+COUNT for ecs-max-count is an integer from 1 through 2147483647. The command does not create groups; create one first with schedule or an indefinite override.
+
+The clear-ecs-max-count command removes the attribute instead of storing 0 and does not stop current resources. ECS startup and running configuration updates require registering a limit again.
+
+All DynamoDB group configuration fields can be registered through the CLI.
 
 For examples, see [Daily operations](operations.md) and [CLI group configuration examples](cli_records.md).
 
 ## Output formats
 
-Text list writes valid groups to stdout and invalid groups to stderr. JSON list writes one object containing groups and errors to stdout when the list read succeeds. Failure of the read itself is written to stderr.
+Text list writes valid groups to stdout and invalid groups to stderr.
+
+JSON list writes one object containing groups and errors to stdout when the list read succeeds. Failure of the read itself is written to stderr.
 
 JSON show contains group for saved group configuration and resources for the member resource array. Fields are:
 
@@ -134,17 +166,31 @@ Exit codes are:
 
 | Code | Meaning |
 | --- | --- |
-| 0 | Success; show may still contain individual resource inspection errors |
-| 1 | Arguments, proposed-configuration validation, AWS, DynamoDB, or internal failure |
+| 0 | Success; see show inspection errors below |
+| 1 | Command or service failure; see details below |
 | 2 | Invalid stored group or conditional-write conflict |
 
-List returns 2 if any group is invalid. Show returns 0 even when individual resource inspection fails; inspect live_error as well as exit status.
+Code 1 covers invalid arguments, proposed-configuration validation, AWS, DynamoDB, and internal failures.
+
+List returns 2 if any group is invalid.
+
+Show returns 0 even when individual resource inspection fails; inspect live_error as well as exit status.
 
 ## Updates and conflicts
 
-Schedule, override, clear-override, ecs-max-count, and clear-ecs-max-count validate the complete resulting group. Schedule preserves overrides and ECS limits. Override and clear-override preserve the schedule and ECS limit. The ecs-max-count command and clear-ecs-max-count change only the ECS limit, preserving schedules and overrides. Remove deletes a decodable item without validating cron expressions or cross-attribute constraints.
+Schedule, override, clear-override, ecs-max-count, and clear-ecs-max-count validate the complete resulting group. They preserve these attributes:
 
-Conditional-write conflicts are not retried automatically. Read again and explicitly repeat the intended change. Changes to different attributes preserve one another. Changes to the same attributes are not detected as conflicts; the last value applied by DynamoDB remains.
+| Command | Preserved attributes |
+| --- | --- |
+| schedule | Override and ECS limit |
+| override, clear-override | Schedule and ECS limit |
+| ecs-max-count, clear-ecs-max-count | Schedule and override |
+
+Remove deletes a decodable item without validating cron expressions or cross-attribute constraints.
+
+Conditional-write conflicts are not retried automatically. Read again and explicitly repeat the intended change.
+
+Changes to different attributes preserve one another. Changes to the same attributes are not detected as conflicts; the last value applied by DynamoDB remains.
 
 > [!WARNING]
 > Do not delete and recreate a group under the same name concurrently with another configuration change. Write conditions check attribute existence, so a stale request can change or delete the recreated group.

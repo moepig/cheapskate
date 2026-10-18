@@ -1,10 +1,18 @@
 # Terraform によるグループ設定
 
-本ドキュメントは、schedule、無期限 override、および期限付き override を持つグループアイテムを、Terraform で DynamoDB に登録する例を示す。
+本ドキュメントは Terraform でグループアイテムを DynamoDB に登録する例を示す。schedule、無期限 override、および期限付き override を持つグループを扱う。
 
 ## 前提
 
-既存の DynamoDB テーブル cheapskate を使用する。キーは String 型の pk と sk であり、TTL は設定しない。reconciler の DEFAULT_TIMEZONE は Asia/Tokyo とする。Lambda、定期呼び出し、およびリソースの所属タグは設定済みとする。準備の詳細は、[セットアップ](setup.md)を参照。
+以下の前提で登録する。
+
+- DynamoDB テーブル cheapskate は作成済み
+- キーは String 型の pk と sk
+- TTL は未設定
+- reconciler の DEFAULT_TIMEZONE は Asia/Tokyo
+- Lambda、定期呼び出し、リソースの所属タグは設定済み
+
+準備の詳細は[セットアップ](setup.md)を参照。
 
 Terraform はアイテムを直接書き込むため、CLI のグループ検証と条件付き書き込みを実行しない。以下の例では Terraform だけで対象アイテムを変更し、CLI と Web コンソールは参照に使用する。
 
@@ -13,7 +21,7 @@ Terraform はアイテムを直接書き込むため、CLI のグループ検証
 
 ## 登録例
 
-以下の main.tf は、未登録の 5 グループのアイテムを作成する。dev-extended は、dev と独立した期限付き override の例である。各グループで制御するリソースには、cheapskate:group=<グループ名> タグを付けること。
+以下の main.tf は未登録の 5 グループのアイテムを作成する。dev-extended は dev と独立した期限付き override の例である。各グループで制御するリソースには、cheapskate:group=<グループ名> タグを付けること。
 
 ```hcl
 terraform {
@@ -90,9 +98,11 @@ resource "aws_dynamodb_table_item" "group" {
 }
 ```
 
-item は DynamoDB の属性型を含む JSON で指定する。Number 型も N の値には文字列を渡す。Terraform の引数の詳細は、[aws_dynamodb_table_item](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/dynamodb_table_item)および[aws_dynamodb_table データソース](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/dynamodb_table)を参照。
+item は DynamoDB の属性型を含む JSON で指定する。Number 型も N の値には文字列を渡す。Terraform の引数の詳細は[aws_dynamodb_table_item](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/dynamodb_table_item)および[aws_dynamodb_table データソース](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/dynamodb_table)を参照。
 
-ecs_max_count は、所属する各 ECS service の cheapskate:desired-count と cheapskate:scaling-max のタグ値の上限である。ECS を起動するグループには、タグで指定する台数以上の正の int32 を登録する必要がある。この例では、起動する 3 グループに上限 4 を設定する。未登録またはタグ値の超過は起動エラーとなる。上限はグループ全体の合計台数には適用しない。
+ecs_max_count は所属する各 ECS service の cheapskate:desired-count と cheapskate:scaling-max のタグ値の上限である。グループ全体の合計台数には適用しない。
+
+ECS を起動するグループには、タグで指定する台数以上の正の int32 を登録する必要がある。この例では、起動する 3 グループに上限 4 を設定する。未登録またはタグ値の超過は起動エラーとなる。
 
 登録するアイテムと設定の対応を、以下に示す。すべて pk=CONFIG である。
 
@@ -106,7 +116,7 @@ ecs_max_count は、所属する各 ECS service の cheapskate:desired-count と
 
 ## 適用と確認
 
-override の有効期限は、適用時点より未来の Unix time 秒を terraform.tfvars に指定する。2026-09-14 20:00:00 日本時間の記述例を示す。実際の適用時には目的の日時に置き換えること。
+override の有効期限は適用時点より未来の Unix time 秒を terraform.tfvars に指定する。2026-09-14 20:00:00 日本時間の記述例を示す。実際の適用時には目的の日時に置き換えること。
 
 ```hcl
 override_expires_at = 1789383600
@@ -122,6 +132,8 @@ terraform plan -out=tfplan
 terraform apply tfplan
 ```
 
+apply は設定の登録で完了する。AWS の起動・停止はその設定を読んだ reconciler のサイクルで行う。
+
 CLI で保存された設定と AWS の現在状態を確認する例を、以下に示す。
 
 ```sh
@@ -131,18 +143,24 @@ cheapskate-cli -table cheapskate -output json list
 cheapskate-cli -table cheapskate -output json show --group dev-extended
 ```
 
-apply は設定の登録で完了する。AWS の起動・停止は、その設定を読んだ reconciler のサイクルで行う。反映のタイミングとリソースごとの動作は、[起動・停止の挙動](resource_flow.md)を参照。
+反映のタイミングとリソースごとの動作は、[起動・停止の挙動](resource_flow.md)を参照。
 
 ## 設定変更と削除
 
-アイテムの変更時にも、グループとして有効な属性の組み合わせを維持する必要がある。変更方法と制約は、次のとおりである。
+アイテムの変更時にも、グループとして有効な属性の組み合わせを維持する必要がある。
 
-- schedule は start_cron と stop_cron を必ず対で指定する。
-- 無期限 override は override_expires_at を省略する。0 や NULL は保存しない。
-- 期限付き override は schedule と組み合わせる。stopped と disabled も指定できる。
-- schedule と無期限 override の併用は、dev-extended から override_expires_at を省いた形で登録する。
-- override の解除は、schedule を残して override と override_expires_at を削除し、apply する。
-- 失効済みの override 属性は自動削除されない。Terraform にも残っていれば、その後の apply でも失効時刻は変わらない。
-- グループを local.groups から削除して apply すると、対応するアイテムが削除される。所属する AWS リソースは削除・停止されない。
+| 設定 | 必須・省略する属性 |
+| --- | --- |
+| schedule | start_cron と stop_cron を対で指定 |
+| 無期限 override | override_expires_at を省略 |
+| 期限付き override | schedule と override_expires_at を指定 |
+
+無期限 override では、有効期限に 0 や NULL を保存しない。schedule と併用する場合は、dev-extended から override_expires_at を省いた形で登録する。期限付き override は stopped と disabled にも指定できる。
+
+override を解除するには、schedule を残して override と override_expires_at を削除し、apply する。
+
+失効済みの override 属性は自動削除されない。Terraform にも残っていれば、その後の apply でも失効時刻は変わらない。
+
+グループを local.groups から削除して apply すると、対応するアイテムが削除される。所属する AWS リソースは削除・停止されない。
 
 グループ名、cron、属性型などの制約は、[グループ設定](group_config.md)を参照。管理を終了する場合は、[管理の終了](operations.md#管理の終了)に従い、設定変更とグループ削除を Terraform で行う。

@@ -1,10 +1,12 @@
 # ECS の起動・停止とスケーリング
 
-本ドキュメントはREPLICA の ECS service を必要な時間帯に稼働させ、稼働中のスケーリング上下限を管理する機能の目的と動作を説明する。
+本ドキュメントは REPLICA の ECS service を必要な時間帯に稼働させ、稼働中のスケーリング上下限を管理する機能の目的と動作を説明する。
 
 ## 機能の目的と管理範囲
 
-cheapskate はグループのスケジュールと override に従って ECS service を起動・停止する。稼働中は負荷に応じた台数変更を許容し、起動時の台数に固定し続けない。AWS Application Auto Scaling の Scheduled Scaling は、稼働中の上下限を時刻に応じて変えるために併用できる。グループの start_cron・stop_cron は稼働時間帯、AWS の scheduled action はスケーリング上下限を管理する。
+cheapskate はグループのスケジュールと override に従って ECS service を起動・停止する。稼働中は負荷に応じた台数変更を許容し、起動時の台数に固定し続けない。
+
+AWS Application Auto Scaling の Scheduled Scaling は、稼働中の上下限を時刻に応じて変えるために併用できる。グループの start_cron・stop_cron は稼働時間帯、AWS の scheduled action はスケーリング上下限を管理する。
 
 タグの上下限を常に維持する運用と、Scheduled Scaling に上下限の変更を委ねる運用を選ぶため、cheapskate:scaling-bounds-mode を設定する。Scheduled Scaling の一時停止状態は、この管理モードに応じて制御する。
 
@@ -141,22 +143,10 @@ flowchart TD
 
 ## 設定と現在状態の具体例
 
-### 停止状態からの起動と途中失敗
+設定値と観測状態の対応を、次の場面別に確認できる。
 
-詳細な設定値と状態の推移は、[ECS の設定と現在状態の具体例](ecs_examples.md#停止状態からの起動と途中失敗)を参照。
-
-### 稼働中の固定範囲からのタグ変更
-
-詳細な設定値と状態の推移は、[ECS の設定と現在状態の具体例](ecs_examples.md#稼働中の固定範囲からのタグ変更)を参照。
-
-### 一時停止解除時の範囲外台数
-
-詳細な設定値と状態の推移は、[ECS の設定と現在状態の具体例](ecs_examples.md#一時停止解除時の範囲外台数)を参照。
-
-### 最後の応答消失後の Scheduled Scaling
-
-詳細な設定値と状態の推移は、[ECS の設定と現在状態の具体例](ecs_examples.md#最後の応答消失後の-scheduled-scaling)を参照。
-
-### 起動途中からの停止要求
-
-詳細な設定値と状態の推移は、[ECS の設定と現在状態の具体例](ecs_examples.md#起動途中からの停止要求)を参照。
+- <a id="停止状態からの起動と途中失敗"></a>[停止状態からの起動と途中失敗](ecs_examples.md#停止状態からの起動と途中失敗)
+- <a id="稼働中の固定範囲からのタグ変更"></a>[稼働中の固定範囲からのタグ変更](ecs_examples.md#稼働中の固定範囲からのタグ変更)
+- <a id="一時停止解除時の範囲外台数"></a>[一時停止解除時の範囲外台数](ecs_examples.md#一時停止解除時の範囲外台数)
+- <a id="最後の応答消失後の-scheduled-scaling"></a>[最後の応答消失後の Scheduled Scaling](ecs_examples.md#最後の応答消失後の-scheduled-scaling)
+- <a id="起動途中からの停止要求"></a>[起動途中からの停止要求](ecs_examples.md#起動途中からの停止要求)

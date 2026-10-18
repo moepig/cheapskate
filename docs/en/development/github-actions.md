@@ -8,19 +8,25 @@ The definition files under `.github/` and their roles are collected below.
 
 | Path | Trigger | Role |
 |---|---|---|
-| `workflows/ci.yml` | push to `main`, pull request | Calls `test.yml`, and snapshots the release path when that path changed |
-| `workflows/test.yml` | Called by `ci.yml` and `release.yml` | lint, unit, integration, image tests, `goreleaser check` |
-| `workflows/release.yml` | push of a `v*` Git tag | Calls `test.yml`, after which goreleaser publishes the GitHub release and the images |
-| `workflows/dependabot-auto-merge.yml` | pull request | Queues Dependabot's patch and minor updates for auto-merge |
-| `dependabot.yml` | weekly | Go modules, Actions, and Docker base images, grouped and held back by a 7-day cooldown |
+| `workflows/ci.yml` | push to `main`, pull request | Tests and release snapshots |
+| `workflows/test.yml` | Called by `ci.yml` and `release.yml` | lint, unit/integration/image tests, `goreleaser check` |
+| `workflows/release.yml` | push of a `v*` Git tag | Tests, then publishes the release and images |
+| `workflows/dependabot-auto-merge.yml` | pull request | Enables auto-merge for Dependabot patch/minor updates |
+| `dependabot.yml` | weekly | Go module, Action, and Docker base-image updates |
 
-`test.yml` has no trigger of its own (`workflow_call`). A release therefore runs the same checks a pull request does, against the tagged commit. The release job declares `needs: test`, so if any of them fails, no release is created for that tag and nothing is pushed to GHCR.
+Dependency updates are grouped and use a 7-day cooldown after publication.
 
-Every job runs on ubuntu-latest. Jobs that set up Go take its version from go.mod. The integration and image tests need no credentials: both the emulator and the Runtime Interface Emulator run on the runner's docker daemon.
+Every job runs on ubuntu-latest. Jobs that set up Go take its version from go.mod.
+
+Integration and image tests need no AWS credentials. Both the emulator and the Runtime Interface Emulator run on the runner's Docker daemon.
 
 ## Composition
 
-Drawing the call relationships from trigger to published artifact gives the following diagram.
+CI and releases share `test.yml`, which runs only through `workflow_call`. A release therefore runs the same checks as a pull request against the tagged commit.
+
+The release job declares `needs: test`. If any check fails, no release is created for that tag and nothing is pushed to GHCR.
+
+The following diagram shows calls from triggers through to artifact publication.
 
 ```mermaid
 flowchart LR
@@ -44,23 +50,29 @@ flowchart LR
 
 ## The release snapshot
 
-`goreleaser check` validates the configuration but never builds, so it cannot see a broken `build/Dockerfile.*`. Only a snapshot does: it cross-compiles every target, assembles both images, and pushes nothing. It has to be `--snapshot` rather than `--skip=publish`, because dockers_v2 builds and pushes in one step and skipping publication skips the image build with it.
+`--snapshot` cross-compiles every target and assembles both images without pushing them. It tests builds with `build/Dockerfile.*`, which `goreleaser check` cannot verify because it only validates configuration.
 
-The snapshot build runs only on pull requests changing .goreleaser.yaml, build/, the root Dockerfile, go.mod, or go.sum. Pushes to main skip the build. The job itself always runs: filtering it away with `on.paths` would leave a required check that never reports, and a pull request waiting on it forever. Instead the job reports either way and skips only its expensive steps.
+Use `--snapshot` rather than `--skip=publish` to build the images. dockers_v2 builds and pushes in one step, so skipping publication also skips the image build.
 
-The gap this leaves is a Go change that compiles on linux but not on the CLI's release platforms. `make lint` cross-compiles the CLI for darwin and windows, which closes it on every pull request and takes seconds with a warm build cache.
+The snapshot build runs only on pull requests changing .goreleaser.yaml, build/, the root Dockerfile, go.mod, or go.sum. Pushes to main skip the build.
+
+The `release-snapshot` job always runs and reports a result. Filtering it out with `on.paths` would leave a required check without a result, preventing the pull request from merging. The job therefore skips build steps through an internal condition.
+
+`make lint` cross-compiles the CLI for darwin and windows on every pull request. This detects Go changes that compile on linux but fail on the CLI's release platforms. With a populated build cache, this takes seconds.
 
 ## Check names
 
 `ci.yml` reaches most of its jobs through a reusable workflow, so those check names carry both levels: `test / lint`, `test / unit`, `test / integration`, `test / image`, and `test / goreleaser`. `release-snapshot` is a job of `ci.yml` itself and appears under that name.
 
-Branch protection selects the required checks by these names, and whether Dependabot's auto-merge passes through a gate depends on which of them are selected. For what auto-merge needs from its side, see the auto-merge section in [release.md](release.md).
+Branch protection selects required checks by these names. Dependabot's auto-merge waits for those checks only when they are required. For the repository settings, see the auto-merge section in [Releases and dependency updates](release.md).
 
 ## Token permissions
 
-Every workflow declares GITHUB_TOKEN permissions with `permissions: contents: read` at the top and raises them only in the jobs that need them, so write access exists only while it is needed. The release job holds `contents: write` and `packages: write`, and the auto-merge job holds `contents: write` and `pull-requests: write`.
+Every workflow declares default GITHUB_TOKEN permissions with `permissions: contents: read`. Jobs that need write access add permissions at job level.
 
-The auto-merge job runs only when the pull request author is dependabot[bot]. It passes GITHUB_TOKEN to fetch-metadata and gh pr merge and requests write permissions at job level.
+The release job holds `contents: write` and `packages: write`, and the auto-merge job holds `contents: write` and `pull-requests: write`.
+
+The auto-merge job runs only when the pull request author is dependabot[bot]. It passes GITHUB_TOKEN to fetch-metadata and gh pr merge.
 
 ## Pinning actions by SHA
 
@@ -70,21 +82,33 @@ Every action is pinned to a full commit SHA rather than a tag, with the correspo
 - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 ```
 
-A tag is a mutable reference. Anyone with admin rights on an action's repository can repoint `v7` at different code, and every workflow referring to it picks that up on its next run with nothing changing here. A SHA cannot be repointed. The difference matters most for the release workflow, which holds `contents: write` and `packages: write`, and for the auto-merge workflow, which holds write access and merges with nobody in the loop.
+A tag is a mutable reference. Anyone with admin rights on an action's repository can repoint `v7` at different code. Workflows using that tag then execute the changed code on the next run without a change in this repository. A commit SHA cannot be repointed.
 
-The trailing comment is Dependabot's input: it reads the comment, updates the SHA when a new version appears, and rewrites the comment. A pin therefore does not go stale. The exception is `uses: ./.github/workflows/test.yml`, since a local reusable workflow resolves against the running commit and there is nothing to pin.
+SHA pinning fixes the code executed by jobs with write access. This includes the release job, which holds `contents: write` and `packages: write`, and the auto-merge job, which enables merging without human review.
+
+Dependabot uses the trailing version comment to identify updates. When a new version appears, it updates both the SHA and the comment.
+
+`uses: ./.github/workflows/test.yml` is excluded from SHA pinning because local reusable workflows resolve against the running commit.
 
 ## Changes whose effects go unnoticed
 
-The changes to a workflow that leave the run succeeding while quietly losing its effect are collected below.
+The following table lists effects to check when changing workflows. A successful run does not establish that required-check settings or action references still match the intended configuration.
 
-| Change | What follows |
-|---|---|
-| Reverting an action reference from a SHA to a tag | The reference becomes mutable again and can be repointed at different code with nothing landing in this repository |
-| Renaming a job in `test.yml` | Branch protection selects required checks by name, so the renamed job stops being required and the merge gate opens without any failure showing |
-| Adding a job to `test.yml` | `release.yml` calls the same workflow, so a release takes the same extra time |
-| Removing `cooldown` from `dependabot.yml` | Versions published moments ago become eligible and reach `main` through auto-merge without review |
-| Filtering `release-snapshot` with `on.paths` instead of the internal condition | The check stops reporting on pull requests that do not match, and a pull request requiring it waits forever on a result that never arrives |
+| Change | Effect |
+| --- | --- |
+| Change an action SHA to a tag | Executed code can change without a local change |
+| Rename a job in `test.yml` | Its name no longer matches required-check settings |
+| Add a job to `test.yml` | The same test time is added to releases |
+| Remove `cooldown` from `dependabot.yml` | The wait before proposing updates becomes shorter |
+| Filter `release-snapshot` with `on.paths` | Nonmatching pull requests receive no result |
+
+Changing a SHA to a tag allows different code to run without a change in this repository. For the reason for pinning, see Pinning actions by SHA.
+
+Renaming a job also requires updating the required-check settings in branch protection. Without a matching name, successful completion of the renamed job is no longer a merge requirement.
+
+Removing cooldown makes newly published versions eligible for updates that can be auto-merged without human review. For the waiting period and auto-merge conditions, see [Releases and dependency updates](release.md).
+
+If a check filtered out by `on.paths` is required, the pull request waits for a result that is never reported. For the job structure that always reports a result, see The release snapshot.
 
 ## Files outside `.github/`
 

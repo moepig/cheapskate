@@ -6,23 +6,31 @@ This page describes the IAM permissions for the cheapskate reconciler, CLI, and 
 
 The examples are identity policies for roles that manage existing resources in one account and Region. Use deployment permissions to provision resources, publish images, and assign tags.
 
-Replace PARTITION, REGION, and ACCOUNT with deployment values. The standard AWS partition is aws. TABLE is STATE_TABLE_NAME; GROUP is an allowed membership tag value. DB_INSTANCE, DB_CLUSTER, CLUSTER, SERVICE, and INSTANCE_ID are actual resource identifiers. SCALABLE_TARGET_ID is the suffix of an existing scalable target ARN. Replace FUNCTION_NAME and TOPIC with the Lambda function name and notification topic name.
+Replace PARTITION, REGION, and ACCOUNT with deployment values. The standard AWS partition is aws.
 
-Enumerate the target ARNs in the IAM policy's Resource, using an array for multiple resources. Enumerate allowed group names in the membership tag's StringEquals condition. Statements with a membership tag condition stop allowing access when the tag is removed or changed to an unlisted group, even if the ARN still matches. Use separate statements when different groups must be restricted to different ARNs.
+TABLE is STATE_TABLE_NAME; GROUP is an allowed membership tag value.
 
-Combine permissions by role as follows. Each complete JSON policy can be attached separately. Add examples containing a single statement to the appropriate role policy's Statement array.
+DB_INSTANCE, DB_CLUSTER, CLUSTER, SERVICE, and INSTANCE_ID are actual resource identifiers. SCALABLE_TARGET_ID is the suffix of an existing scalable target ARN.
 
-| Role | Permission categories |
-| --- | --- |
-| Reconciler | Shared, reconciler, logging, optional features |
-| CLI | Configuration; shared inspection when needed |
-| Web console | Configuration, shared inspection, optional logging |
+Replace FUNCTION_NAME and TOPIC with the Lambda function name and notification topic name.
 
-Attach shared resource inspection and reconciler permissions to the reconciler. Each Lambda also needs permission to deliver its logs. Add notification or encryption permissions only when those features are used.
+Enumerate the target ARNs in the IAM policy's Resource, using an array for multiple resources. Enumerate allowed group names in the membership tag's StringEquals condition. Statements with a membership tag condition stop allowing access when the tag is removed or changed to an unlisted group, even if the ARN still matches.
 
-Give the CLI the CLI and web-console permissions. Add shared resource inspection when show displays resource state.
+Use separate statements when different groups must be restricted to different ARNs.
 
-Give the web console the CLI and web-console permissions and shared resource inspection. When hosted on Lambda, also grant logging permissions for that function.
+Combine permissions by role as follows:
+
+| Permission | Role | When required |
+| --- | --- | --- |
+| [Shared resource inspection](#shared-resource-inspection) | Reconciler and web console | Always |
+| [Shared resource inspection](#shared-resource-inspection) | CLI | When show displays resource state |
+| [Configuration access](#cli-and-web-console-permissions) | CLI and web console | Always |
+| [Configuration reads and resource updates](#reconciler-permissions) | Reconciler | Always |
+| [Log delivery](#lambda-logging) | Each Lambda | Grant for its own function |
+| [SNS notifications](#sns-notifications) | Reconciler | When notifications are enabled |
+| [Encryption](#optional-notification-and-encryption-permissions) | Reconciler | When a feature uses encryption |
+
+Each complete JSON policy can be attached separately. Add examples containing a single statement to the appropriate role policy's Statement array.
 
 Remove actions and statements for resource types that are not managed. ECS inspection requires DescribeScalableTargets even when a service has no scalable target. RegisterScalableTarget is needed only to update existing targets.
 
@@ -34,53 +42,28 @@ The table maps runtime actions to the restrictions used here. Resource shows the
 
 | Service | IAM action | Resource portion of the ARN | Condition or restriction |
 | --- | --- | --- | --- |
-| DynamoDB | dynamodb:Query | table/TABLE | dynamodb:LeadingKeys=CONFIG |
-| DynamoDB | dynamodb:GetItem | table/TABLE | dynamodb:LeadingKeys=CONFIG |
-| DynamoDB | dynamodb:PutItem | table/TABLE | dynamodb:LeadingKeys=CONFIG |
-| DynamoDB | dynamodb:UpdateItem | table/TABLE | dynamodb:LeadingKeys=CONFIG |
-| DynamoDB | dynamodb:DeleteItem | table/TABLE | dynamodb:LeadingKeys=CONFIG |
-| Resource Groups Tagging API | tag:GetResources | * | aws:RequestedRegion |
-| RDS DB instance | rds:DescribeDBInstances | db:DB_INSTANCE | aws:ResourceTag/cheapskate:group |
-| RDS DB instance | rds:StartDBInstance | db:DB_INSTANCE | aws:ResourceTag/cheapskate:group |
-| RDS DB instance | rds:StopDBInstance | db:DB_INSTANCE | aws:ResourceTag/cheapskate:group |
-| RDS DB cluster inspection | rds:DescribeDBClusters | * | aws:RequestedRegion |
-| RDS DB cluster operations | rds:StartDBCluster | cluster:DB_CLUSTER | aws:ResourceTag/cheapskate:group |
-| RDS DB cluster operations | rds:StopDBCluster | cluster:DB_CLUSTER | aws:ResourceTag/cheapskate:group |
-| ECS | ecs:DescribeServices | service/CLUSTER/SERVICE | aws:ResourceTag/cheapskate:group |
-| ECS | ecs:UpdateService | service/CLUSTER/SERVICE | aws:ResourceTag/cheapskate:group |
-| Application Auto Scaling | application-autoscaling:DescribeScalableTargets | * | aws:RequestedRegion |
-| Application Auto Scaling | application-autoscaling:RegisterScalableTarget | scalable-target/SCALABLE_TARGET_ID | Exact scalable target ARN |
-| EC2 | ec2:DescribeInstances | * | aws:RequestedRegion |
-| EC2 | ec2:StartInstances | instance/INSTANCE_ID | aws:ResourceTag/cheapskate:group |
-| EC2 | ec2:StopInstances | instance/INSTANCE_ID | aws:ResourceTag/cheapskate:group |
-| SNS | sns:Publish | TOPIC | Exact topic ARN |
-| CloudWatch Logs | logs:CreateLogStream | log-group:/aws/lambda/FUNCTION_NAME:log-stream:* | Exact log group in Resource |
-| CloudWatch Logs | logs:PutLogEvents | log-group:/aws/lambda/FUNCTION_NAME:log-stream:* | Exact log group in Resource |
-
-Official references for the actions are listed below.
-
-- [dynamodb:Query](https://docs.aws.amazon.com/service-authorization/latest/reference/list_dynamodb.html#list_dynamodb-action-Query)
-- [dynamodb:GetItem](https://docs.aws.amazon.com/service-authorization/latest/reference/list_dynamodb.html#list_dynamodb-action-GetItem)
-- [dynamodb:PutItem](https://docs.aws.amazon.com/service-authorization/latest/reference/list_dynamodb.html#list_dynamodb-action-PutItem)
-- [dynamodb:UpdateItem](https://docs.aws.amazon.com/service-authorization/latest/reference/list_dynamodb.html#list_dynamodb-action-UpdateItem)
-- [dynamodb:DeleteItem](https://docs.aws.amazon.com/service-authorization/latest/reference/list_dynamodb.html#list_dynamodb-action-DeleteItem)
-- [tag:GetResources](https://docs.aws.amazon.com/service-authorization/latest/reference/list_resourcegroupstaggingapi.html#list_resourcegroupstaggingapi-action-GetResources)
-- [rds:DescribeDBInstances](https://docs.aws.amazon.com/service-authorization/latest/reference/list_rds.html#list_rds-action-DescribeDBInstances)
-- [rds:StartDBInstance](https://docs.aws.amazon.com/service-authorization/latest/reference/list_rds.html#list_rds-action-StartDBInstance)
-- [rds:StopDBInstance](https://docs.aws.amazon.com/service-authorization/latest/reference/list_rds.html#list_rds-action-StopDBInstance)
-- [rds:DescribeDBClusters](https://docs.aws.amazon.com/service-authorization/latest/reference/list_rds.html#list_rds-action-DescribeDBClusters)
-- [rds:StartDBCluster](https://docs.aws.amazon.com/service-authorization/latest/reference/list_rds.html#list_rds-action-StartDBCluster)
-- [rds:StopDBCluster](https://docs.aws.amazon.com/service-authorization/latest/reference/list_rds.html#list_rds-action-StopDBCluster)
-- [ecs:DescribeServices](https://docs.aws.amazon.com/service-authorization/latest/reference/list_ecs.html#list_ecs-action-DescribeServices)
-- [ecs:UpdateService](https://docs.aws.amazon.com/service-authorization/latest/reference/list_ecs.html#list_ecs-action-UpdateService)
-- [application-autoscaling:DescribeScalableTargets](https://docs.aws.amazon.com/service-authorization/latest/reference/list_application-autoscaling.html#list_application-autoscaling-action-DescribeScalableTargets)
-- [application-autoscaling:RegisterScalableTarget](https://docs.aws.amazon.com/service-authorization/latest/reference/list_application-autoscaling.html#list_application-autoscaling-action-RegisterScalableTarget)
-- [ec2:DescribeInstances](https://docs.aws.amazon.com/service-authorization/latest/reference/list_ec2.html#list_ec2-action-DescribeInstances)
-- [ec2:StartInstances](https://docs.aws.amazon.com/service-authorization/latest/reference/list_ec2.html#list_ec2-action-StartInstances)
-- [ec2:StopInstances](https://docs.aws.amazon.com/service-authorization/latest/reference/list_ec2.html#list_ec2-action-StopInstances)
-- [sns:Publish](https://docs.aws.amazon.com/service-authorization/latest/reference/list_sns.html#list_sns-action-Publish)
-- [logs:CreateLogStream](https://docs.aws.amazon.com/service-authorization/latest/reference/list_logs.html#list_logs-action-CreateLogStream)
-- [logs:PutLogEvents](https://docs.aws.amazon.com/service-authorization/latest/reference/list_logs.html#list_logs-action-PutLogEvents)
+| DynamoDB | [dynamodb:Query](https://docs.aws.amazon.com/service-authorization/latest/reference/list_dynamodb.html#list_dynamodb-action-Query) | table/TABLE | dynamodb:LeadingKeys=CONFIG |
+| DynamoDB | [dynamodb:GetItem](https://docs.aws.amazon.com/service-authorization/latest/reference/list_dynamodb.html#list_dynamodb-action-GetItem) | table/TABLE | dynamodb:LeadingKeys=CONFIG |
+| DynamoDB | [dynamodb:PutItem](https://docs.aws.amazon.com/service-authorization/latest/reference/list_dynamodb.html#list_dynamodb-action-PutItem) | table/TABLE | dynamodb:LeadingKeys=CONFIG |
+| DynamoDB | [dynamodb:UpdateItem](https://docs.aws.amazon.com/service-authorization/latest/reference/list_dynamodb.html#list_dynamodb-action-UpdateItem) | table/TABLE | dynamodb:LeadingKeys=CONFIG |
+| DynamoDB | [dynamodb:DeleteItem](https://docs.aws.amazon.com/service-authorization/latest/reference/list_dynamodb.html#list_dynamodb-action-DeleteItem) | table/TABLE | dynamodb:LeadingKeys=CONFIG |
+| Resource Groups Tagging API | [tag:GetResources](https://docs.aws.amazon.com/service-authorization/latest/reference/list_resourcegroupstaggingapi.html#list_resourcegroupstaggingapi-action-GetResources) | * | aws:RequestedRegion |
+| RDS DB instance | [rds:DescribeDBInstances](https://docs.aws.amazon.com/service-authorization/latest/reference/list_rds.html#list_rds-action-DescribeDBInstances) | db:DB_INSTANCE | aws:ResourceTag/cheapskate:group |
+| RDS DB instance | [rds:StartDBInstance](https://docs.aws.amazon.com/service-authorization/latest/reference/list_rds.html#list_rds-action-StartDBInstance) | db:DB_INSTANCE | aws:ResourceTag/cheapskate:group |
+| RDS DB instance | [rds:StopDBInstance](https://docs.aws.amazon.com/service-authorization/latest/reference/list_rds.html#list_rds-action-StopDBInstance) | db:DB_INSTANCE | aws:ResourceTag/cheapskate:group |
+| RDS DB cluster inspection | [rds:DescribeDBClusters](https://docs.aws.amazon.com/service-authorization/latest/reference/list_rds.html#list_rds-action-DescribeDBClusters) | * | aws:RequestedRegion |
+| RDS DB cluster operations | [rds:StartDBCluster](https://docs.aws.amazon.com/service-authorization/latest/reference/list_rds.html#list_rds-action-StartDBCluster) | cluster:DB_CLUSTER | aws:ResourceTag/cheapskate:group |
+| RDS DB cluster operations | [rds:StopDBCluster](https://docs.aws.amazon.com/service-authorization/latest/reference/list_rds.html#list_rds-action-StopDBCluster) | cluster:DB_CLUSTER | aws:ResourceTag/cheapskate:group |
+| ECS | [ecs:DescribeServices](https://docs.aws.amazon.com/service-authorization/latest/reference/list_ecs.html#list_ecs-action-DescribeServices) | service/CLUSTER/SERVICE | aws:ResourceTag/cheapskate:group |
+| ECS | [ecs:UpdateService](https://docs.aws.amazon.com/service-authorization/latest/reference/list_ecs.html#list_ecs-action-UpdateService) | service/CLUSTER/SERVICE | aws:ResourceTag/cheapskate:group |
+| Application Auto Scaling | [application-autoscaling:DescribeScalableTargets](https://docs.aws.amazon.com/service-authorization/latest/reference/list_application-autoscaling.html#list_application-autoscaling-action-DescribeScalableTargets) | * | aws:RequestedRegion |
+| Application Auto Scaling | [application-autoscaling:RegisterScalableTarget](https://docs.aws.amazon.com/service-authorization/latest/reference/list_application-autoscaling.html#list_application-autoscaling-action-RegisterScalableTarget) | scalable-target/SCALABLE_TARGET_ID | Exact scalable target ARN |
+| EC2 | [ec2:DescribeInstances](https://docs.aws.amazon.com/service-authorization/latest/reference/list_ec2.html#list_ec2-action-DescribeInstances) | * | aws:RequestedRegion |
+| EC2 | [ec2:StartInstances](https://docs.aws.amazon.com/service-authorization/latest/reference/list_ec2.html#list_ec2-action-StartInstances) | instance/INSTANCE_ID | aws:ResourceTag/cheapskate:group |
+| EC2 | [ec2:StopInstances](https://docs.aws.amazon.com/service-authorization/latest/reference/list_ec2.html#list_ec2-action-StopInstances) | instance/INSTANCE_ID | aws:ResourceTag/cheapskate:group |
+| SNS | [sns:Publish](https://docs.aws.amazon.com/service-authorization/latest/reference/list_sns.html#list_sns-action-Publish) | TOPIC | Exact topic ARN |
+| CloudWatch Logs | [logs:CreateLogStream](https://docs.aws.amazon.com/service-authorization/latest/reference/list_logs.html#list_logs-action-CreateLogStream) | log-group:/aws/lambda/FUNCTION_NAME:log-stream:* | Exact log group in Resource |
+| CloudWatch Logs | [logs:PutLogEvents](https://docs.aws.amazon.com/service-authorization/latest/reference/list_logs.html#list_logs-action-PutLogEvents) | log-group:/aws/lambda/FUNCTION_NAME:log-stream:* | Exact log group in Resource |
 
 rds:DescribeDBClusters uses queries without a cluster name to resolve clusters from resource IDs.
 

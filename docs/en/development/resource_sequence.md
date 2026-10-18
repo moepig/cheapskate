@@ -71,7 +71,11 @@ sequenceDiagram
     R-->>C: Summary
 ```
 
-Notification failure is logged without reversing a successful operation. Start or Stop success does not imply that the resource transition has completed; a later cycle observes it again. No action history, checkpoint, or AWS settings snapshot is written to DynamoDB.
+Notification failure is logged without reversing a successful operation.
+
+Start or Stop success does not imply that the resource transition has completed; a later cycle observes it again.
+
+No action history, checkpoint, or AWS settings snapshot is written to DynamoDB.
 
 For global failure boundaries and overlapping invocations, see [Reconcile implementation contracts](reconcile.md). For the implementation, see the [reconciler](../../../internal/app/reconcile/reconcile.go) and [resource discovery](../../../internal/aws/tagging/tagging.go).
 
@@ -143,7 +147,9 @@ sequenceDiagram
     end
 ```
 
-Status available maps to running, stopped to stopped, and every other status to transitioning. DBClusterNotFoundFault, an empty response, or no cluster with an observable status yields not-found. Entries with nil Status are not used for state classification. No modifying API is called for member DB instances.
+Status available maps to running, stopped to stopped, and every other status to transitioning. DBClusterNotFoundFault, an empty response, or no cluster with an observable status yields not-found. Entries with nil Status are not used for state classification.
+
+No modifying API is called for member DB instances.
 
 For the implementation, see the [RDS adapter](../../../internal/aws/compute/rds.go).
 
@@ -185,11 +191,19 @@ For the implementation, see the [EC2 adapter](../../../internal/aws/compute/ec2.
 
 ## ECS services
 
-Bounds mode prevents competing updates between tag bounds and Scheduled Scaling. The tags mode maintains tag bounds and suspension; scheduled resumes Scheduled Scaling after startup configuration.
+Bounds mode switches between maintaining tag bounds and allowing Scheduled Scaling to change them, preventing competing updates. The tags mode maintains tag bounds and suspension; scheduled resumes Scheduled Scaling after startup configuration.
 
-ECS observes scalable-target settings as well as task counts. Configuration tags come from the discovery snapshot and are validated again by Start and Stop. Tag values in the diagrams include defaults. An absent or nil AWS ScheduledScalingSuspended flag is treated as false.
+ECS observes scalable-target settings as well as task counts. An absent or nil AWS ScheduledScalingSuspended flag is treated as false.
 
-The scalable target is identified by ServiceNamespace=ecs, ResourceId=service/{cluster}/{service}, and ScalableDimension=ecs:service:DesiredCount. Every RegisterScalableTarget specifies only ScheduledScalingSuspended in SuspendedState and omits DynamicScalingInSuspended and DynamicScalingOutSuspended. Scheduled action definitions are neither read nor written.
+Configuration tags come from the discovery snapshot and are validated again by Start and Stop. Tag values in the diagrams include defaults.
+
+The scalable target is identified by three fields:
+
+- ServiceNamespace=ecs
+- ResourceId=service/{cluster}/{service}
+- ScalableDimension=ecs:service:DesiredCount
+
+Every RegisterScalableTarget specifies only ScheduledScalingSuspended in SuspendedState and omits DynamicScalingInSuspended and DynamicScalingOutSuspended. Scheduled action definitions are neither read nor written.
 
 ### Observation
 
@@ -222,16 +236,20 @@ sequenceDiagram
     end
 ```
 
-Ref splitting failures and DescribeServices failures also return errors. Detail contains task counts and, when a target exists, bounds and actual ScheduledScalingSuspended. Without a target, neither NeedsStart nor NeedsStop is set.
+Ref splitting failures and DescribeServices failures also return errors.
+
+Detail contains task counts and, when a target exists, bounds and the actual ScheduledScalingSuspended value. Without a target, NeedsStart and NeedsStop remain unset.
 
 Repair conditions are listed below. Both flags can be true; the reconciler uses only the flag corresponding to the group's desired state.
 
 | Flag | Condition |
 | --- | --- |
-| NeedsStop | AWS bounds differ from 0/0 or ScheduledScalingSuspended=false |
-| NeedsStart | All desiredCount / runningCount / pendingCount zero, or bounds 0/0 |
-| NeedsStart | AWS ScheduledScalingSuspended differs from the suspension state required by bounds mode |
-| NeedsStart | cheapskate:scaling-bounds-mode=tags and AWS bounds differ from the cheapskate:scaling-min and cheapskate:scaling-max tags |
+| NeedsStop | Bounds are not 0/0, or ScheduledScalingSuspended=false |
+| NeedsStart | All task counts are zero, or bounds are 0/0 |
+| NeedsStart | Suspension differs from the state required by bounds mode |
+| NeedsStart | In tags mode, AWS bounds differ from normal tag bounds |
+
+All task counts being zero means desiredCount, runningCount, and pendingCount are all zero. Suspension is the AWS ScheduledScalingSuspended value. Normal tag bounds are cheapskate:scaling-min and cheapskate:scaling-max; they are compared with AWS bounds when cheapskate:scaling-bounds-mode=tags.
 
 A positive fixed range is not used to infer incomplete startup. With cheapskate:scaling-bounds-mode=scheduled during normal operation, Scheduled Scaling changes to bounds do not trigger repair.
 
@@ -259,7 +277,9 @@ sequenceDiagram
     Adapter-->>Reconciler: nil or error
 ```
 
-Stop applies AWS ScheduledScalingSuspended=true regardless of bounds mode and never changes the tag. It does not reject stopping based on ecs_max_count. With a target, there is no additional UpdateService or rollback.
+Stop applies AWS ScheduledScalingSuspended=true regardless of bounds mode and never changes the tag.
+
+It does not reject stopping based on ecs_max_count. With a target, there is no additional UpdateService or rollback.
 
 ### Startup initialization
 
@@ -302,9 +322,15 @@ sequenceDiagram
     Adapter-->>Reconciler: nil
 ```
 
-This diagram shows the successful path. Any API failure stops subsequent calls and returns an error. A missing service or unsupported strategy also returns an error. The second observation accounts for RegisterScalableTarget adjusting capacity to fit its bounds.
+This diagram shows the successful path. Any API failure stops subsequent calls and returns an error. A missing service or unsupported strategy also returns an error.
 
-cheapskate:scaling-bounds-mode=scheduled resumes only in the final RegisterScalableTarget. If bounds mode is tags and both normal bounds tags equal the startup-count tag, the initial pin also satisfies normal configuration, so the final RegisterScalableTarget is omitted. For running services that need no initialization, Start uses the following repair sequence.
+The second observation checks capacity after RegisterScalableTarget, which adjusts capacity that is outside its bounds.
+
+cheapskate:scaling-bounds-mode=scheduled resumes Scheduled Scaling only in the final RegisterScalableTarget.
+
+If bounds mode is tags and both normal bounds tags equal the startup-count tag, the final RegisterScalableTarget is omitted because the initial pin also satisfies normal configuration.
+
+For running services that need no initialization, Start uses the following repair sequence.
 
 ### Running configuration repair
 
@@ -335,7 +361,11 @@ sequenceDiagram
     Adapter-->>Reconciler: nil or error
 ```
 
-UpdateService is not called, and desired count is not reset to startup capacity. Applying normal bounds through RegisterScalableTarget adjusts capacity outside that range. All-zero task counts or bounds of 0/0 select initialization instead of this sequence.
+UpdateService is not called, and desired count is not reset to startup capacity.
+
+Applying normal bounds through RegisterScalableTarget adjusts capacity outside that range.
+
+All-zero task counts or bounds of 0/0 select initialization.
 
 ### Partial failures and later cycles
 
@@ -373,11 +403,17 @@ No execution phase is stored. Each cycle chooses operations from configuration a
 | --- | --- |
 | Stop configuration not applied | Repair AWS bounds or ScheduledScalingSuspended differences |
 | All task counts zero or bounds 0/0 | Run startup initialization |
-| Positive desiredCount and a suspended positive fixed range | Apply normal bounds and the suspension state required by bounds mode; retain applied capacity within those bounds |
-| Normal bounds equal startup count, with only the suspension flag differing | Apply normal bounds and the suspension state required by bounds mode |
-| Final response lost, cheapskate:scaling-bounds-mode=tags, normal settings match | No additional operation |
-| Final response lost, cheapskate:scaling-bounds-mode=scheduled, Scheduled Scaling subsequently changed bounds | Preserve the changed range |
+| Positive desiredCount and a suspended positive fixed range | Apply normal bounds and the mode-required suspension state |
+| Normal tag bounds equal startup count; suspension differs | Apply normal bounds and the mode-required suspension state |
+| Final response lost; tags mode; normal settings match | No additional operation |
+| Final response lost; scheduled mode; bounds changed | Preserve the range changed by Scheduled Scaling |
 
-An invocation holding an old snapshot can apply an old request. A successful later cycle converges to the latest request after the old invocation finishes. Disabling management, exiting management, and stopping execution of cheapskate itself do not restore applied AWS flags or bounds.
+For positive desiredCount with a suspended positive fixed range, applying normal bounds preserves capacity that is within those bounds. When normal bounds tags equal the startup-count tag, a difference between AWS ScheduledScalingSuspended and the state required by bounds mode still triggers reapplication.
+
+After a lost final response, matching normal settings with cheapskate:scaling-bounds-mode=tags require no additional operation. With cheapskate:scaling-bounds-mode=scheduled, subsequent bounds changes by Scheduled Scaling are preserved.
+
+An invocation holding an old snapshot can apply an old request. A successful later cycle converges to the latest request after the old invocation finishes.
+
+Disabling management, exiting management, and stopping execution of cheapskate itself do not restore applied AWS flags or bounds.
 
 For the implementation, see the [ECS adapter](../../../internal/aws/compute/ecs.go). For failure recovery and configuration persistence checks, see the [existing ECS tests](../../../internal/aws/compute/ecs_test.go) and [Scheduled Scaling tests](../../../internal/aws/compute/ecs_scheduled_scaling_test.go).

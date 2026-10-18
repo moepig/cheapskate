@@ -4,7 +4,15 @@ This document shows how to register group items containing schedules, indefinite
 
 ## Prerequisites
 
-Use an existing cheapskate table with String keys pk and sk and no TTL. These examples use reconciler DEFAULT_TIMEZONE=Asia/Tokyo. Prepare Lambda, its periodic trigger, and resource membership tags beforehand. For preparation, see [Setup](setup.md).
+Use these prerequisites:
+
+- An existing cheapskate DynamoDB table
+- String keys pk and sk
+- No TTL
+- Reconciler DEFAULT_TIMEZONE=Asia/Tokyo
+- Lambda, its periodic trigger, and resource membership tags already configured
+
+For preparation, see [Setup](setup.md).
 
 Terraform writes items directly and bypasses CLI validation and conditional writes. In these examples, Terraform is the sole writer; the CLI and web console are used for inspection.
 
@@ -92,7 +100,9 @@ resource "aws_dynamodb_table_item" "group" {
 
 Item uses DynamoDB JSON including attribute types. Number values also use strings in N. For Terraform arguments, see [aws_dynamodb_table_item](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/dynamodb_table_item) and the [table data source](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/dynamodb_table).
 
-The three groups that allow startup have ecs_max_count=4. For ECS this must cover the cheapskate:desired-count and cheapskate:scaling-max tag values. It applies per service rather than to the group's total task count.
+ecs_max_count limits the cheapskate:desired-count and cheapskate:scaling-max tag values of each member ECS service. It does not limit the group's total task count.
+
+Groups that allow ECS startup require a positive int32 limit covering those tag values. The three startup groups in this example use 4. A missing limit or tag value above it causes a startup error.
 
 All items use pk=CONFIG. Their requests are:
 
@@ -122,6 +132,8 @@ terraform plan -out=tfplan
 terraform apply tfplan
 ```
 
+Apply completes when configuration is saved. AWS operations occur in a reconciler cycle that reads it.
+
 Inspect saved configuration and current state using the CLI:
 
 ```sh
@@ -131,17 +143,24 @@ cheapskate-cli -table cheapskate -output json list
 cheapskate-cli -table cheapskate -output json show --group dev-extended
 ```
 
-Apply completes when configuration is saved. AWS operations occur in a reconciler cycle that reads it. For timing and resource effects, see [Start and stop behavior](resource_flow.md).
+For timing and resource effects, see [Start and stop behavior](resource_flow.md).
 
 ## Changes and removal
 
 Preserve valid group configuration on every update:
 
-- Specify start_cron and stop_cron together.
-- Omit override_expires_at for an indefinite override; do not store zero or NULL.
-- Combine timed overrides with a schedule, including stopped and disabled overrides.
-- To clear an override, retain the schedule, remove override and override_expires_at, and apply.
-- Expired override attributes remain until removed; another apply does not extend their time.
-- Removing a group from local.groups and applying deletes its item without stopping or deleting AWS resources.
+| Configuration | Required or omitted attributes |
+| --- | --- |
+| Schedule | Specify start_cron and stop_cron together |
+| Indefinite override | Omit override_expires_at |
+| Timed override | Include schedule and override_expires_at |
+
+Do not store zero or NULL as an indefinite override's expiration. To combine an indefinite override with a schedule, use dev-extended without override_expires_at. Timed overrides also support stopped and disabled.
+
+To clear an override, retain the schedule, remove override and override_expires_at, and apply.
+
+Expired override attributes remain until removed. If they remain in Terraform, another apply does not extend their time.
+
+Removing a group from local.groups and applying deletes its item without stopping or deleting AWS resources.
 
 For group names, cron expressions, DynamoDB attribute types, and constraints, see [Group configuration](group_config.md). To end management, follow [Daily operations](operations.md#ending-management), using Terraform for configuration changes and deletion.

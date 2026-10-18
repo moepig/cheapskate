@@ -1,6 +1,6 @@
 # ECS service の設定
 
-本ドキュメントはECS service に適用する DynamoDB のグループ設定、cheapskate-cli の操作、および起動・スケーリング用タグの設定を示す。cheapskate のリソースタイプ名は ecs-service である。
+本ドキュメントは ECS service に適用する DynamoDB のグループ設定、cheapskate-cli の操作、および起動・スケーリング用タグの設定を示す。cheapskate のリソースタイプ名は ecs-service である。
 
 ## 設定の目的
 
@@ -22,7 +22,7 @@ REPLICA の ECS service が対象である。cluster 名を含む長形式の AR
 cheapskate-cli -context dev ecs-max-count --group dev 3
 ```
 
-ecs-max-count は既存グループの上限だけを登録・変更し、スケジュールと override を保持する。保存される属性はDynamoDB JSON では次のようになる。
+ecs-max-count は既存グループの上限だけを登録・変更し、スケジュールと override を保持する。保存される属性は DynamoDB JSON では次のようになる。
 
 ```json
 {"ecs_max_count": {"N": "3"}}
@@ -40,7 +40,7 @@ cheapskate-cli -context dev ecs-max-count --group dev 4
 cheapskate-cli -context dev clear-ecs-max-count --group dev
 ```
 
-clear-ecs-max-count は上限を未登録に戻す。現在の service を停止する操作ではなく、上限を再登録するまで以降の起動と稼働中の設定更新がエラーとなる。0 台を維持する場合は stopped override を使用する。
+clear-ecs-max-count は上限を未登録に戻す。上限を再登録するまで、以降の起動と稼働中の設定更新がエラーとなる。現在の service は停止しない。0 台を維持する場合は stopped override を使用する。
 
 スケジュールと override の登録・変更例は、[CLI 設定例](../cli_records.md) を参照。
 
@@ -50,10 +50,14 @@ clear-ecs-max-count は上限を未登録に戻す。現在の service を停止
 
 | タグ | 既定値 | 意味と制約 |
 | --- | --- | --- |
-| cheapskate:desired-count | 1 | 停止状態または上下限 0/0 からの起動台数。1～2147483647 |
+| cheapskate:desired-count | 1 | 起動台数。1～2147483647 |
 | cheapskate:scaling-min | cheapskate:desired-count | 通常の MinCapacity。0～2147483647 |
 | cheapskate:scaling-max | cheapskate:desired-count | 通常の MaxCapacity。0～2147483647 |
 | cheapskate:scaling-bounds-mode | scheduled | 上下限の管理方法 |
+
+起動台数は、desiredCount、runningCount、pendingCount がすべて 0 の場合、または登録済みの上下限が 0/0 の場合に適用する。
+
+既定値はタグが存在しない場合だけ適用し、空文字列はエラーとなる。各タグの台数は cheapskate:scaling-min <= cheapskate:desired-count <= cheapskate:scaling-max を満たす必要がある。scalable target の有無にかかわらずタグ一式を検証し、不正なタグがあれば停止も実行しない。
 
 上下限管理モードの値と動作を、以下に示す。
 
@@ -61,8 +65,6 @@ clear-ecs-max-count は上限を未登録に戻す。現在の service を停止
 | --- | --- |
 | tags | タグ範囲を維持し、Scheduled Scaling を一時停止 |
 | scheduled | 起動後の上下限変更を維持し、Scheduled Scaling を有効化 |
-
-既定値はタグが存在しない場合だけ適用し、空文字列はエラーとなる。各タグの台数は cheapskate:scaling-min <= cheapskate:desired-count <= cheapskate:scaling-max を満たす必要がある。scalable target の有無にかかわらずタグ一式を検証し、不正なタグがあれば停止も実行しない。
 
 cluster が dev、service が api の場合に、起動台数 2、継続して維持する上下限 1～3 を設定する例を、以下に示す。
 

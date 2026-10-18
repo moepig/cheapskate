@@ -4,14 +4,18 @@ This document explains the purpose and behavior of keeping REPLICA ECS services 
 
 ## Purpose and scope
 
-cheapskate starts and stops ECS services according to group schedules and overrides. While a service is active, capacity can change with demand instead of remaining fixed at its startup count. AWS Application Auto Scaling Scheduled Scaling can also change bounds by time of day. Group start_cron and stop_cron control operating hours; AWS scheduled actions control scaling bounds.
+cheapskate starts and stops ECS services according to group schedules and overrides. While a service is active, capacity can change with demand instead of remaining fixed at its startup count.
+
+AWS Application Auto Scaling Scheduled Scaling can also change bounds by time of day. Group start_cron and stop_cron control operating hours; AWS scheduled actions control scaling bounds.
 
 Set cheapskate:scaling-bounds-mode to choose between continuously maintaining tag bounds and allowing Scheduled Scaling to change them. Scheduled Scaling suspension follows this management mode.
 
 | Mode | Purpose | Bounds during operation | Scheduled Scaling during operation |
 | --- | --- | --- | --- |
-| tags | Continuously maintain the range defined by tags | Repair differences from cheapskate:scaling-min and cheapskate:scaling-max | Suspended to prevent competing changes to the tag range |
-| scheduled | Delegate time-based bounds changes to AWS | Apply tag bounds at the end of startup and when resuming, then retain subsequent changes | Enabled |
+| tags | Continuously maintain the range defined by tags | Repair differences from normal tag bounds | Suspended to prevent competing changes to the tag range |
+| scheduled | Delegate time-based bounds changes to AWS | Apply tag bounds at startup end/resume; retain later changes | Enabled |
+
+The tag bounds are cheapskate:scaling-min and cheapskate:scaling-max.
 
 Choose tags to maintain tag bounds even on a service without scheduled actions. The default is scheduled. Both modes retain in-range capacity and leave dynamic-scaling suspension flags unchanged. The tags mode does not fix the task count.
 
@@ -38,14 +42,16 @@ Group configuration, service tags, and AWS observations have separate purposes:
 
 | Source | Fields | Purpose |
 | --- | --- | --- |
-| DynamoDB | start_cron, stop_cron, override, override_expires_at | Select running, stopped, or disabled using current time and DEFAULT_TIMEZONE |
-| DynamoDB | ecs_max_count | Validate startup count and normal maximum applied by cheapskate |
+| DynamoDB | start_cron, stop_cron, override, override_expires_at | Select running/stopped/disabled using time and time zone |
+| DynamoDB | ecs_max_count | Validate cheapskate's startup count and normal maximum |
 | ECS service tags | cheapskate:group | Name of the DynamoDB group |
 | ECS service tags | cheapskate:desired-count | Startup count from all-zero counts or 0/0 bounds |
-| ECS service tags | cheapskate:scaling-min, cheapskate:scaling-max | Normal bounds applied at the end of startup, during tags-mode operation, and when resuming |
+| ECS service tags | cheapskate:scaling-min, cheapskate:scaling-max | Normal bounds at startup end, in tags mode, and on resume |
 | ECS service tags | cheapskate:scaling-bounds-mode | Whether tags or scheduled manages bounds during operation |
 | Current ECS state | desiredCount, runningCount, pendingCount | Configured, running, and pending task counts |
 | Current Application Auto Scaling state | MinCapacity, MaxCapacity, ScheduledScalingSuspended | Applied bounds and suspension flag |
+
+Schedules use DEFAULT_TIMEZONE.
 
 The group's running request means keeping the service active. It is distinct from current ECS desiredCount and the startup-count tag. The cheapskate:desired-count tag does not continuously fix running capacity.
 
@@ -141,22 +147,10 @@ A later cycle that reads stopped or disabled follows that request instead of res
 
 ## Configuration and current-state examples
 
-### Starting from zero with an intermediate failure
+Choose a scenario to compare configuration values with observed state.
 
-For configuration values and state transitions, see [ECS configuration and current-state examples](ecs_examples.md#starting-from-zero-with-an-intermediate-failure).
-
-### Changing tags on a running fixed range
-
-For configuration values and state transitions, see [ECS configuration and current-state examples](ecs_examples.md#changing-tags-on-a-running-fixed-range).
-
-### Resuming with capacity outside normal bounds
-
-For configuration values and state transitions, see [ECS configuration and current-state examples](ecs_examples.md#resuming-with-capacity-outside-normal-bounds).
-
-### Scheduled Scaling after a lost final response
-
-For configuration values and state transitions, see [ECS configuration and current-state examples](ecs_examples.md#scheduled-scaling-after-a-lost-final-response).
-
-### Stopping during startup
-
-For configuration values and state transitions, see [ECS configuration and current-state examples](ecs_examples.md#stopping-during-startup).
+- <a id="starting-from-zero-with-an-intermediate-failure"></a>[Starting from zero with an intermediate failure](ecs_examples.md#starting-from-zero-with-an-intermediate-failure)
+- <a id="changing-tags-on-a-running-fixed-range"></a>[Changing tags on a running fixed range](ecs_examples.md#changing-tags-on-a-running-fixed-range)
+- <a id="resuming-with-capacity-outside-normal-bounds"></a>[Resuming with capacity outside normal bounds](ecs_examples.md#resuming-with-capacity-outside-normal-bounds)
+- <a id="scheduled-scaling-after-a-lost-final-response"></a>[Scheduled Scaling after a lost final response](ecs_examples.md#scheduled-scaling-after-a-lost-final-response)
+- <a id="stopping-during-startup"></a>[Stopping during startup](ecs_examples.md#stopping-during-startup)

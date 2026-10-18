@@ -15,11 +15,15 @@ cheapskate-cli -output json show --group dev
 
 list で保存されたグループ設定を、show で所属リソースの設定タグと AWS の現在状態を確認する。show は起動・停止せず、状態が変わるまで待機もしない。
 
-show は個別リソースの状態取得に失敗しても終了コード 0 を返す。resources の各要素で live_error を確認し、エラーがあるリソースの状態は未確認として扱う。起動・停止の完了は現在状態で確認する。保存内容、タグの設定値、現在状態のフィールドは、[CLI の出力形式](cli.md#出力形式)を参照。
+show は個別リソースの状態取得に失敗しても終了コード 0 を返す。resources の各要素で live_error を確認し、エラーがあるリソースの状態は未確認として扱う。
+
+起動・停止の完了は現在状態で確認する。保存内容、タグの設定値、現在状態のフィールドは、[CLI の出力形式](cli.md#出力形式)を参照。
 
 Web 画面での確認と設定変更は、[Web コンソール](web_console.md)を参照。CLI の引数と出力形式は、[CLI リファレンス](cli.md)を参照。
 
 ## スケジュールの登録と変更
+
+失効済み override が残る場合は、先に clear-override で解除するか、新しい override へ置き換える。
 
 平日 09:00～18:00 に起動状態を維持する設定例を、以下に示す。
 
@@ -27,7 +31,7 @@ Web 画面での確認と設定変更は、[Web コンソール](web_console.md)
 cheapskate-cli schedule --group dev -start '0 9 * * 1-5' -stop '0 18 * * 1-5'
 ```
 
-グループがなければ作成する。既存の override は保持されるため、有効な override がある間はスケジュールより優先される。失効済み override が残る場合は、先に clear-override で解除するか、新しい override へ置き換える。
+グループがなければ作成する。既存の override は保持されるため、有効な override がある間はスケジュールより優先される。
 
 ## override による一時的な変更
 
@@ -35,13 +39,13 @@ cheapskate-cli schedule --group dev -start '0 9 * * 1-5' -stop '0 18 * * 1-5'
 
 ### 稼働時間の延長
 
-スケジュールを持つ dev を 2 時間起動状態に保つ例を、以下に示す。
+期限付き override にはスケジュールが必要である。スケジュールを持つ dev を 2 時間起動状態に保つ例を、以下に示す。
 
 ```console
 cheapskate-cli override --group dev running -for 2h
 ```
 
-期限が切れると、その時点のスケジュールに従う状態へ戻る。期限付き override にはスケジュールが必要である。
+期限が切れると、その時点のスケジュールに従う状態へ戻る。
 
 ### 停止状態の維持
 
@@ -63,17 +67,19 @@ disabled 自体は AWS リソースを変更しない。後続の状態確認と
 
 ### スケジュールへの復帰
 
+override だけのグループには clear-override を使用できない。先にスケジュールを追加するか、別の override に置き換える。
+
 スケジュールへ戻すコマンドを、以下に示す。
 
 ```console
 cheapskate-cli clear-override --group dev
 ```
 
-override だけのグループには使用できない。先にスケジュールを追加するか、別の override に置き換える。保存内容を含む例は[CLI によるグループ設定例](cli_records.md)を参照。
+保存内容を含む例は[CLI によるグループ設定例](cli_records.md)を参照。
 
 ## ECS の設定変更
 
-ECS の設定はDynamoDB のグループ上限と、service 自身のタグに分かれる。設定の意味と適用タイミングは、[ECS の起動・停止とスケーリング](ecs.md)を参照。
+ECS の設定は DynamoDB のグループ上限と、service 自身のタグに分かれる。設定の意味と適用タイミングは、[ECS の起動・停止とスケーリング](ecs.md)を参照。
 
 ### ECS 台数上限の登録
 
@@ -87,7 +93,9 @@ cheapskate-cli ecs-max-count --group dev 4
 
 ### スケーリング上下限の管理方法の変更
 
-タグの上下限を維持する運用と、AWS Scheduled Scaling による上下限変更を使用する運用を切り替える。タグ範囲を維持する場合は、service の cheapskate:scaling-bounds-mode を tags に設定し、グループの要求を running にする。正常なサイクルの後、通常の上下限と ScheduledScalingSuspended=true を確認する。
+タグの上下限を維持する運用と、AWS Scheduled Scaling による上下限変更を使用する運用を切り替える。
+
+タグ範囲を維持する場合は、service の cheapskate:scaling-bounds-mode を tags に設定する。続いてグループの要求を running にし、正常なサイクルの後、通常の上下限と ScheduledScalingSuspended=true を確認する。
 
 再開前に、cheapskate:scaling-min と cheapskate:scaling-max が目的の通常範囲であることを確認する。再開時にその範囲が適用され、範囲外の台数は AWS によって調整される。再開手順は次のとおりである。
 
@@ -95,11 +103,21 @@ cheapskate-cli ecs-max-count --group dev 4
 2. グループの要求を running にする。
 3. 正常なサイクルの後、show または Web コンソールで ScheduledScalingSuspended=false と通常の上下限を確認する。
 
-停止要求が有効な間は、scheduled モードに変更しても AWS の一時停止は維持される。一時停止中に実行時刻を過ぎた scheduled action は再実行されない。
+停止要求が有効な間は、scheduled モードに変更しても AWS の一時停止は維持される。
+
+一時停止中に実行時刻を過ぎた scheduled action は再実行されない。
 
 ## 管理の終了
 
-管理終了後に保つ起動・停止状態と、ECS の Scheduled Scaling の状態を先に決める。ECS を起動状態で残す場合は、維持する上下限を通常のタグに設定する。Scheduled Scaling を有効にするなら上下限管理モードを scheduled、タグ範囲を維持するなら tags にする。停止状態で残す場合は上下限 0/0 と一時停止が残る。
+管理終了後に保つ起動・停止状態と、ECS の Scheduled Scaling の状態を先に決める。ECS を起動状態で残す場合は、維持する上下限を通常のタグに設定する。
+
+| 終了後に保つ状態 | ECS の上下限管理モード・状態 |
+| --- | --- |
+| 起動、Scheduled Scaling 有効 | scheduled に設定 |
+| 起動、タグの上下限を維持 | tags に設定 |
+| 停止 | 上下限 0/0 と一時停止が残る |
+
+手順の途中では対象グループを変更しないこと。手順 2 の待機は、古い設定を読んだ実行が終了してから最終状態を確認するためである。
 
 管理終了の手順は次のとおりである。
 
@@ -110,6 +128,6 @@ cheapskate-cli ecs-max-count --group dev 4
 5. リソースから cheapskate:group タグを削除する。
 6. cheapskate-cli remove --group <グループ名> でグループを削除する。
 
-この手順の途中では対象グループを変更しないこと。待機は、古い設定を読んだ実行が終了してから最終状態を確認するためである。グループ削除自体は AWS リソースを変更しない。
+グループ削除自体は AWS リソースを変更しない。
 
 Terraform でグループを管理している場合は、設定変更と削除を Terraform で行う。手順は[Terraform によるグループ設定](terraform_records.md)を参照。

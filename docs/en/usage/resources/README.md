@@ -11,26 +11,25 @@ Choose the document for the resource being configured:
 | [RDS DB instance](rds-instance.md) | rds-instance | DB instance | None |
 | [Aurora DB cluster](rds-cluster.md) | rds-cluster | DB cluster | None |
 | [EC2 instance](ec2-instance.md) | ec2-instance | EC2 instance | Exclusion through the Auto Scaling group membership tag |
-| [ECS service](ecs-service.md) | ecs-service | ECS service | Group capacity limit, startup count, normal bounds, and Scheduled Scaling suspension |
+| [ECS service](ecs-service.md) | ecs-service | ECS service | Capacity limit, startup count, bounds, suspension |
 
-## Shared prerequisites
+For ECS, the capacity limit is a group setting. Service tags define the startup count, normal bounds, and Scheduled Scaling suspension mode.
 
-For connections, time zones, CLI contexts, and matching AWS profiles, see [CLI example prerequisites](../cli_records.md#prerequisites). For infrastructure preparation, see [Setup](../setup.md).
+## Shared configuration and operations
 
-## Shared DynamoDB settings
+DynamoDB stores one item per group. The CLI saves settings; later reconciler cycles apply them to AWS. Use these references for shared settings and operations:
 
-DynamoDB stores one item per group. For attributes, valid values, and how a group affects its resources, see [Group configuration](../group_config.md).
+| Topic | Reference |
+| --- | --- |
+| <a id="shared-prerequisites"></a>Connections, time zones, contexts, and AWS profiles | [CLI example prerequisites](../cli_records.md#prerequisites) |
+| Table and runtime preparation | [Setup](../setup.md) |
+| <a id="shared-dynamodb-settings"></a>Attributes, valid values, and scope | [Group configuration](../group_config.md) |
+| <a id="shared-cli-operations"></a>Registration, changes, and saved values | [CLI group configuration examples](../cli_records.md) |
+| ECS capacity-limit operations | [ECS DynamoDB and CLI settings](ecs-service.md#dynamodb-and-cli) |
+| <a id="shared-membership-tag"></a>Tag locations, values, and discovery | [Resource tags](../resource_tag.md) |
+| <a id="shared-verification"></a>State and error inspection | [Daily operations](../operations.md#inspecting-configuration-and-current-state) |
+| Output fields | [CLI output formats](../cli.md#output-formats) |
+| Timing and failures | [Start and stop behavior](../resource_flow.md) |
+| Steps to end management | [Ending management](../operations.md#ending-management) |
 
-## Shared CLI operations
-
-For registration and changes paired with their saved values, see [CLI group configuration examples](../cli_records.md). For ECS capacity-limit operations, see [ECS DynamoDB and CLI settings](ecs-service.md#dynamodb-and-cli).
-
-## Shared membership tag
-
-For tag locations, value constraints, and discovery, see [Resource tags](../resource_tag.md). Each resource document above provides its target ARN and tagging command.
-
-## Shared verification
-
-The CLI saves settings; later reconciler cycles apply them to AWS. For state and error inspection steps, see [Daily operations](../operations.md#inspecting-configuration-and-current-state). For field definitions, see [CLI output formats](../cli.md#output-formats).
-
-For timing and failures, see [Start and stop behavior](../resource_flow.md). To stop managing resources, follow [Ending management](../operations.md#ending-management).
+Each resource document above provides its target ARN and tagging command.

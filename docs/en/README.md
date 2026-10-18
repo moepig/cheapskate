@@ -19,9 +19,9 @@ Start with groups and schedules, then register your first group using the setup 
 | Document | Scope |
 | --- | --- |
 | [Groups and schedules](usage/concepts.md) | Membership, schedules, and override precedence |
-| [Setup](usage/setup.md) | AWS preparation, first configuration, verification, and enabling periodic execution |
+| [Setup](usage/setup.md) | AWS setup, first configuration, checks, periodic execution |
 | [AWS resources and IAM](usage/aws_resources.md) | Deployment infrastructure inventory |
-| [IAM permissions](usage/iam.md) | Execution roles, inspection and action permissions, and optional notification and encryption permissions |
+| [IAM permissions](usage/iam.md) | Execution roles, read/control, optional SNS and encryption |
 
 ## Daily operation
 
@@ -29,11 +29,11 @@ Choose a guide according to the task:
 
 | Document | Scope |
 | --- | --- |
-| [Daily operations](usage/operations.md) | Inspection, schedules, temporary starts/stops, ECS changes, and ending management |
+| [Daily operations](usage/operations.md) | Inspect, schedule, temporary start/stop, ECS, end management |
 | [CLI group configuration examples](usage/cli_records.md) | Commands and their saved DynamoDB configuration |
 | [Terraform group configuration](usage/terraform_records.md) | Registering, changing, and removing groups through IaC |
-| [Web console](usage/web_console.md) | Pages, forms, override expiration input, and public access settings |
-| [Logs, metrics, and notifications](usage/monitoring.md) | Current state, cycle results, error detection, and successful-action notifications |
+| [Web console](usage/web_console.md) | Pages, forms, override expiration, and public access |
+| [Logs, metrics, and notifications](usage/monitoring.md) | State, cycle results, errors, success notifications |
 | [Troubleshooting](usage/troubleshooting.md) | Checks and remedies by symptom |
 
 ## Configuration and behavior references
@@ -42,14 +42,14 @@ Use these documents for valid values and how they affect resources:
 
 | Document | Scope |
 | --- | --- |
-| [Resource configuration and shared settings](usage/resources/README.md) | Type-specific settings and links to shared specifications and operations |
-| [Runtime configuration](usage/config.md) | Connections, time zones, monitoring, and HTTP environment settings |
-| [Group configuration](usage/group_config.md) | Group names, cron, overrides, ECS limits, and DynamoDB attribute types |
+| [Resource configuration and shared settings](usage/resources/README.md) | Resource settings and shared specification/operation links |
+| [Runtime configuration](usage/config.md) | Connection, time zone, monitoring, and HTTP variables |
+| [Group configuration](usage/group_config.md) | Names, cron, overrides, ECS limits, DynamoDB attribute types |
 | [Resource tags](usage/resource_tag.md) | Tag locations, defaults, and constraints |
 | [CLI reference](usage/cli.md) | Arguments, formats, exit codes, and update constraints |
-| [Start and stop behavior](usage/resource_flow.md) | Timing, eligibility, manual changes, failures, and overlapping invocations |
-| [ECS startup, shutdown, and scaling](usage/ecs.md) | Counts, bounds, suspension, tag changes, and partial failures |
-| [ECS configuration and current-state examples](usage/ecs_examples.md) | State examples for startup, tag changes, resumption, lost responses, and stopping |
+| [Start and stop behavior](usage/resource_flow.md) | Timing, eligibility, manual changes, errors, concurrent runs |
+| [ECS startup, shutdown, and scaling](usage/ecs.md) | Counts, bounds, suspension, tag changes, partial failures |
+| [ECS configuration and current-state examples](usage/ecs_examples.md) | Start, tag change, resume, lost response, and stop examples |
 
 ## Development
 

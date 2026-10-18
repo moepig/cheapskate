@@ -15,11 +15,15 @@ cheapskate-cli -output json show --group dev
 
 List displays stored group configuration. Show displays member configuration tags and current AWS state without changing resources or waiting for transitions.
 
-Show returns exit code 0 even when an individual resource inspection fails. Check live_error in each resources entry; a resource with an error has not been successfully observed. Verify transition completion from current state. For saved configuration, tag settings, and current-state fields, see [CLI output formats](cli.md#output-formats).
+Show returns exit code 0 even when an individual resource inspection fails. Check live_error in each resources entry; a resource with an error has not been successfully observed.
+
+Verify transition completion from current state. For saved configuration, tag settings, and current-state fields, see [CLI output formats](cli.md#output-formats).
 
 For browser operations, see [Web console](web_console.md). For arguments and output formats, see [CLI reference](cli.md).
 
 ## Registering or changing a schedule
+
+Clear or replace an expired override before changing the schedule.
 
 For weekday operation from 09:00 to 18:00, use:
 
@@ -27,7 +31,7 @@ For weekday operation from 09:00 to 18:00, use:
 cheapskate-cli schedule --group dev -start '0 9 * * 1-5' -stop '0 18 * * 1-5'
 ```
 
-This creates an absent group. Existing overrides remain and take precedence while active. Clear or replace an expired override before changing the schedule.
+This creates an absent group. Existing overrides remain and take precedence while active.
 
 ## Temporary changes with overrides
 
@@ -35,13 +39,13 @@ An override changes the running/stopped request or pauses control while retainin
 
 ### Extending a running period
 
-To keep a scheduled dev group running for two hours:
+Timed overrides require a schedule. To keep a scheduled dev group running for two hours:
 
 ```console
 cheapskate-cli override --group dev running -for 2h
 ```
 
-At expiration, the schedule's state at that time takes over. Timed overrides require a schedule.
+At expiration, the schedule's state at that time takes over.
 
 ### Keeping resources stopped
 
@@ -63,13 +67,15 @@ Disabled does not itself change AWS resources; it suppresses subsequent inspecti
 
 ### Returning to the schedule
 
+An override-only group cannot clear its override. Add a schedule first or replace the override.
+
 To clear the override:
 
 ```console
 cheapskate-cli clear-override --group dev
 ```
 
-An override-only group cannot clear its override. Add a schedule first or replace the override. For stored-item examples, see [CLI group configuration examples](cli_records.md).
+For stored-item examples, see [CLI group configuration examples](cli_records.md).
 
 ## ECS configuration changes
 
@@ -87,7 +93,9 @@ Use the same command to change the limit. CLI and web-console schedule and overr
 
 ### Changing scaling bounds management
 
-Switch between maintaining tag bounds and using AWS Scheduled Scaling to change them. To maintain tag bounds, set the service's cheapskate:scaling-bounds-mode to tags and the group's request to running. After a successful cycle, confirm normal bounds and ScheduledScalingSuspended=true.
+Switch between maintaining tag bounds and using AWS Scheduled Scaling to change them.
+
+To maintain tag bounds, set the service's cheapskate:scaling-bounds-mode to tags. Then set the group's request to running. After a successful cycle, confirm normal bounds and ScheduledScalingSuspended=true.
 
 Before resuming, confirm that cheapskate:scaling-min and cheapskate:scaling-max specify the intended normal range. Resuming applies those bounds, and AWS adjusts capacity outside the range. To resume:
 
@@ -95,11 +103,21 @@ Before resuming, confirm that cheapskate:scaling-min and cheapskate:scaling-max 
 2. Set the group's request to running.
 3. After a successful cycle, inspect show or the web console for ScheduledScalingSuspended=false and normal bounds.
 
-A stopped request keeps AWS suspension enabled even after switching to scheduled mode. Scheduled actions whose execution time passed during suspension are not replayed.
+A stopped request keeps AWS suspension enabled even after switching to scheduled mode.
+
+Scheduled actions whose execution time passed during suspension are not replayed.
 
 ## Ending management
 
-First choose the running/stopped state and ECS Scheduled Scaling state to retain. For a running ECS service, set the intended normal bounds in tags and select scheduled bounds mode to enable Scheduled Scaling, or tags to maintain tag bounds. A stopped service retains bounds 0/0 and suspension.
+First choose the running/stopped state and ECS Scheduled Scaling state to retain. For a running ECS service, set the intended normal bounds in tags.
+
+| State to retain | ECS bounds mode or retained state |
+| --- | --- |
+| Running, Scheduled Scaling enabled | Set scheduled mode |
+| Running, maintaining tag bounds | Set tags mode |
+| Stopped | Retain bounds 0/0 and suspension |
+
+Do not change the group during this sequence. Waiting in step 2 allows invocations holding older configuration to finish before confirming the final state.
 
 To end management:
 
@@ -110,6 +128,6 @@ To end management:
 5. Remove cheapskate:group from the resources.
 6. Delete the group with cheapskate-cli remove --group <group-name>.
 
-Do not change the group during this sequence. Waiting allows invocations holding older configuration to finish before confirming the final state. Deleting a group does not itself change AWS resources.
+Deleting a group does not itself change AWS resources.
 
 For Terraform-managed groups, change and delete configuration through Terraform. See [Terraform group configuration](terraform_records.md).

@@ -25,7 +25,9 @@ The CLI and web console share configuration validation and conditional writes. T
 
 DynamoDB stores group configuration. Current resource state comes from AWS APIs. Operation history, checkpoints, and ECS startup phases are not persisted.
 
-A cycle reads complete configuration and discovery snapshots before processing individual resources. Global read failures and individual processing failures have separate boundaries. Overlapping invocations are allowed; later cycles converge after older invocations finish.
+A cycle reads complete configuration and discovery snapshots before processing individual resources. Global read failures and individual processing failures have separate boundaries.
+
+Overlapping invocations are allowed; later cycles converge after older invocations finish.
 
 For read boundaries, error isolation, and test contracts, see [Reconcile implementation contracts](../development/reconcile.md). For AWS API order, see [Resource operation sequences](../development/resource_sequence.md).
 
@@ -33,6 +35,6 @@ For read boundaries, error isolation, and test contracts, see [Reconcile impleme
 
 The reconciler image is a Lambda handler. Both periodic and manual invocations perform a full reconcile without interpreting the payload. Work is completed within the invocation rather than partitioned across invocations.
 
-The web-console image includes an HTTP server and Lambda Web Adapter. The adapter translates API Gateway or similar invocation events into HTTP. The console application remains a regular HTTP server.
-
 A reserved concurrency of 1 for the reconciler Lambda is optional to reduce overlapping execution. Correctness does not depend on excluding concurrent invocations.
+
+The web-console image includes an HTTP server and Lambda Web Adapter. The adapter translates API Gateway or similar invocation events into HTTP. The console application remains a regular HTTP server.

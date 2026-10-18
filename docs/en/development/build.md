@@ -4,7 +4,7 @@ This document covers building the binaries and the container images, and pushing
 
 ## Binaries
 
-Three targets wrap `go build`.
+Three targets run `go build`.
 
 ```console
 make build       # runs go build ./...
@@ -14,7 +14,7 @@ make webconsole  # produces bin/webconsole
 
 ## Container images
 
-The reconciler and the web console are separate images, each carrying one binary. Both are built from the same `Dockerfile`, selected with `--target`.
+The reconciler and the web console are separate images, each carrying one binary. Both are built from the same `Dockerfile`, selected with `--target`. Without the web console, only the reconciler has to be built and pushed.
 
 The build targets for the images and the binary each carries are collected below.
 
@@ -32,9 +32,13 @@ make image-webconsole                        # cheapskate-webconsole:dev only
 make image PLATFORM=linux/amd64 TAG=v0.1.0   # the x86 build
 ```
 
-The base image is `public.ecr.aws/lambda/provided:al2023`. The Go builder, Lambda base image, and Dockerfile frontend are pinned by both tag and digest: the tag keeps the intended update line readable, while the digest keeps the same build input from moving. Both binaries are placed as `/var/runtime/bootstrap`, so no `ImageConfig.EntryPoint` override is needed. Without the web console, only the reconciler has to be built and pushed.
+Both binaries are placed as `/var/runtime/bootstrap`, so no `ImageConfig.EntryPoint` override is needed.
 
-The Dockerfile cross-compiles from the host platform through `GOARCH`, so building for another architecture needs no emulation. The Go build stage is shared between the two images, so building both downloads the dependencies once.
+Build inputs are pinned by both tag and digest. This includes the Go builder, Lambda base image, and Dockerfile frontend. Tags identify the intended version; digests fix the referenced content. The Lambda base image is `public.ecr.aws/lambda/provided:al2023`.
+
+The Dockerfile cross-compiles from the host platform through `GOARCH`, so building for another architecture needs no emulation.
+
+The Go build stage is shared between the two images, so building both downloads the dependencies once.
 
 An allowlist in `.dockerignore` limits the build context to the Dockerfile, module files, `cmd/`, and `internal/`. The Dockerfile also copies only the required directories instead of using `COPY . .`. This keeps development files and credentials out of the context and image, and avoids cache invalidation from unrelated changes.
 
@@ -42,7 +46,7 @@ An allowlist in `.dockerignore` limits the build context to the Dockerfile, modu
 
 The web console image carries the Lambda Web Adapter executable as `/opt/extensions/lambda-adapter`, pinned by version tag and digest in the `Dockerfile`. It is the only runtime dependency outside go.mod, and it is updated through Dependabot's docker updates rather than with the Go modules.
 
-For how the adapter converts invocation events into HTTP, and where the application depends on it, see [Lambda runtime](../architecture/overview.md#lambda-runtime). For how a Dependabot update reaches a release, see the dependency updates section in [release.md](release.md).
+For how the adapter converts invocation events into HTTP, and its relationship to the web-console application, see [Lambda runtime](../architecture/overview.md#lambda-runtime). For how a Dependabot update reaches a release, see the dependency updates section in [Releases and dependency updates](release.md).
 
 ## Testing the images
 
@@ -52,9 +56,12 @@ Before deploying, confirm that the built images start as Lambda runtimes.
 make image-test   # builds both images, starts each on the Lambda RIE, and invokes it
 ```
 
-This catches a corrupt image or a missing handler. All it needs is docker; the emulator and a disposable state table come up alongside the tests. For the payloads sent and the responses expected, see the image tests section in [test.md](test.md).
+This catches a corrupt image or a missing handler. Docker is required; the emulator and a disposable state table come up alongside the tests. For the payloads sent and the responses expected, see the image tests section in [Testing](test.md).
 
 ## Pushing to ECR
+
+> [!IMPORTANT]
+> Match the image's platform to the Lambda function's architecture (`arm64` ↔ `linux/arm64`). A mismatched image is rejected when the function is created or updated.
 
 Create one repository per image. Creating them through to pushing is shown below.
 
@@ -68,6 +75,3 @@ make push \
 ```
 
 `make push` runs `docker build`, `docker login`, and `docker push` for both images. For one of them, use `make push-reconciler` or `make push-webconsole` and give only the matching `ECR_REPO_*`.
-
-> [!IMPORTANT]
-> Match the image's platform to the Lambda function's architecture (`arm64` ↔ `linux/arm64`). A mismatched image is rejected when the function is created or updated.

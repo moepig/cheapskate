@@ -1,6 +1,6 @@
 # ログ・メトリクス・通知
 
-本ドキュメントはreconciler の処理結果、リソースのエラー、および成功した操作を確認する方法を説明する。
+本ドキュメントは reconciler の処理結果、リソースのエラー、および成功した操作を確認する方法を説明する。
 
 ## 設定と現在状態の確認
 
@@ -8,7 +8,17 @@
 
 ## 構造化ログ
 
-reconciler と Web コンソールは構造化ログを stderr に出力する。reconciler の主なレコードを、以下に示す。
+reconciler と Web コンソールは構造化ログを stderr に出力する。DynamoDB に操作・エラー履歴を保存しないため、継続的な記録にはログを使用する。
+
+### サイクルの結果
+
+全グループとタグ付きリソースの読み込みを完了したサイクルは、リソース処理後に summary を出力する。個別グループやリソースの失敗では Lambda 呼び出し自体は成功するため、summary のエラー数も確認すること。
+
+全体の読み込みに失敗した場合は summary を出力せず、Lambda 呼び出しがエラーとなる。
+
+### ログレコード
+
+reconciler の主なレコードを、以下に示す。
 
 | レコード | レベル | 内容 |
 | --- | --- | --- |
@@ -31,9 +41,13 @@ reconciler と Web コンソールは構造化ログを stderr に出力する�
 | group-error | error | グループ設定のエラー |
 | resource-error | error | 個別リソースの状態取得・操作エラー |
 
-LOG_LEVEL=debug を指定すると、debug レベルのレコードも出力する。各処理の終了には success と、失敗時の error を含む。通知は試行ごとに attempt を含む。リソース検索の終了には検出件数 resources を含み、0 件の場合も記録する。resource-discovered は ARN 順に出力し、無効なグループや disabled のために処理対象から外れるリソースも含む。
+LOG_LEVEL=debug を指定すると、debug レベルのレコードも出力する。各処理の終了には success と、失敗時の error を含む。通知は試行ごとに attempt を含む。
+
+リソース検索の終了には検出件数 resources を含み、0 件の場合も記録する。resource-discovered は ARN 順に出力し、無効なグループや disabled のために処理対象から外れるリソースも含む。
 
 resource-discovery-skipped の reason は not-found または membership-tag-missing である。
+
+### リソースの状態と操作結果
 
 リソースごとの info レコードは処理の進行に合わせて逐次出力する。操作結果の主要フィールドを、以下に示す。
 
@@ -49,15 +63,13 @@ resource-discovery-skipped の reason は not-found または membership-tag-mis
 | success | 操作要求の成否。状態遷移の完了を表さない |
 | error | 操作要求のエラー |
 
-observed は AWS の観測値を running、stopped、transitioning、not-found のいずれかへ分類した値である。aws_state は分類元のステータスやタスク数・スケーリング設定を表す。いずれも操作判定時の値である。action-finished は操作要求の成否を記録し、ログ出力のための操作後の再取得は行わない。操作後の状態は次のサイクル、CLI の show、または Web コンソールで確認する。
+observed は AWS の観測値を running、stopped、transitioning、not-found のいずれかへ分類した値である。aws_state は分類元のステータスやタスク数・スケーリング設定を表す。いずれも操作判定時の値である。
+
+action-finished は操作要求の成否を記録し、ログ出力のための操作後の再取得は行わない。操作後の状態は次のサイクル、CLI の show、または Web コンソールで確認する。
 
 resource-unchanged の reason=desired-state-matched は、観測状態が期待状態と一致し、設定の修復も不要であることを表す。resource-skipped の reason は、disabled、transitioning、not-found のいずれかである。
 
 AWS サービスとリソース種別は resource_id または resource_arn から判別する。
-
-DynamoDB に操作・エラー履歴を保存しないため、継続的な記録にはログを使用する。
-
-全グループとタグ付きリソースの読み込みを完了したサイクルは、リソース処理後に summary を出力する。全体の読み込みに失敗した場合は summary を出力せず、Lambda 呼び出しがエラーとなる。個別グループやリソースの失敗では Lambda 呼び出し自体は成功するため、summary のエラー数も確認すること。
 
 ## CloudWatch メトリクス
 
@@ -76,8 +88,8 @@ ReconcileErrors と ReconcileAborted はエラー検知に使用できる。Clou
 
 ## SNS 通知
 
+SNS topic と subscription は別途作成し、reconciler に sns:Publish を許可する。変数の設定は[実行時設定](config.md#reconciler)を参照。
+
 NOTIFICATION_TOPIC_ARN を指定すると、成功した起動・停止または ECS 設定の修復の後に通知する。成功は設定要求が受け付けられたことを表し、タスクやインスタンスの遷移完了を表さない。
 
 通知失敗は同じ実行内で 1 回再試行する。再試行も失敗した場合はログへ記録し、成功したリソース操作を取り消さない。エラー通知と復旧通知は送信しない。同時実行や再試行によって通知が重複する場合も、応答喪失などによって欠落する場合もある。
-
-SNS topic と subscription は別途作成し、reconciler に sns:Publish を許可する。変数の設定は[実行時設定](config.md#reconciler)を参照。

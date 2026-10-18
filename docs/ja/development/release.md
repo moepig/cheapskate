@@ -2,18 +2,20 @@
 
 本ドキュメントは、リリースの実行手順、リリースが生成する成果物、および依存更新の設定方針を記述する。
 
-goreleaser をローカルで実行することはない。CI が pull request ごとに `goreleaser check` で `.goreleaser.yaml` を検証し、リリース経路に触れる pull request ではさらにスナップショットビルドを行う。後者はクロスコンパイルの全ターゲットと両方のイメージを実際に生成するため、何も push せずに経路の全体を通すことになる。
+goreleaser は CI で実行し、ローカルでは実行しない。pull request ごとの設定検証と、リリース経路の変更時に行うスナップショットビルドは、[GitHub Actions](github-actions.md)を参照する。
 
 ## リリースの手順
 
-リリースは Git タグの push によって開始する。
+リリースは Git タグの push によって開始する。タグ付けされたコミットに対してテストスイート全体を実行し、いずれかが失敗した場合、そのタグにリリースは作られない。
 
 ```console
 git tag v0.1.0
 git push origin v0.1.0
 ```
 
-バージョンは Git タグそのものであり、goreleaser がタグから導出する。semver のプレリリース(`v0.1.0-rc.1`)である場合、GitHub リリースはプレリリースとして作られ、イメージの `latest` タグは移動しない。先にテストスイート全体がタグ付けされたコミットに対して走り、いずれかが失敗した場合、そのタグにリリースは作られない。
+バージョンは goreleaser が Git タグから導出する。semver のプレリリース (`v0.1.0-rc.1`) である場合、GitHub リリースはプレリリースとして作られ、イメージの `latest` タグは移動しない。
+
+## リリースの成果物
 
 リリースの成果物は次のとおりである。
 
@@ -25,39 +27,55 @@ git push origin v0.1.0
 
 `latest` は試用と最新版の発見のために残す移動タグであり、デプロイには使わない。Lambda へ配置するイメージはバージョンタグ、厳密に同じ内容を再現する必要がある環境では digest で参照する。
 
-どちらのイメージもマルチアーキテクチャ(`linux/amd64`、`linux/arm64`)である。goreleaser がクロスコンパイルしたバイナリを、`build/Dockerfile.reconciler` と `build/Dockerfile.webconsole` により buildx が組み立てる。ソースからビルドするのはリポジトリルートの `Dockerfile` であり、ローカルのビルドとイメージテストにとってはそちらが正となる。ローカルビルドの手順は、[build.md](build.md) のコンテナイメージを参照。
+どちらのイメージも `linux/amd64` と `linux/arm64` に対応するマルチアーキテクチャイメージである。
+
+## リリースイメージのビルド
+
+リリースイメージは、goreleaser がクロスコンパイルしたバイナリから buildx が組み立てる。使用するファイルは `build/Dockerfile.reconciler` と `build/Dockerfile.webconsole` である。
+
+ローカルビルドとイメージテストは、リポジトリルートの `Dockerfile` でソースからビルドする。実行手順は[ビルド](build.md)のコンテナイメージを参照する。
 
 > [!IMPORTANT]
 > リリース用の Dockerfile とルートの `Dockerfile` は、ランタイムステージが重複している。ベースイメージ、`ENV`、Lambda Web Adapter のバージョンを変更する場合は、両方に反映すること。
 
-GHCR への push はワークフローの `GITHUB_TOKEN`(`packages: write`)で行う。設定すべきシークレットはない。
+## GHCR の初回公開
+
+GHCR への push はワークフローの `GITHUB_TOKEN` (`packages: write`) で行う。設定すべきシークレットはない。
 
 > [!IMPORTANT]
-> 初回リリースの後、イメージごとに一度だけ手作業を要する。作成された直後の GHCR のパッケージは、リポジトリの可視性に関わらず private であり、認証なしの `docker pull` は失敗する。パッケージが継承するのは、紐づいたリポジトリの権限であって可視性ではないためである。リポジトリの Packages から各パッケージを public に変更すること (パッケージの設定 → Change visibility)。
+> 初回リリースの後、各 GHCR パッケージを一度だけ手作業で public に変更する必要がある。作成された直後の GHCR のパッケージは、リポジトリの可視性に関わらず private であり、認証なしの `docker pull` は失敗する。パッケージが継承するのは、紐づいたリポジトリの権限であって可視性ではないためである。リポジトリの Packages から各パッケージを public に変更すること (パッケージの設定 → Change visibility)。
 
 2 回目以降のリリースは既存のパッケージに push するため、可視性はそのまま保たれる。
 
 ## 依存の更新
 
-Dependabot が週次で pull request を作る(`.github/dependabot.yml`)。対象は Go モジュール、Actions、ルートおよびリリース用 Dockerfile のベースイメージである。常に一括で動くもの(AWS SDK のモジュール群、Actions、イメージ)が 1 つの pull request になるよう、グループ化している。いずれも `ci.yml` によって検査され、イメージテストも含まれる。
+Dependabot は `.github/dependabot.yml` に従って週次で pull request を作成する。対象は Go モジュール、Actions、ルートおよびリリース用 Dockerfile のベースイメージである。
+
+AWS SDK のモジュール群、Actions、イメージは、それぞれ一括更新する単位でグループ化する。更新はイメージテストを含む `ci.yml` の検査を受ける。
 
 Dockerfile frontend、Go ビルダー、Lambda ベースイメージ、Lambda Web Adapter はタグと digest の両方で固定し、docker の更新対象に含める。Go の依存と異なり `go.mod` には現れないため、Dependabot がタグと digest を同時に更新する。
 
 ### リリースからの経過日数
 
-いずれのエコシステムにも `cooldown.default-days: 7` を設定してある。公開から 1 週間が経過するまで、Dependabot はそのバージョンを提案しない。これらの更新は自動でマージされ、不正な公開と `main` の間に人の目が入らないためである。汚染されたリリースは数日のうちに発見されて取り下げられることが多く、1 週間の距離を置く代償は小さい。Dependabot は無設定でも 3 日の cooldown を適用する。7 日はそれを意図的に延ばした値である。
+Dependabot は公開から 7 日が経過したバージョンを提案する。いずれのエコシステムにも `cooldown.default-days: 7` を設定してあり、既定の 3 日の cooldown を延長している。
+
+patch と minor の更新は人によるレビューを経ずに自動マージする。公開直後の不正なリリースの発見や取り下げを待つため、更新提案までの待機期間を設ける。
 
 > [!NOTE]
 > security update は cooldown の対象外である。既知の CVE に対する更新は、公開からの日数によらず提案される。
 
 ### 自動マージ
 
-`dependabot-auto-merge.yml` が Dependabot の pull request ごとに動作し、patch と minor の更新について `gh pr merge --auto` を呼ぶ。major は対象外であり、人が読む。条件は「major でないもの」ではなく 2 つの更新種別の許可リストとしてあるため、種別を判定できなかった更新もここで止まる。グループ化された pull request では、メタデータはグループ中で最も大きい更新種別を報告する。したがって patch が 10 個あっても major が 1 つ混ざれば、グループ全体が保留される。
+`dependabot-auto-merge.yml` は Dependabot の pull request ごとに実行する。patch と minor の更新について `gh pr merge --auto` を呼ぶ。自動マージの対象はこの 2 つの更新種別の許可リストで判定する。major は自動マージの対象外とし、人が確認する。種別を判定できなかった更新も自動マージしない。
 
-このワークフロー自体は何もマージしない。`--auto` は意思を記録するのみであり、実際のマージは必須チェックの通過後に GitHub が行う。すなわち実質的な関門は `main` のブランチ保護である。前提となるリポジトリ設定を、以下に示す。
+グループ化された pull request では、メタデータはグループ中で最も大きい更新種別を報告する。したがって patch が 10 個あっても major が 1 つ混ざれば、グループ全体が保留される。
+
+`--auto` は自動マージの設定を記録し、GitHub が必須チェックの通過後にマージする。必須チェックは `main` のブランチ保護で設定する。
+
+自動マージには、次のリポジトリ設定が必要である。
 
 - Settings → General → Allow auto-merge を有効にする。無効である場合、`gh pr merge --auto` は失敗する
-- `main` に対するブランチ保護(または ruleset)で `ci.yml` のチェックを必須にする。選択すべきチェック名は、[github-actions.md](github-actions.md) のチェック名を参照
+- `main` に対するブランチ保護 (または ruleset) で `ci.yml` のチェックを必須にする。選択すべきチェック名は[GitHub Actions](github-actions.md)のチェック名を参照する
 
 > [!WARNING]
-> 必須チェックを設定しない場合、`--auto` を設定した時点で pull request はマージされる。テストは検査として機能せず、依存の更新が無検査で `main` に入る。
+> 必須チェックを設定しない場合、`--auto` を設定した時点で pull request はマージされる。テストの成功はマージ条件にならず、依存の更新が無検査で `main` に入る。

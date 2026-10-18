@@ -1,15 +1,15 @@
 # 実行時設定
 
-本ドキュメントはreconciler、CLI、および Web コンソールの接続先、タイムゾーン、監視、HTTP 公開に関する設定を示す。
+本ドキュメントは reconciler、CLI、および Web コンソールの接続先、タイムゾーン、監視、HTTP 公開に関する設定を示す。
 
 ## 共通設定
 
 AWS の認証情報、リージョン、および接続先は AWS SDK の設定を使用する。アプリケーション固有の共通環境変数を、以下に示す。
 
-| 変数 | 必須 | 既定値 | 用途 |
+| 変数 | 必須となるコンポーネント | 既定値 | 用途 |
 | --- | --- | --- | --- |
 | STATE_TABLE_NAME | reconciler と Web コンソール | なし | DynamoDB テーブル名 |
-| DEFAULT_TIMEZONE | いいえ | UTC | スケジュールと Web の日時に適用する IANA タイムゾーン |
+| DEFAULT_TIMEZONE | なし | UTC | スケジュールと Web の日時に適用する IANA タイムゾーン |
 
 DEFAULT_TIMEZONE が不正な場合、reconciler と Web コンソールは起動に失敗する。CLI、reconciler、および Web コンソールでは同じ値を使用すること。
 
