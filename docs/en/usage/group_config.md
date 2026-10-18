@@ -31,11 +31,17 @@ The DynamoDB attribute ecs_max_count validates the startup-count tag cheapskate:
 
 The limit applies per service, not to the group's total task count. Scheduled Scaling bounds and current capacity do not pass through this validation.
 
+A group used only for stopping, or containing only RDS, Aurora, and EC2 resources, can omit the attribute. Omit unused attributes rather than storing 0 or NULL. An invalid attribute type or value invalidates the entire group and prevents processing of all its resources, including stops.
+
 Use the CLI ecs-max-count command to register or change the limit and clear-ecs-max-count to remove the attribute. Both require an existing group and preserve its schedule and override. The web console displays the value and retains it during schedule and override changes. For registration, changes, and removal, see [ECS service configuration](resources/ecs-service.md#dynamodb-and-cli).
 
 ## DynamoDB format
 
-The table uses String partition key pk and String sort key sk. Store one item per group. Do not configure TTL or secondary indexes. Attributes are:
+The table uses String partition key pk and String sort key sk. Store one item per group. Do not configure TTL or secondary indexes.
+
+Do not create separate items for individual resources. Changing a group affects all its members, regardless of resource type. Use separate groups when resources need different schedules or overrides.
+
+Attributes are:
 
 | Attribute | DynamoDB type | Value |
 | --- | --- | --- |

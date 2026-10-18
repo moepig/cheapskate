@@ -1,10 +1,10 @@
 # グループ設定
 
-本ドキュメントは、グループ名、スケジュール、override、ECS 台数上限、および DynamoDB に直接登録する場合のデータ形式を定義する。
+本ドキュメントはグループ名、スケジュール、override、ECS 台数上限、および DynamoDB に直接登録する場合のデータ形式を定義する。
 
 ## グループ名
 
-グループ名は 1～64 文字であり、ASCII の英字、数字、ピリオド、アンダースコア、およびハイフンを使用できる。先頭は ASCII の英字または数字とする。リソースの cheapskate:group タグには、この名前をそのまま設定する。
+グループ名は 1～64 文字であり、ASCII の英字、数字、ピリオド、アンダースコア、およびハイフンを使用できる。先頭は ASCII の英字または数字とする。リソースの cheapskate:group タグにはこの名前をそのまま設定する。
 
 ## スケジュールと override
 
@@ -27,15 +27,21 @@ override の値は running、stopped、disabled のいずれかである。overr
 
 ## ECS 台数上限
 
-ecs_max_count は、所属する各 ECS service の起動台数タグ cheapskate:desired-count と通常の上限タグ cheapskate:scaling-max の値を検証する DynamoDB 属性である。Number 型の正の int32、1～2147483647 を登録する。ECS の起動や稼働中の設定更新には登録が必要である。停止にはこの上限を適用しない。
+ecs_max_count は所属する各 ECS service のタグ値を検証する DynamoDB 属性である。検証対象は起動台数タグ cheapskate:desired-count と通常の上限タグ cheapskate:scaling-max の値とする。Number 型の正の int32、1～2147483647 を登録する。ECS の起動や稼働中の設定更新には登録が必要である。停止にはこの上限を適用しない。
 
 グループ全体の合計台数ではなく、service ごとに適用する。Scheduled Scaling が設定する上下限と現在台数は、この検証を通らない。
 
-CLI の ecs-max-count で上限を登録・変更し、clear-ecs-max-count で属性を削除する。どちらも既存グループを対象とし、スケジュールと override を保持する。Web コンソールは値を表示し、スケジュールや override の変更時に保持する。上限の登録・変更・削除の詳細は、[ECS service の設定](resources/ecs-service.md#dynamodb-と-cli) を参照。
+停止だけを行うグループや、RDS、Aurora、および EC2 だけのグループでは省略できる。未使用の場合は 0 や NULL で埋めず、属性を省略する。不正な属性型や値がある場合はグループ全体の設定エラーとなり、停止も含めて同じグループのリソースを処理しない。
+
+CLI の ecs-max-count で上限を登録・変更し、clear-ecs-max-count で属性を削除する。どちらも既存グループを対象とし、スケジュールと override を保持する。Web コンソールは値を表示し、スケジュールや override の変更時に保持する。上限の登録・変更・削除の詳細は[ECS service の設定](resources/ecs-service.md#dynamodb-と-cli) を参照。
 
 ## DynamoDB の登録形式
 
-テーブルのパーティションキーは String 型の pk、ソートキーは String 型の sk とする。1 グループにつき 1 アイテムを保存する。TTL とセカンダリインデックスは使用しない。属性を、以下に示す。
+テーブルのパーティションキーは String 型の pk、ソートキーは String 型の sk とする。1 グループにつき 1 アイテムを保存する。TTL とセカンダリインデックスは使用しない。
+
+リソースごとのアイテムは作成しない。グループ設定の変更はリソースタイプを問わず所属する全リソースに影響する。異なるスケジュールや override が必要な場合は、グループを分ける。
+
+属性を、以下に示す。
 
 | 属性 | DynamoDB の型 | 値 |
 | --- | --- | --- |

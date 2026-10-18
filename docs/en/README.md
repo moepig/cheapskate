@@ -2,6 +2,16 @@
 
 This index covers deployment, daily operation, configuration specifications, resource behavior, and development.
 
+Choose a reading path for your task:
+
+| Task | Reading path |
+| --- | --- |
+| First deployment | [Concepts](usage/concepts.md) → [Setup](usage/setup.md) |
+| Daily operation | [Daily operations](usage/operations.md) → [CLI examples](usage/cli_records.md) |
+| Resource configuration | [Resource index](usage/resources/README.md) → Type-specific settings |
+| Troubleshooting | [Troubleshooting](usage/troubleshooting.md) → [Logs and metrics](usage/monitoring.md) |
+| Reading the code | [Architecture](architecture/overview.md) → [Contracts](development/reconcile.md) → [API sequences](development/resource_sequence.md) |
+
 ## Getting started
 
 Start with groups and schedules, then register your first group using the setup guide.
@@ -10,7 +20,8 @@ Start with groups and schedules, then register your first group using the setup 
 | --- | --- |
 | [Groups and schedules](usage/concepts.md) | Membership, schedules, and override precedence |
 | [Setup](usage/setup.md) | AWS preparation, first configuration, verification, and enabling periodic execution |
-| [AWS resources and IAM](usage/aws_resources.md) | Infrastructure and execution-role permissions |
+| [AWS resources and IAM](usage/aws_resources.md) | Deployment infrastructure inventory |
+| [IAM permissions](usage/iam.md) | Execution roles, inspection and action permissions, and optional notification and encryption permissions |
 
 ## Daily operation
 
@@ -31,13 +42,14 @@ Use these documents for valid values and how they affect resources:
 
 | Document | Scope |
 | --- | --- |
-| [Resource configuration and shared settings](usage/resources/README.md) | Shared DynamoDB and CLI configuration, plus RDS, Aurora, EC2, and ECS tags and specific settings |
+| [Resource configuration and shared settings](usage/resources/README.md) | Type-specific settings and links to shared specifications and operations |
 | [Runtime configuration](usage/config.md) | Connections, time zones, monitoring, and HTTP environment settings |
 | [Group configuration](usage/group_config.md) | Group names, cron, overrides, ECS limits, and DynamoDB attribute types |
 | [Resource tags](usage/resource_tag.md) | Tag locations, defaults, and constraints |
 | [CLI reference](usage/cli.md) | Arguments, formats, exit codes, and update constraints |
 | [Start and stop behavior](usage/resource_flow.md) | Timing, eligibility, manual changes, failures, and overlapping invocations |
-| [ECS startup, shutdown, and scaling](usage/ecs.md) | Counts, bounds, suspension, tag changes, and failure examples |
+| [ECS startup, shutdown, and scaling](usage/ecs.md) | Counts, bounds, suspension, tag changes, and partial failures |
+| [ECS configuration and current-state examples](usage/ecs_examples.md) | State examples for startup, tag changes, resumption, lost responses, and stopping |
 
 ## Development
 

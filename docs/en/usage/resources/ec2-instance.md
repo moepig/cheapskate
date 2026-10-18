@@ -10,7 +10,7 @@ Eligible EC2 instances do not belong to an Auto Scaling group. The AWS configura
 
 There are no DynamoDB attributes specific to this resource type. The membership group's schedule and override control startup and shutdown of the EC2 instance. There are no settings to change instance count or instance type.
 
-For applicable attributes, see [Shared DynamoDB settings](README.md#shared-dynamodb-settings). For registration and update commands, see [Shared CLI operations](README.md#shared-cli-operations).
+For applicable attributes, see [Group configuration DynamoDB format](../group_config.md#dynamodb-format). For registration and update examples, see [CLI configuration examples](../cli_records.md).
 
 ## Resource tags
 
@@ -24,7 +24,7 @@ aws ec2 create-tags --region ap-northeast-1 \
   --tags Key=cheapskate:group,Value=dev
 ```
 
-For connection and group assumptions, see [Shared prerequisites](README.md#shared-prerequisites). For tagging arguments, see [AWS CLI create-tags](https://docs.aws.amazon.com/cli/latest/reference/ec2/create-tags.html).
+For connection and group assumptions, see [CLI example prerequisites](../cli_records.md#prerequisites). For tagging arguments, see [AWS CLI create-tags](https://docs.aws.amazon.com/cli/latest/reference/ec2/create-tags.html).
 
 ## Applied behavior
 
@@ -32,4 +32,4 @@ The EC2 instance states running and stopped map to cheapskate's running and stop
 
 If inspection reports Auto Scaling group membership, remove the instance from cheapskate management.
 
-For inspecting configuration and current state, see [Shared verification](README.md#shared-verification).
+For inspecting configuration and current state, see [Daily operations](../operations.md#inspecting-configuration-and-current-state).

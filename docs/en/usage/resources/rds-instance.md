@@ -12,7 +12,7 @@ For Aurora, see [Aurora DB cluster configuration](rds-cluster.md).
 
 There are no DynamoDB attributes specific to this resource type. The membership group's schedule and override control startup and shutdown of the DB instance.
 
-For applicable attributes, see [Shared DynamoDB settings](README.md#shared-dynamodb-settings). For registration and update commands, see [Shared CLI operations](README.md#shared-cli-operations).
+For applicable attributes, see [Group configuration DynamoDB format](../group_config.md#dynamodb-format). For registration and update examples, see [CLI configuration examples](../cli_records.md).
 
 ## Resource tags
 
@@ -26,10 +26,10 @@ aws rds add-tags-to-resource --region ap-northeast-1 \
   --tags Key=cheapskate:group,Value=dev
 ```
 
-For connection and group assumptions, see [Shared prerequisites](README.md#shared-prerequisites). For tagging arguments, see [AWS CLI add-tags-to-resource](https://docs.aws.amazon.com/cli/latest/reference/rds/add-tags-to-resource.html).
+For connection and group assumptions, see [CLI example prerequisites](../cli_records.md#prerequisites). For tagging arguments, see [AWS CLI add-tags-to-resource](https://docs.aws.amazon.com/cli/latest/reference/rds/add-tags-to-resource.html).
 
 ## Applied behavior
 
 The RDS DB instance status available means running and stopped means stopped. Other states defer operations until a later cycle. StartDBInstance and StopDBInstance operate on the individual DB instance.
 
-For inspecting configuration and current state, see [Shared verification](README.md#shared-verification).
+For inspecting configuration and current state, see [Daily operations](../operations.md#inspecting-configuration-and-current-state).

@@ -1,6 +1,6 @@
 # EC2 インスタンスの設定
 
-本ドキュメントは、EC2 インスタンスの対象条件、グループ設定の適用先、およびタグの設定先を示す。cheapskate のリソースタイプ名は ec2-instance である。
+本ドキュメントはEC2 インスタンスの対象条件、グループ設定の適用先、およびタグの設定先を示す。cheapskate のリソースタイプ名は ec2-instance である。
 
 ## 対象条件
 
@@ -10,7 +10,7 @@ Auto Scaling グループに所属していない EC2 インスタンスが対�
 
 EC2 インスタンス固有の DynamoDB 属性はない。所属グループのスケジュールと override が、EC2 インスタンスの起動・停止を制御する。インスタンス数やインスタンスタイプを変更する設定はない。
 
-適用する属性は、[共通の DynamoDB 設定](README.md#共通の-dynamodb-設定) を参照。登録・変更コマンドは、[共通の CLI 操作](README.md#共通の-cli-操作) を参照。
+適用する属性は[グループ設定の DynamoDB 登録形式](../group_config.md#dynamodb-の登録形式) を参照。登録・変更例は[CLI 設定例](../cli_records.md) を参照。
 
 ## タグ側の設定
 
@@ -24,7 +24,7 @@ aws ec2 create-tags --region ap-northeast-1 \
   --tags Key=cheapskate:group,Value=dev
 ```
 
-接続先とグループ名の前提は、[共通の前提](README.md#共通の前提) を参照。タグ操作の引数の詳細は、[AWS CLI create-tags](https://docs.aws.amazon.com/cli/latest/reference/ec2/create-tags.html) を参照。
+接続先とグループ名の前提は、[CLI 設定例の前提](../cli_records.md#前提) を参照。タグ操作の引数の詳細は[AWS CLI create-tags](https://docs.aws.amazon.com/cli/latest/reference/ec2/create-tags.html) を参照。
 
 ## 設定の反映
 
@@ -32,4 +32,4 @@ EC2 のインスタンス状態 running を稼働中、stopped を停止済み�
 
 Auto Scaling グループ所属のエラーがある場合は、そのインスタンスを cheapskate の管理対象から外す。
 
-設定と現在状態の確認方法は、[共通の反映確認](README.md#共通の反映確認) を参照。
+設定と現在状態の確認方法は、[日常の操作](../operations.md#設定と現在状態の確認) を参照。

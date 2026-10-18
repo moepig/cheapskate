@@ -4,13 +4,7 @@ This document explains how to inspect reconciler results, resource errors, and s
 
 ## Configuration and current-state inspection
 
-Use CLI show or the web console's group detail to inspect stored configuration and current AWS state. In the show JSON output, each resources entry's config represents tag settings and live represents AWS observations. Inspect the entry's live_error when a resource cannot be observed.
-
-A successful show command does not mean every resource has reached its requested state. For inspection, use:
-
-```console
-cheapskate-cli -table cheapskate -output json show --group dev
-```
+For steps to compare saved configuration with current AWS state, see [Daily operations](operations.md#inspecting-configuration-and-current-state). The output fields are defined in [CLI output formats](cli.md#output-formats).
 
 ## Structured logs
 
@@ -28,7 +22,7 @@ The reconciler and web console emit structured logs to stderr. Principal reconci
 | apply-action-started / apply-action-finished | debug | Start and end of action requests |
 | notify-action-started / notify-action-finished | debug | Start and end of notification attempts |
 | resource-discovered | debug | Discovered resource's group, resource_id, and resource_arn |
-| resource-discovery-skipped | warn | Original resource_arn and reason for an excluded RDS cluster candidate: not-found or membership-tag-missing |
+| resource-discovery-skipped | warn | Original resource_arn and reason for an excluded RDS cluster candidate |
 | summary | info | Resources inspected, successful operations, and group/resource error counts |
 | action-started | info | Resource and state immediately before requesting a start, stop, or ECS configuration repair |
 | action-finished | info | Action outcome, desired state, and observed state before the action |
@@ -39,6 +33,8 @@ The reconciler and web console emit structured logs to stderr. Principal reconci
 
 Set LOG_LEVEL=debug to also emit debug records. Each operation's completion includes success and error on failure. Notifications include attempt for each publish attempt. Discovery completion includes the resources count, even when zero. resource-discovered records appear in ARN order and include resources excluded from processing because of invalid or disabled groups.
 
+The reason for resource-discovery-skipped is not-found or membership-tag-missing.
+
 Resource info records are emitted as processing progresses. Principal action-result fields are:
 
 | Field | Content |
@@ -47,13 +43,13 @@ Resource info records are emitted as processing progresses. Principal action-res
 | resource_id / resource_arn | Target resource identifier / ARN |
 | desired | Desired state: running or stopped; empty for disabled |
 | action | Requested operation: start or stop |
-| observed | Common state used to decide the action: running, stopped, transitioning, or not-found; null for disabled resources |
+| observed | Common state for action decisions; null for disabled resources |
 | aws_state | Status read from AWS, or ECS task counts and scaling configuration |
-| reason | Reason for leaving a resource unchanged or skipping it: desired-state-matched, disabled, transitioning, or not-found |
+| reason | Reason for leaving a resource unchanged or skipping it |
 | success | Whether the action request succeeded; does not indicate transition completion |
 | error | Action request error |
 
-observed classifies AWS observations into a state shared across resource types; aws_state contains the underlying status or task counts and scaling configuration. Both reflect the values at the time of the decision. action-finished records the action request's outcome without reading state again for logging. Inspect the resulting state in the next cycle, with CLI show, or in the web console.
+observed classifies AWS observations as running, stopped, transitioning, or not-found. aws_state contains the underlying status or task counts and scaling configuration. Both reflect the values at the time of the decision. action-finished records the action request's outcome without reading state again for logging. Inspect the resulting state in the next cycle, with CLI show, or in the web console.
 
 For resource-unchanged, reason=desired-state-matched means the observed state matches the desired state and no configuration repair is needed. For resource-skipped, reason is disabled, transitioning, or not-found.
 

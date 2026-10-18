@@ -6,7 +6,7 @@ This document takes deployment from DynamoDB and Lambda preparation through regi
 
 Prepare a reconciler Lambda, DynamoDB table, five-minute trigger, and IAM access to the managed resources. Administration uses the CLI or optional web console. Create AWS infrastructure through your IaC or AWS management tools.
 
-The reconciler and web console use separate container images. For building and publishing to ECR, see [Build](../development/build.md). For infrastructure and permissions, see [AWS resources and IAM](aws_resources.md).
+The reconciler and web console use separate container images. For building and publishing to ECR, see [Build](../development/build.md). For infrastructure, see [Deployment infrastructure](aws_resources.md#deployment-infrastructure). For execution-role permissions, see [IAM permissions](iam.md).
 
 ## 1. Create the DynamoDB table
 
@@ -22,7 +22,7 @@ aws dynamodb create-table \
 
 ## 2. Deploy the reconciler
 
-Precreate the Lambda log group and grant the execution role permissions for the managed resources and enabled features. If using ECS Auto Scaling, also provision the scalable targets and service-linked role first. For policy examples and scalable target ARN lookup, see [AWS resources and IAM](aws_resources.md).
+Precreate the Lambda log group and grant the execution role permissions for the managed resources and enabled features. If using ECS Auto Scaling, also provision the scalable targets and service-linked role first. For policy examples and scalable target ARN lookup, see [IAM permissions](iam.md).
 
 Deploy the reconciler image to Lambda. Match the image and Lambda architectures. Set STATE_TABLE_NAME to the table and DEFAULT_TIMEZONE to the schedule's time zone.
 

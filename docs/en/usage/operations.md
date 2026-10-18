@@ -13,7 +13,9 @@ cheapskate-cli list
 cheapskate-cli -output json show --group dev
 ```
 
-List displays stored group configuration. Show displays member configuration tags and current AWS state without changing resources or waiting for transitions. A resource with live_error in the show JSON output failed inspection.
+List displays stored group configuration. Show displays member configuration tags and current AWS state without changing resources or waiting for transitions.
+
+Show returns exit code 0 even when an individual resource inspection fails. Check live_error in each resources entry; a resource with an error has not been successfully observed. Verify transition completion from current state. For saved configuration, tag settings, and current-state fields, see [CLI output formats](cli.md#output-formats).
 
 For browser operations, see [Web console](web_console.md). For arguments and output formats, see [CLI reference](cli.md).
 

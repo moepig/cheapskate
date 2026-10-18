@@ -29,12 +29,21 @@ The context commands are:
 
 | Command | Arguments | Behavior |
 | --- | --- | --- |
-| config set-context | NAME --table TABLE [--profile PROFILE] [--region REGION] [--timezone ZONE] | Create or update a context; omitted fields retain their saved values |
+| config set-context | NAME [options] | Create or update a context; omitted fields retain their saved values |
 | config use-context | NAME | Save the current selection; the context must exist |
 | config get-contexts | None | List contexts in name order; mark the current selection with * |
 | config current-context | None | Display the saved selection; fail if none is selected |
 
 New contexts require --table. Optional settings are the AWS shared config profile name, AWS region, and IANA schedule time zone. An empty optional value clears that setting. set-context does not change the current selection. Credentials remain in AWS SDK configuration; the CLI saves the profile name.
+
+The set-context options are:
+
+| Option | Setting |
+| --- | --- |
+| --table TABLE | DynamoDB table name |
+| --profile PROFILE | AWS shared configuration profile |
+| --region REGION | AWS region |
+| --timezone ZONE | IANA schedule time zone |
 
 To register and select a context, then temporarily use another context:
 
@@ -53,13 +62,21 @@ The default file locations are:
 
 | OS | Path |
 | --- | --- |
-| Linux | $XDG_CONFIG_HOME/cheapskate/config.json, or ~/.config/cheapskate/config.json when unset |
+| Linux, XDG_CONFIG_HOME set | $XDG_CONFIG_HOME/cheapskate/config.json |
+| Linux, XDG_CONFIG_HOME unset | ~/.config/cheapskate/config.json |
 | macOS | ~/Library/Application Support/cheapskate/config.json |
 | Windows | %AppData%\cheapskate\config.json |
 
 -config overrides CHEAPSKATE_CONFIG. A missing file means no saved contexts; it is created when saving a context or selection. Invalid files produce an error. The file contains current_context and a contexts object keyed by name; context fields are table, profile, region, and timezone.
 
-With -output json, get-contexts returns the CLI config object, set-context returns the context name in name and the saved context fields, and use-context and current-context return an object containing current_context.
+With -output json, the context commands return:
+
+| Command | Result |
+| --- | --- |
+| get-contexts | CLI configuration object |
+| set-context | Context name in name and saved context fields |
+| use-context | Object containing current_context |
+| current-context | Object containing current_context |
 
 ## Commands
 
@@ -94,7 +111,20 @@ For examples, see [Daily operations](operations.md) and [CLI group configuration
 
 Text list writes valid groups to stdout and invalid groups to stderr. JSON list writes one object containing groups and errors to stdout when the list read succeeds. Failure of the read itself is written to stderr.
 
-JSON show contains group for group configuration and resources for the member resource array. In each resources entry, type is the cheapskate resource type name, ref is the resource-specific identifier, and arn is the resource ARN. Each entry's config comes from tags; live contains AWS observations; live_error contains a state inspection failure. An invalid stored group produces a structured error object.
+JSON show contains group for saved group configuration and resources for the member resource array. Fields are:
+
+| Field | Content |
+| --- | --- |
+| group | Saved group configuration |
+| resources[].type | cheapskate resource type name |
+| resources[].ref | Resource-specific identifier |
+| resources[].arn | Resource ARN |
+| resources[].config | Settings read from tags |
+| resources[].live.state | State classified from AWS observations |
+| resources[].live.detail | AWS status or ECS counts and scaling settings |
+| resources[].live_error | State inspection failure |
+
+An invalid stored group produces a structured error object.
 
 CLI override expiration timestamps always use UTC RFC 3339 regardless of the schedule time zone.
 

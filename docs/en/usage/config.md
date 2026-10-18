@@ -30,7 +30,14 @@ An unparseable METRICS_ENABLED prevents startup. Empty METRICS_NAMESPACE selects
 
 ## CLI
 
-The CLI saves named contexts and the current selection in a local JSON file. A context contains the DynamoDB table name and optional AWS profile, region, and schedule time zone. The table name comes from -table, then the selected context, then CHEAPSKATE_TABLE, then STATE_TABLE_NAME. A context's time zone takes precedence over DEFAULT_TIMEZONE. CLI override expiration output always uses UTC RFC 3339. For context commands, file locations, arguments, and output formats, see [CLI reference](cli.md).
+CLI-specific environment variables are:
+
+| Variable | Purpose |
+| --- | --- |
+| CHEAPSKATE_CONFIG | Local CLI configuration file path |
+| CHEAPSKATE_TABLE | DynamoDB table name |
+
+The CLI also accepts STATE_TABLE_NAME and DEFAULT_TIMEZONE. For precedence among contexts, options, and environment variables, see [Invocation and global options](cli.md#invocation-and-global-options). For the configuration file location and format, see [Contexts](cli.md#contexts).
 
 ## Web console
 

@@ -1,6 +1,6 @@
 # 実行時設定
 
-本ドキュメントは、reconciler、CLI、および Web コンソールの接続先、タイムゾーン、監視、HTTP 公開に関する設定を示す。
+本ドキュメントはreconciler、CLI、および Web コンソールの接続先、タイムゾーン、監視、HTTP 公開に関する設定を示す。
 
 ## 共通設定
 
@@ -26,11 +26,18 @@ DEFAULT_TIMEZONE が不正な場合、reconciler と Web コンソールは起�
 
 LOG_LEVEL は大文字と小文字を区別せず、空の場合は info を使う。解釈できない値では起動に失敗する。
 
-METRICS_ENABLED を真偽値として解釈できない場合は起動に失敗する。METRICS_NAMESPACE が空の場合は cheapskate を使う。出力内容は、[ログ・メトリクス・通知](monitoring.md)を参照。
+METRICS_ENABLED を真偽値として解釈できない場合は起動に失敗する。METRICS_NAMESPACE が空の場合は cheapskate を使う。出力内容は[ログ・メトリクス・通知](monitoring.md)を参照。
 
 ## CLI
 
-CLI は、名前付きの context と選択状態をローカルの JSON ファイルに保存する。context には DynamoDB テーブル名と、任意の AWS profile、リージョン、およびスケジュールのタイムゾーンを設定する。テーブル名は、-table、選択中 context、CHEAPSKATE_TABLE、STATE_TABLE_NAME の順に参照する。context のタイムゾーンは DEFAULT_TIMEZONE より優先する。CLI では、override の有効期限を常に UTC の RFC 3339 形式で表示する。context の管理コマンド、保存先、引数、および出力形式は、[CLI リファレンス](cli.md)を参照。
+CLI 固有の環境変数を、以下に示す。
+
+| 変数 | 用途 |
+| --- | --- |
+| CHEAPSKATE_CONFIG | ローカルの CLI 設定ファイルのパス |
+| CHEAPSKATE_TABLE | DynamoDB テーブル名 |
+
+STATE_TABLE_NAME と DEFAULT_TIMEZONE も CLI で使用できる。context、オプション、環境変数の優先順位は、[実行形式と全体オプション](cli.md#実行形式と全体オプション)を参照。設定ファイルの保存先と形式は、[context](cli.md#context)を参照。
 
 ## Web コンソール
 
@@ -53,7 +60,7 @@ BASE_PATH はリンク、フォーム送信先、およびリダイレクトに�
 
 ALLOWED_HOSTS は既定の許可リストを置き換える。未設定または空の場合は、localhost、127.0.0.1、および [::1] に待ち受けポートを付けた Host を許可する。空白とカンマだけの指定では起動に失敗する。
 
-要求の Host はポートを含め、大文字と小文字を区別せず完全一致で確認する。ワイルドカードとサブドメインの一致判定には対応しない。未許可の Host には、状態の読み取りや変更の前に HTTP 403 を返す。
+要求の Host はポートを含め、大文字と小文字を区別せず完全一致で確認する。ワイルドカードとサブドメインの一致判定には対応しない。未許可の Host には状態の読み取りや変更の前に HTTP 403 を返す。
 
 API Gateway などを使用する場合は、実際に転送される公開ホストを指定する。scheme と URL path は付けない。設定例を、以下に示す。
 

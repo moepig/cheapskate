@@ -1,10 +1,10 @@
 # ECS の起動・停止とスケーリング
 
-本ドキュメントは、REPLICA の ECS service を必要な時間帯に稼働させ、稼働中のスケーリング上下限を管理する機能の目的と動作を説明する。
+本ドキュメントはREPLICA の ECS service を必要な時間帯に稼働させ、稼働中のスケーリング上下限を管理する機能の目的と動作を説明する。
 
 ## 機能の目的と管理範囲
 
-cheapskate は、グループのスケジュールと override に従って ECS service を起動・停止する。稼働中は負荷に応じた台数変更を許容し、起動時の台数に固定し続けない。AWS Application Auto Scaling の Scheduled Scaling は、稼働中の上下限を時刻に応じて変えるために併用できる。グループの start_cron・stop_cron は稼働時間帯、AWS の scheduled action はスケーリング上下限を管理する。
+cheapskate はグループのスケジュールと override に従って ECS service を起動・停止する。稼働中は負荷に応じた台数変更を許容し、起動時の台数に固定し続けない。AWS Application Auto Scaling の Scheduled Scaling は、稼働中の上下限を時刻に応じて変えるために併用できる。グループの start_cron・stop_cron は稼働時間帯、AWS の scheduled action はスケーリング上下限を管理する。
 
 タグの上下限を常に維持する運用と、Scheduled Scaling に上下限の変更を委ねる運用を選ぶため、cheapskate:scaling-bounds-mode を設定する。Scheduled Scaling の一時停止状態は、この管理モードに応じて制御する。
 
@@ -13,7 +13,7 @@ cheapskate は、グループのスケジュールと override に従って ECS 
 | tags | タグで指定した範囲を継続して維持する | cheapskate:scaling-min・cheapskate:scaling-max との差を修正する | タグの範囲との競合を防ぐため一時停止する |
 | scheduled | 時刻に応じた上下限変更を AWS に委ねる | 起動の最後と一時停止解除時にタグの範囲を適用し、その後の変更を維持する | 有効にする |
 
-Scheduled Scaling を使用しない service でタグの上下限を維持する場合も tags を選ぶ。未設定時は scheduled とする。どちらのモードも、動的スケーリングの停止フラグを変更せず、通常範囲内の現在台数を維持する。tags は台数を固定するモードではない。
+Scheduled Scaling を使用しない service でタグの上下限を維持する場合も tags を選ぶ。未設定時は scheduled とする。どちらのモードも動的スケーリングの停止フラグを変更せず、通常範囲内の現在台数を維持する。tags は台数を固定するモードではない。
 
 停止中はどちらのモードでも Scheduled Scaling を一時停止し、scheduled action による意図しない再起動を防ぐ。起動後の管理方法はタグに保持するため、日々の起動・停止をまたいで同じモードを使用できる。
 
@@ -21,12 +21,16 @@ Scheduled Scaling を使用しない service でタグの上下限を維持す�
 
 次の例は、scalable target が登録済みで、グループの要求が running の場合である。
 
-| 運用 | 設定 | cheapskate の動作 |
+| 運用 | 上下限管理モード | cheapskate の動作 |
 | --- | --- | --- |
-| API のタスク数を 1～3 台の範囲で管理したい | cheapskate:scaling-min=1、cheapskate:scaling-max=3、cheapskate:scaling-bounds-mode=tags を指定する | AWS 側で上限を 6 に変更しても、次の正常なサイクルで上限を 3 に戻す |
-| 昼は 4～6 台、夜は 1～2 台にスケーリング範囲を変えたい | AWS に昼の上下限を 4・6、夜の上下限を 1・2 にする scheduled action を登録し、cheapskate:scaling-bounds-mode=scheduled を指定する | AWS が変更した上下限を維持し、通常のタグ範囲へ戻さない |
+| API を 1～3 台で運用 | tags | AWS の上限を次の正常サイクルで戻す |
+| 昼夜で範囲を変更 | scheduled | AWS の上下限を維持する |
 
-営業時間外に 0 台を維持する場合は、cheapskate の停止スケジュールまたは override=stopped を使用する。上下限管理モードは、稼働中のスケーリング範囲を選ぶために使用する。
+API service には cheapskate:scaling-min=1 と cheapskate:scaling-max=3 を設定する。上下限管理モードタグ cheapskate:scaling-bounds-mode は tags とする。AWS 側で上限を 6 に変更しても、次の正常なサイクルで上限を 3 に戻す。
+
+昼は 4～6 台、夜は 1～2 台にする scheduled action を AWS に登録し、cheapskate:scaling-bounds-mode=scheduled を設定する。cheapskate は AWS が変更した上下限を維持し、通常のタグ範囲へ戻さない。
+
+営業時間外に 0 台を維持する場合は、cheapskate の停止スケジュールまたは override=stopped を使用する。上下限管理モードは稼働中のスケーリング範囲を選ぶために使用する。
 
 ## 設定と現在状態
 
@@ -43,7 +47,7 @@ DynamoDB のグループ設定、service のタグ、および AWS の現在状�
 | ECS の現在状態 | desiredCount、runningCount、pendingCount | 設定台数、稼働中の台数、起動待ちの台数 |
 | Application Auto Scaling の現在状態 | MinCapacity、MaxCapacity、ScheduledScalingSuspended | 適用済みの上下限と一時停止状態 |
 
-グループの running は起動状態を維持する要求である。ECS の現在の desiredCount や、タグの起動台数と同じ意味ではない。タグの cheapskate:desired-count は、稼働中の台数を常時固定する設定ではない。
+グループの running は起動状態を維持する要求である。ECS の現在の desiredCount や、タグの起動台数と同じ意味ではない。タグの cheapskate:desired-count は稼働中の台数を常時固定する設定ではない。
 
 DynamoDB 属性、CLI 操作、およびタグの型と既定値は、[ECS service の設定](resources/ecs-service.md) を参照。
 
@@ -62,7 +66,7 @@ scalable target が登録済みの場合の対応を、以下に示す。
 | 停止要求を適用するとき | どちらのモードでも | true |
 | 起動台数の初期設定中 | どちらのモードでも | true |
 
-このため、タグが scheduled のままでも、停止中や起動台数の初期設定中は AWS の ScheduledScalingSuspended=true になる。起動設定の最後にモードに対応する値を適用する。グループの要求が disabled の場合は、AWS フラグを変更しない。
+タグが scheduled でも、停止中と起動台数の初期設定中は AWS の ScheduledScalingSuspended=true となる。起動設定の最後に、管理モードに対応する値を適用する。グループの要求が disabled の場合、AWS フラグは変更しない。
 
 ## 停止と起動
 
@@ -74,7 +78,7 @@ ECS は、desiredCount・runningCount・pendingCount がすべて 0 の場合だ
 
 グループが running を要求し、ECS の全台数が 0、または上下限が 0/0 の場合に起動台数を設定する。最初に上下限を cheapskate:desired-count の台数に固定し、起動設定中の上下限変更を防ぐため Scheduled Scaling を一時停止する。ECS の設定台数を再確認し、必要な場合だけ起動台数へ変更する。最後に、通常の上下限と管理モードに対応する一時停止状態を同時に適用する。
 
-起動設定の完了は、全タスクの起動完了を意味しない。設定が一致している更新は省略する。
+起動設定の完了は全タスクの起動完了を意味しない。設定が一致している更新は省略する。
 
 ### scalable target がない場合
 
@@ -91,15 +95,15 @@ scalable target があり、起動台数の設定が不要な場合の動作を�
 | scheduled | ScheduledScalingSuspended=true | 通常の上下限と ScheduledScalingSuspended=false を適用 |
 | scheduled | ScheduledScalingSuspended=false | 上下限と台数を維持 |
 
-モードの切り替えと一時停止解除では、現在の desiredCount が通常の範囲内なら維持する。範囲外なら AWS が台数を調整する。起動台数タグへの再設定は行わない。AWS による容量調整は、[RegisterScalableTarget](https://docs.aws.amazon.com/autoscaling/application/APIReference/API_RegisterScalableTarget.html) を参照。
+モードの切り替えと一時停止解除では、現在の desiredCount が通常の範囲内なら維持する。範囲外なら AWS が台数を調整する。起動台数タグへの再設定は行わない。AWS による容量調整は[RegisterScalableTarget](https://docs.aws.amazon.com/autoscaling/application/APIReference/API_RegisterScalableTarget.html) を参照。
 
 ### 一時停止の対象
 
 上下限管理モードのタグは cheapskate によって書き換えられない。Scheduled Scaling を再開する場合は scheduled に変更し、グループの要求を running にする。
 
-Scheduled Scaling の一時停止は、新しい scheduled action の開始を抑止する。開始済みの操作を取り消さず、一時停止期間に実行時刻を過ぎた action を再実行しない。再開後は将来の実行時刻から動作する。AWS の動作は、[スケーリングの一時停止と再開](https://docs.aws.amazon.com/autoscaling/application/userguide/application-auto-scaling-suspend-resume-scaling.html) を参照。
+Scheduled Scaling の一時停止は、新しい scheduled action の開始を抑止する。開始済みの操作を取り消さず、一時停止期間に実行時刻を過ぎた action を再実行しない。再開後は将来の実行時刻から動作する。AWS の動作は[スケーリングの一時停止と再開](https://docs.aws.amazon.com/autoscaling/application/userguide/application-auto-scaling-suspend-resume-scaling.html) を参照。
 
-scheduled action の定義、DynamicScalingInSuspended、および DynamicScalingOutSuspended は変更しない。各フラグの対象は、[SuspendedState](https://docs.aws.amazon.com/autoscaling/application/APIReference/API_SuspendedState.html) を参照。
+scheduled action の定義、DynamicScalingInSuspended、および DynamicScalingOutSuspended は変更しない。各フラグの対象は[SuspendedState](https://docs.aws.amazon.com/autoscaling/application/APIReference/API_SuspendedState.html) を参照。
 
 ### 台数上限と 0 台の維持
 
@@ -129,100 +133,30 @@ flowchart TD
 
 ## タグ変更と処理途中の失敗
 
-操作に失敗した場合は、適用済みの AWS 設定を残す。次のサイクルはグループ設定、タグ、および現在状態を読み直して操作を決める。DynamoDB とタグには、実行履歴や起動処理の進捗を保存しない。
+操作に失敗した場合は、適用済みの AWS 設定を残す。次のサイクルはグループ設定、タグ、および現在状態を読み直して操作を決める。DynamoDB とタグには実行履歴や起動処理の進捗を保存しない。
 
-正の固定範囲は、通常設定としても起動途中の結果としても存在する。固定範囲だけから起動途中と推測せず、上下限管理モードと AWS の現在状態に従って通常設定を適用する。処理途中でタグを変更しても、すでに設定された台数が変更後の通常範囲内なら維持する。変更後の cheapskate:desired-count は、次の停止状態または上下限 0/0 からの起動で適用する。
+正の固定範囲は通常設定としても起動途中の結果としても存在する。固定範囲だけから起動途中と推測せず、上下限管理モードと AWS の現在状態に従って通常設定を適用する。処理途中でタグを変更しても、すでに設定された台数が変更後の通常範囲内なら維持する。変更後の cheapskate:desired-count は、次の停止状態または上下限 0/0 からの起動で適用する。
 
 後続サイクルが stopped または disabled を読み取った場合は、その要求に従う。古い起動処理の再開を理由に再起動しない。同時実行における反映の条件は、[起動・停止の挙動](resource_flow.md#失敗と同時実行) を参照。
 
 ## 設定と現在状態の具体例
 
-以下の例は、cluster が dev、service が api で、scalable target が登録済みの場合である。DynamoDB の ecs_max_count は Number 型、他の属性とタグ値は String 型とする。override_expires_at は登録せず、override は無期限とする。停止の例では override を stopped に変更する。DynamoDB のグループアイテムに登録する属性値を、以下に示す。
-
-| DynamoDB の属性 | 登録値 |
-| --- | --- |
-| pk | CONFIG |
-| sk | GROUP#dev |
-| override | running |
-| ecs_max_count | 3 |
-
-個別に変更を示す例を除き、ECS service に登録するタグ値は次のとおりである。
-
-| ECS service のタグ | 登録値 |
-| --- | --- |
-| cheapskate:group | dev |
-| cheapskate:desired-count | 2 |
-| cheapskate:scaling-min | 1 |
-| cheapskate:scaling-max | 3 |
-| cheapskate:scaling-bounds-mode | scheduled |
-
-以下の状態表は、各時点で AWS から取得しうる観測例である。
-
 ### 停止状態からの起動と途中失敗
 
-DynamoDB の override=running により起動要求を選択する。ECS の全台数と AWS の上下限が 0 のため、AWS の設定に MinCapacity=2、MaxCapacity=2、および ScheduledScalingSuspended=true を適用する。台数固定後の状態取得が失敗し、通常の上下限を適用する前に処理を終了した場合の観測例を、以下に示す。
-
-| 時点 | desiredCount | runningCount | pendingCount | MinCapacity | MaxCapacity | ScheduledScalingSuspended | 実際の ECS 状況 |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| 起動前 | 0 | 0 | 0 | 0 | 0 | true | タスクがなく、停止設定が残っている |
-| 台数固定の適用後に失敗 | 2 | 0 | 2 | 2 | 2 | true | 2 台が起動待ちで、稼働タスクはまだない |
-| 次のサイクルで通常設定を適用 | 2 | 1 | 1 | 1 | 3 | false | 1 台が稼働し、残り 1 台が起動待ちである |
-| タスク起動後 | 2 | 2 | 0 | 1 | 3 | false | 2 台が稼働している |
-
-次のサイクルでは desiredCount が正で上下限も 0/0 ではないため、起動台数への固定は繰り返さない。AWS の設定に MinCapacity=1、MaxCapacity=3、および ScheduledScalingSuspended=false を適用し、起動台数への再設定は行わない。通常設定の適用時にタスクがすべて起動済みである必要はない。
+詳細な設定値と状態の推移は、[ECS の設定と現在状態の具体例](ecs_examples.md#停止状態からの起動と途中失敗)を参照。
 
 ### 稼働中の固定範囲からのタグ変更
 
-DynamoDB の登録値は override=running、ecs_max_count=3 とする。ECS service の所属タグは cheapskate:group=dev のままとし、他のタグを次のように変更する。
-
-| ECS service のタグ | 変更前 | 変更後 |
-| --- | --- | --- |
-| cheapskate:desired-count | 2 | 1 |
-| cheapskate:scaling-min | 2 | 1 |
-| cheapskate:scaling-max | 2 | 3 |
-| cheapskate:scaling-bounds-mode | tags | tags |
-
-AWS の設定に MinCapacity=1、MaxCapacity=3、および ScheduledScalingSuspended=true を適用する。AWS の現在台数を維持して上下限を変更する観測例を、以下に示す。
-
-| 時点 | desiredCount | runningCount | pendingCount | MinCapacity | MaxCapacity | ScheduledScalingSuspended | 実際の ECS 状況 |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| タグ変更後、設定適用前 | 2 | 2 | 0 | 2 | 2 | true | 固定範囲で 2 台が稼働している |
-| 通常の上下限を適用後 | 2 | 2 | 0 | 1 | 3 | true | 稼働中の 2 台を維持している |
-
-AWS のタスク数がすべて 0 でも上下限が 0/0 でもないため、cheapskate:desired-count=1 を適用する起動処理には入らない。現在の desiredCount=2 は変更後の通常範囲 1..3 に収まるため、台数変更を行わない。これと同じ AWS の状態が起動途中の失敗で残った場合にも、同じ操作を適用する。
+詳細な設定値と状態の推移は、[ECS の設定と現在状態の具体例](ecs_examples.md#稼働中の固定範囲からのタグ変更)を参照。
 
 ### 一時停止解除時の範囲外台数
 
-DynamoDB の登録値は override=running、ecs_max_count=3 とする。ECS service のタグは共通設定とし、cheapskate:scaling-bounds-mode=scheduled を指定する。AWS の設定に MinCapacity=1、MaxCapacity=3、および ScheduledScalingSuspended=false を適用する。AWS には以前の上下限 4..6 と一時停止が残り、5 台が稼働している場合の観測例を、以下に示す。
-
-| 時点 | desiredCount | runningCount | pendingCount | MinCapacity | MaxCapacity | ScheduledScalingSuspended | 実際の ECS 状況 |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| 一時停止解除前 | 5 | 5 | 0 | 4 | 6 | true | 5 台が稼働している |
-| 通常範囲と解除を適用後 | 3 | 5 | 0 | 1 | 3 | false | 設定台数は 3 台となり、余剰タスクの終了前には 5 台が稼働している |
-| タスク終了後 | 3 | 3 | 0 | 1 | 3 | false | 3 台が稼働している |
-
-cheapskate:scaling-min=1 と cheapskate:scaling-max=3 を適用するため、AWS が設定台数を範囲内の 3 台へ調整する。cheapskate:desired-count=2 への再設定は行わない。
+詳細な設定値と状態の推移は、[ECS の設定と現在状態の具体例](ecs_examples.md#一時停止解除時の範囲外台数)を参照。
 
 ### 最後の応答消失後の Scheduled Scaling
 
-DynamoDB とタグは共通設定とする。AWS への MinCapacity=1、MaxCapacity=3、および ScheduledScalingSuspended=false の適用は成功したが、その応答だけが失われた場合を示す。その後、AWS の scheduled action が上下限を 4..6 に変更し、台数が増えた場合の観測例を、以下に示す。
-
-| 時点 | desiredCount | runningCount | pendingCount | MinCapacity | MaxCapacity | ScheduledScalingSuspended | 実際の ECS 状況 |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| 最後の更新が成功し、応答が消失 | 2 | 2 | 0 | 1 | 3 | false | 2 台が稼働し、Scheduled Scaling が有効である |
-| scheduled action による変更後 | 4 | 2 | 2 | 4 | 6 | false | 設定台数が下限の 4 台へ増え、2 台が起動待ちである |
-| 次のサイクル | 4 | 4 | 0 | 4 | 6 | false | 4 台が稼働している |
-
-次のサイクルでは、上下限管理モードが scheduled で AWS の ScheduledScalingSuspended=false のため、設定を変更しない。タグの通常範囲 1..3 や起動台数 2 へ戻さない。DynamoDB の ecs_max_count=3 は cheapskate が適用する起動台数とタグの上限の検証値であり、scheduled action の上下限や現在台数を制限する値ではない。
+詳細な設定値と状態の推移は、[ECS の設定と現在状態の具体例](ecs_examples.md#最後の応答消失後の-scheduled-scaling)を参照。
 
 ### 起動途中からの停止要求
 
-DynamoDB のグループアイテムの override を running から stopped に変更する。ecs_max_count=3 と ECS service の共通タグは変更しない。AWS の設定に MinCapacity=0、MaxCapacity=0、および ScheduledScalingSuspended=true を適用する。起動待ちのタスクがある状態から停止する観測例を、以下に示す。
-
-| 時点 | desiredCount | runningCount | pendingCount | MinCapacity | MaxCapacity | ScheduledScalingSuspended | 実際の ECS 状況 |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| 停止要求の適用前 | 2 | 1 | 1 | 2 | 2 | true | 1 台が稼働し、1 台が起動待ちである |
-| 停止設定の適用後 | 0 | 1 | 0 | 0 | 0 | true | 起動待ちタスクは取り消され、稼働タスクの終了待ちである |
-| タスク終了後 | 0 | 0 | 0 | 0 | 0 | true | 稼働中と起動待ちのタスクがなく、停止設定が成立している |
-
-停止要求はタグの起動台数 2 と上下限管理モード scheduled より優先される。通常の上下限 1..3 を適用する起動復旧は行わない。DynamoDB の override を disabled に変更した場合は AWS の観測と変更を行わず、その時点の AWS 設定を残す。
+詳細な設定値と状態の推移は、[ECS の設定と現在状態の具体例](ecs_examples.md#起動途中からの停止要求)を参照。

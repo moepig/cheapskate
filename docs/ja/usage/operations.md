@@ -1,6 +1,6 @@
 # 日常の操作
 
-本ドキュメントは、設定と現在状態の確認、スケジュールの変更、一時的な起動・停止、ECS 設定の変更、および管理終了の手順を示す。
+本ドキュメントは設定と現在状態の確認、スケジュールの変更、一時的な起動・停止、ECS 設定の変更、および管理終了の手順を示す。
 
 ## 設定と現在状態の確認
 
@@ -13,7 +13,9 @@ cheapskate-cli list
 cheapskate-cli -output json show --group dev
 ```
 
-list で保存されたグループ設定を、show で所属リソースの設定タグと AWS の現在状態を確認する。show は起動・停止せず、状態が変わるまで待機もしない。show の JSON 出力で live_error があるリソースは、状態取得が失敗している。
+list で保存されたグループ設定を、show で所属リソースの設定タグと AWS の現在状態を確認する。show は起動・停止せず、状態が変わるまで待機もしない。
+
+show は個別リソースの状態取得に失敗しても終了コード 0 を返す。resources の各要素で live_error を確認し、エラーがあるリソースの状態は未確認として扱う。起動・停止の完了は現在状態で確認する。保存内容、タグの設定値、現在状態のフィールドは、[CLI の出力形式](cli.md#出力形式)を参照。
 
 Web 画面での確認と設定変更は、[Web コンソール](web_console.md)を参照。CLI の引数と出力形式は、[CLI リファレンス](cli.md)を参照。
 
@@ -67,11 +69,11 @@ disabled 自体は AWS リソースを変更しない。後続の状態確認と
 cheapskate-cli clear-override --group dev
 ```
 
-override だけのグループには使用できない。先にスケジュールを追加するか、別の override に置き換える。保存内容を含む例は、[CLI によるグループ設定例](cli_records.md)を参照。
+override だけのグループには使用できない。先にスケジュールを追加するか、別の override に置き換える。保存内容を含む例は[CLI によるグループ設定例](cli_records.md)を参照。
 
 ## ECS の設定変更
 
-ECS の設定は、DynamoDB のグループ上限と、service 自身のタグに分かれる。設定の意味と適用タイミングは、[ECS の起動・停止とスケーリング](ecs.md)を参照。
+ECS の設定はDynamoDB のグループ上限と、service 自身のタグに分かれる。設定の意味と適用タイミングは、[ECS の起動・停止とスケーリング](ecs.md)を参照。
 
 ### ECS 台数上限の登録
 
@@ -81,13 +83,13 @@ ECS の起動を許可する前に、グループアイテムへ Number 型の e
 cheapskate-cli ecs-max-count --group dev 4
 ```
 
-同じコマンドで上限を変更できる。CLI と Web コンソールのスケジュール・override 操作は上限を保持する。属性の削除と ECS 固有の設定は、[ECS service の設定](resources/ecs-service.md#dynamodb-と-cli) を参照。
+同じコマンドで上限を変更できる。CLI と Web コンソールのスケジュール・override 操作は上限を保持する。属性の削除と ECS 固有の設定は[ECS service の設定](resources/ecs-service.md#dynamodb-と-cli) を参照。
 
 ### スケーリング上下限の管理方法の変更
 
 タグの上下限を維持する運用と、AWS Scheduled Scaling による上下限変更を使用する運用を切り替える。タグ範囲を維持する場合は、service の cheapskate:scaling-bounds-mode を tags に設定し、グループの要求を running にする。正常なサイクルの後、通常の上下限と ScheduledScalingSuspended=true を確認する。
 
-再開前に、cheapskate:scaling-min と cheapskate:scaling-max が目的の通常範囲であることを確認する。再開時にその範囲が適用され、範囲外の台数は AWS によって調整される。再開手順は、次のとおりである。
+再開前に、cheapskate:scaling-min と cheapskate:scaling-max が目的の通常範囲であることを確認する。再開時にその範囲が適用され、範囲外の台数は AWS によって調整される。再開手順は次のとおりである。
 
 1. cheapskate:scaling-bounds-mode を scheduled に変更する。
 2. グループの要求を running にする。
@@ -97,9 +99,9 @@ cheapskate-cli ecs-max-count --group dev 4
 
 ## 管理の終了
 
-管理終了後に保つ起動・停止状態と、ECS の Scheduled Scaling の状態を先に決める。ECS を起動状態で残す場合は、維持する上下限を通常のタグに設定し、Scheduled Scaling を有効にするなら上下限管理モードを scheduled、タグ範囲を維持するなら tags にする。停止状態で残す場合は上下限 0/0 と一時停止が残る。
+管理終了後に保つ起動・停止状態と、ECS の Scheduled Scaling の状態を先に決める。ECS を起動状態で残す場合は、維持する上下限を通常のタグに設定する。Scheduled Scaling を有効にするなら上下限管理モードを scheduled、タグ範囲を維持するなら tags にする。停止状態で残す場合は上下限 0/0 と一時停止が残る。
 
-管理終了の手順は、次のとおりである。
+管理終了の手順は次のとおりである。
 
 1. 無期限の running または stopped override を設定する。
 2. 書き込み完了から、設定済みの reconciler Lambda timeout 以上待つ。
@@ -110,4 +112,4 @@ cheapskate-cli ecs-max-count --group dev 4
 
 この手順の途中では対象グループを変更しないこと。待機は、古い設定を読んだ実行が終了してから最終状態を確認するためである。グループ削除自体は AWS リソースを変更しない。
 
-Terraform でグループを管理している場合は、設定変更と削除を Terraform で行う。手順は、[Terraform によるグループ設定](terraform_records.md)を参照。
+Terraform でグループを管理している場合は、設定変更と削除を Terraform で行う。手順は[Terraform によるグループ設定](terraform_records.md)を参照。
