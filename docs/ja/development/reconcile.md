@@ -4,9 +4,11 @@
 
 ## 読み込み境界
 
-1 invocation は、リソース処理前に全グループと探索結果の in-memory snapshot を取得する。全グループは DynamoDB の CONFIG パーティションへの強い整合性の Query、探索は cheapskate:group タグを持つ対応リソースへの Resource Groups Tagging API の GetResources の全ページである。
+1 invocation は、リソース処理前に全グループと探索結果の in-memory snapshot を取得する。全グループは DynamoDB の CONFIG パーティションへの強い整合性の Query で取得する。探索は cheapskate:group タグを持つ対応リソースへの Resource Groups Tagging API の GetResources の全ページを取得し、RDS DB クラスタの識別子と所属タグを RDS の参照 API で照合する。
 
-どちらかの全体読み込みまたは ARN 解析に失敗した場合は、adapter の Describe、Start、および Stop を呼ばずエラーを返す。同一 ARN が複数回返された場合は、最後のタグ一式を採用し、1 サイクルで 1 回処理する。
+全体読み込み、ARN 解析、または RDS クラスタの照合に失敗した場合は、adapter の Describe、Start、および Stop を呼ばずエラーを返す。同一 ARN が複数回返された場合は、最後のタグ一式を採用する。RDS クラスタは RDS 応答の DBClusterIdentifier、DBClusterArn、および TagList を採用し、名前と resource ID による検出結果を同じ ARN へ統合する。各リソースは 1 サイクルで 1 回処理する。
+
+RDS の照会に成功して該当クラスタまたは所属タグが存在しない候補は、元の ARN と理由をログに記録して除外する。対応関係は探索 1 回の間だけ保持する。disabled グループのクラスタも探索時の照合は行う。
 
 ## リソース単位の処理
 

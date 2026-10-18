@@ -55,7 +55,7 @@ For values, see [Resource tags](resource_tag.md#ecs-configuration-tags) and [Gro
 
 ## Globally aborted cycles
 
-When Lambda returns an error without summary, check DynamoDB reads and resource discovery. Verify dynamodb:Query and tag:GetResources permissions and connectivity, and the ARN format shown in the log. Individual resource changes do not begin in a cycle whose global reads fail.
+When Lambda returns an error without summary, check DynamoDB reads and resource discovery. Verify dynamodb:Query and tag:GetResources permissions and connectivity, plus rds:DescribeDBClusters when DB clusters are discovered. Check the ARN format and cluster resolution errors in the log. For inspection permissions including resource-ID queries, see [AWS resources and IAM](aws_resources.md#shared-resource-inspection). Individual resource changes do not begin in a cycle whose global reads fail.
 
 ## Missing notifications or metrics
 

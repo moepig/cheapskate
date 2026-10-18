@@ -4,9 +4,11 @@ This document defines read boundaries, failure isolation, overlapping invocation
 
 ## Read boundary
 
-Each invocation takes in-memory snapshots of all groups and discovered resources before resource processing. Group reads use a strongly consistent Query of the DynamoDB CONFIG partition. Discovery follows every Resource Groups Tagging API GetResources page for supported resources with the cheapskate:group tag.
+Each invocation takes in-memory snapshots of all groups and discovered resources before resource processing. Group reads use a strongly consistent Query of the DynamoDB CONFIG partition. Discovery follows every Resource Groups Tagging API GetResources page for supported resources with the cheapskate:group tag, then verifies RDS DB cluster identities and membership tags through the RDS read API.
 
-A global read or ARN parsing failure returns an error without calling adapter Describe, Start, or Stop. Duplicate ARNs use the last complete tag set and are processed once per cycle.
+A global read, ARN parsing, or RDS cluster resolution failure returns an error without calling adapter Describe, Start, or Stop. Duplicate ARNs use the last complete tag set. RDS clusters use DBClusterIdentifier, DBClusterArn, and TagList from the RDS response, merging name-based and resource-ID-based discovery results under the same ARN. Each resource is processed once per cycle.
+
+When an RDS query succeeds but the cluster or membership tag is absent, discovery logs the original ARN and reason and excludes the candidate. Identity mappings last for one discovery call. Clusters in disabled groups still receive discovery-time verification.
 
 ## Per-resource processing
 

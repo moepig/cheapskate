@@ -64,7 +64,7 @@ func main() {
 	if err != nil {
 		fatal(logger, "invalid ALLOWED_HOSTS or listen address", "error", err.Error())
 	}
-	handler := webconsole.New(s, wire.Discoverer(cfg), wire.Describers(cfg), base, hosts, loc, logger).Handler()
+	handler := webconsole.New(s, wire.Discoverer(cfg, logger), wire.Describers(cfg), base, hosts, loc, logger).Handler()
 
 	logger.Info("startup", "table", table, "base_path", base, "timezone", loc.String(), "addr", listen, "allowed_hosts", hosts)
 	fatal(logger, "http server stopped", "error", http.ListenAndServe(listen, handler).Error())

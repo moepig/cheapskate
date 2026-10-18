@@ -16,6 +16,8 @@ For applicable attributes, see [Shared DynamoDB settings](README.md#shared-dynam
 
 Set cheapskate:group on the DB cluster itself. Tagging a member DB instance does not configure cluster membership.
 
+Listings and start/stop operations use the cluster name in DBClusterIdentifier. The cluster- resource ID in DbClusterResourceId is a separate identifier. A cluster discovered through both identifiers appears only once in the list.
+
 To assign dev-cluster to group dev:
 
 ```sh

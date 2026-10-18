@@ -55,7 +55,7 @@ ECS の設定と現在状態は別の値である。症状ごとの確認項目�
 
 ## サイクル全体の中断
 
-Lambda 呼び出しがエラーになり summary が出ない場合は、DynamoDB の読み込みまたはリソース検出のエラーを確認する。dynamodb:Query、tag:GetResources の権限と到達性、およびログに示された ARN の形式を確認する。全体の読み込みに失敗したサイクルでは、個別リソースの変更は始まらない。
+Lambda 呼び出しがエラーになり summary が出ない場合は、DynamoDB の読み込みまたはリソース検出のエラーを確認する。dynamodb:Query、tag:GetResources、および DB クラスタを検出する場合の rds:DescribeDBClusters の権限と到達性を確認する。ログに示された ARN の形式とクラスタ照合のエラーも確認する。resource ID による照会を含む参照権限は、[AWS リソースと IAM](aws_resources.md#共通のリソース参照権限)を参照。全体の読み込みに失敗したサイクルでは、個別リソースの変更は始まらない。
 
 ## 通知・メトリクスの欠落
 

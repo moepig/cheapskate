@@ -12,6 +12,7 @@ sequenceDiagram
     participant R as reconciler
     participant D as DynamoDB
     participant T as Resource Groups Tagging API
+    participant S as RDS
     participant A as port.Target
     participant N as SNS
     C->>R: Periodic or manual invoke (payload unused)
@@ -25,7 +26,16 @@ sequenceDiagram
         T-->>R: ARNs, tags, next page token
         R->>R: Validate ARNs and retain the last tags for duplicates
     end
-    Note over R,T: Global read or ARN parsing failure aborts<br/>the cycle before any Describe
+    loop Each unresolved RDS DB cluster candidate
+        R->>S: DescribeDBClusters(DBClusterIdentifier=Ref, all pages)
+        S-->>R: Cluster information or error
+        opt Candidate starts with cluster- and was not found
+            R->>S: DescribeDBClusters(db-cluster-resource-id filter, all pages)
+            S-->>R: Cluster information or error
+        end
+        R->>R: Validate name and ARN, use RDS tags, and merge the same cluster
+    end
+    Note over R,S: Global read, ARN parsing, or cluster resolution failure<br/>aborts before adapter Describe
     loop Each resource in ARN order
         alt Invalid membership or group
             R->>R: Record error and continue

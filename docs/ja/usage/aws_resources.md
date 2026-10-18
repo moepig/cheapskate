@@ -41,14 +41,15 @@ IAM ポリシーの Resource には対象 ARN を列挙する。複数ある場�
 
 ## アクションごとのリソースと条件
 
-実行時に必要なアクションと、この構成で使う制限を、以下にまとめる。Resource の列は ARN のリソース部を示す。「*」の行はリソース単位の指定に対応しない。
+実行時に必要なアクションと、この構成で使う制限を、以下にまとめる。Resource の列は ARN のリソース部を示す。「*」の行は、この構成でリソース単位の指定を使用しない。
 
 | サービス | IAM アクションと公式リファレンス | Resource のリソース部 | 例で使用する Condition または制限 |
 | --- | --- | --- | --- |
 | DynamoDB | [dynamodb:Query](https://docs.aws.amazon.com/service-authorization/latest/reference/list_dynamodb.html#list_dynamodb-action-Query)、[dynamodb:GetItem](https://docs.aws.amazon.com/service-authorization/latest/reference/list_dynamodb.html#list_dynamodb-action-GetItem)、[dynamodb:PutItem](https://docs.aws.amazon.com/service-authorization/latest/reference/list_dynamodb.html#list_dynamodb-action-PutItem)、[dynamodb:UpdateItem](https://docs.aws.amazon.com/service-authorization/latest/reference/list_dynamodb.html#list_dynamodb-action-UpdateItem)、[dynamodb:DeleteItem](https://docs.aws.amazon.com/service-authorization/latest/reference/list_dynamodb.html#list_dynamodb-action-DeleteItem) | table/TABLE | dynamodb:LeadingKeys=CONFIG |
 | Resource Groups Tagging API | [tag:GetResources](https://docs.aws.amazon.com/service-authorization/latest/reference/list_resourcegroupstaggingapi.html#list_resourcegroupstaggingapi-action-GetResources) | * | aws:RequestedRegion |
 | RDS DB instance | [rds:DescribeDBInstances](https://docs.aws.amazon.com/service-authorization/latest/reference/list_rds.html#list_rds-action-DescribeDBInstances)、[rds:StartDBInstance](https://docs.aws.amazon.com/service-authorization/latest/reference/list_rds.html#list_rds-action-StartDBInstance)、[rds:StopDBInstance](https://docs.aws.amazon.com/service-authorization/latest/reference/list_rds.html#list_rds-action-StopDBInstance) | db:DB_INSTANCE | aws:ResourceTag/cheapskate:group |
-| RDS DB cluster | [rds:DescribeDBClusters](https://docs.aws.amazon.com/service-authorization/latest/reference/list_rds.html#list_rds-action-DescribeDBClusters)、[rds:StartDBCluster](https://docs.aws.amazon.com/service-authorization/latest/reference/list_rds.html#list_rds-action-StartDBCluster)、[rds:StopDBCluster](https://docs.aws.amazon.com/service-authorization/latest/reference/list_rds.html#list_rds-action-StopDBCluster) | cluster:DB_CLUSTER | aws:ResourceTag/cheapskate:group |
+| RDS DB cluster の参照 | [rds:DescribeDBClusters](https://docs.aws.amazon.com/service-authorization/latest/reference/list_rds.html#list_rds-action-DescribeDBClusters) | * | aws:RequestedRegion。resource ID からの解決でクラスタ名を指定しない照会を使用 |
+| RDS DB cluster の操作 | [rds:StartDBCluster](https://docs.aws.amazon.com/service-authorization/latest/reference/list_rds.html#list_rds-action-StartDBCluster)、[rds:StopDBCluster](https://docs.aws.amazon.com/service-authorization/latest/reference/list_rds.html#list_rds-action-StopDBCluster) | cluster:DB_CLUSTER | aws:ResourceTag/cheapskate:group |
 | ECS | [ecs:DescribeServices](https://docs.aws.amazon.com/service-authorization/latest/reference/list_ecs.html#list_ecs-action-DescribeServices)、[ecs:UpdateService](https://docs.aws.amazon.com/service-authorization/latest/reference/list_ecs.html#list_ecs-action-UpdateService) | service/CLUSTER/SERVICE | aws:ResourceTag/cheapskate:group |
 | Application Auto Scaling | [application-autoscaling:DescribeScalableTargets](https://docs.aws.amazon.com/service-authorization/latest/reference/list_application-autoscaling.html#list_application-autoscaling-action-DescribeScalableTargets) | * | aws:RequestedRegion |
 | Application Auto Scaling | [application-autoscaling:RegisterScalableTarget](https://docs.aws.amazon.com/service-authorization/latest/reference/list_application-autoscaling.html#list_application-autoscaling-action-RegisterScalableTarget) | scalable-target/SCALABLE_TARGET_ID | Resource の scalable target ARN で限定 |
@@ -71,6 +72,7 @@ reconciler、CLI の show、および Web コンソールのグループ詳細�
       "Action": [
         "tag:GetResources",
         "ec2:DescribeInstances",
+        "rds:DescribeDBClusters",
         "application-autoscaling:DescribeScalableTargets"
       ],
       "Resource": "*",
@@ -85,19 +87,6 @@ reconciler、CLI の show、および Web コンソールのグループ詳細�
       "Effect": "Allow",
       "Action": "rds:DescribeDBInstances",
       "Resource": "arn:PARTITION:rds:REGION:ACCOUNT:db:DB_INSTANCE",
-      "Condition": {
-        "StringEquals": {
-          "aws:ResourceTag/cheapskate:group": [
-            "GROUP"
-          ]
-        }
-      }
-    },
-    {
-      "Sid": "DescribeManagedDbClusters",
-      "Effect": "Allow",
-      "Action": "rds:DescribeDBClusters",
-      "Resource": "arn:PARTITION:rds:REGION:ACCOUNT:cluster:DB_CLUSTER",
       "Condition": {
         "StringEquals": {
           "aws:ResourceTag/cheapskate:group": [
@@ -125,9 +114,9 @@ reconciler、CLI の show、および Web コンソールのグループ詳細�
 
 tag:GetResources はリソース ARN とタグ条件によるアクセス制御に対応しない。cheapskate が送る TagFilters と ResourceTypeFilters は検索条件であり、IAM による制限ではない。ec2:DescribeInstances もインスタンス ARN とタグで制限できない。application-autoscaling:DescribeScalableTargets は namespace・dimension の条件キーにも対応しない。
 
-この 3 アクションは aws:RequestedRegion で呼び出し先リージョンを制限する。同じリージョン内では、管理対象以外の情報も参照可能である。詳細は、[aws:RequestedRegion](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_condition-keys.html#condition-keys-requestedregion) を参照。
+この 3 アクションと rds:DescribeDBClusters は aws:RequestedRegion で呼び出し先リージョンを制限する。同じリージョン内では、管理対象以外の情報も参照可能である。詳細は、[aws:RequestedRegion](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_condition-keys.html#condition-keys-requestedregion) を参照。
 
-RDS の Describe は、DB 識別子を指定するこの構成では対象 ARN と所属タグで制限できる。ECS の参照と更新は長形式の service ARN で cluster と service を特定し、service 自身の所属タグを条件にする。
+RDS DB インスタンスの Describe は、DB 識別子を指定するこの構成では対象 ARN と所属タグで制限できる。RDS DB クラスタの探索では、名前を指定した照会に加え、[DescribeDBClusters の db-cluster-resource-id フィルタ](https://docs.aws.amazon.com/AmazonRDS/latest/APIReference/API_DescribeDBClusters.html)による照会を使用する。この照会を許可するため、参照権限の例は Resource を * とする。クラスタの起動・停止は対象 ARN と所属タグで制限する。ECS の参照と更新は長形式の service ARN で cluster と service を特定し、service 自身の所属タグを条件にする。
 
 ## reconciler の権限
 

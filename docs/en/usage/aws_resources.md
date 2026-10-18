@@ -41,14 +41,15 @@ These Allow policies do not revoke permissions granted by other policies. Remove
 
 ## Resources and conditions by action
 
-The following table maps runtime actions to restrictions used in this deployment. The Resource column shows the resource portion of an ARN. Rows containing “*” do not support resource-level permissions.
+The following table maps runtime actions to restrictions used in this deployment. The Resource column shows the resource portion of an ARN. Rows containing “*” do not use resource-level restrictions in this configuration.
 
 | Service | IAM actions and official references | Resource portion of the ARN | Condition or restriction used here |
 | --- | --- | --- | --- |
 | DynamoDB | [dynamodb:Query](https://docs.aws.amazon.com/service-authorization/latest/reference/list_dynamodb.html#list_dynamodb-action-Query), [dynamodb:GetItem](https://docs.aws.amazon.com/service-authorization/latest/reference/list_dynamodb.html#list_dynamodb-action-GetItem), [dynamodb:PutItem](https://docs.aws.amazon.com/service-authorization/latest/reference/list_dynamodb.html#list_dynamodb-action-PutItem), [dynamodb:UpdateItem](https://docs.aws.amazon.com/service-authorization/latest/reference/list_dynamodb.html#list_dynamodb-action-UpdateItem), [dynamodb:DeleteItem](https://docs.aws.amazon.com/service-authorization/latest/reference/list_dynamodb.html#list_dynamodb-action-DeleteItem) | table/TABLE | dynamodb:LeadingKeys=CONFIG |
 | Resource Groups Tagging API | [tag:GetResources](https://docs.aws.amazon.com/service-authorization/latest/reference/list_resourcegroupstaggingapi.html#list_resourcegroupstaggingapi-action-GetResources) | * | aws:RequestedRegion |
 | RDS DB instance | [rds:DescribeDBInstances](https://docs.aws.amazon.com/service-authorization/latest/reference/list_rds.html#list_rds-action-DescribeDBInstances), [rds:StartDBInstance](https://docs.aws.amazon.com/service-authorization/latest/reference/list_rds.html#list_rds-action-StartDBInstance), [rds:StopDBInstance](https://docs.aws.amazon.com/service-authorization/latest/reference/list_rds.html#list_rds-action-StopDBInstance) | db:DB_INSTANCE | aws:ResourceTag/cheapskate:group |
-| RDS DB cluster | [rds:DescribeDBClusters](https://docs.aws.amazon.com/service-authorization/latest/reference/list_rds.html#list_rds-action-DescribeDBClusters), [rds:StartDBCluster](https://docs.aws.amazon.com/service-authorization/latest/reference/list_rds.html#list_rds-action-StartDBCluster), [rds:StopDBCluster](https://docs.aws.amazon.com/service-authorization/latest/reference/list_rds.html#list_rds-action-StopDBCluster) | cluster:DB_CLUSTER | aws:ResourceTag/cheapskate:group |
+| RDS DB cluster inspection | [rds:DescribeDBClusters](https://docs.aws.amazon.com/service-authorization/latest/reference/list_rds.html#list_rds-action-DescribeDBClusters) | * | aws:RequestedRegion; resolving resource IDs uses queries without a cluster name |
+| RDS DB cluster operations | [rds:StartDBCluster](https://docs.aws.amazon.com/service-authorization/latest/reference/list_rds.html#list_rds-action-StartDBCluster), [rds:StopDBCluster](https://docs.aws.amazon.com/service-authorization/latest/reference/list_rds.html#list_rds-action-StopDBCluster) | cluster:DB_CLUSTER | aws:ResourceTag/cheapskate:group |
 | ECS | [ecs:DescribeServices](https://docs.aws.amazon.com/service-authorization/latest/reference/list_ecs.html#list_ecs-action-DescribeServices), [ecs:UpdateService](https://docs.aws.amazon.com/service-authorization/latest/reference/list_ecs.html#list_ecs-action-UpdateService) | service/CLUSTER/SERVICE | aws:ResourceTag/cheapskate:group |
 | Application Auto Scaling | [application-autoscaling:DescribeScalableTargets](https://docs.aws.amazon.com/service-authorization/latest/reference/list_application-autoscaling.html#list_application-autoscaling-action-DescribeScalableTargets) | * | aws:RequestedRegion |
 | Application Auto Scaling | [application-autoscaling:RegisterScalableTarget](https://docs.aws.amazon.com/service-authorization/latest/reference/list_application-autoscaling.html#list_application-autoscaling-action-RegisterScalableTarget) | scalable-target/SCALABLE_TARGET_ID | Exact scalable target ARN |
@@ -71,6 +72,7 @@ Attach this inspection policy to the reconciler, CLI credentials used for show, 
       "Action": [
         "tag:GetResources",
         "ec2:DescribeInstances",
+        "rds:DescribeDBClusters",
         "application-autoscaling:DescribeScalableTargets"
       ],
       "Resource": "*",
@@ -85,19 +87,6 @@ Attach this inspection policy to the reconciler, CLI credentials used for show, 
       "Effect": "Allow",
       "Action": "rds:DescribeDBInstances",
       "Resource": "arn:PARTITION:rds:REGION:ACCOUNT:db:DB_INSTANCE",
-      "Condition": {
-        "StringEquals": {
-          "aws:ResourceTag/cheapskate:group": [
-            "GROUP"
-          ]
-        }
-      }
-    },
-    {
-      "Sid": "DescribeManagedDbClusters",
-      "Effect": "Allow",
-      "Action": "rds:DescribeDBClusters",
-      "Resource": "arn:PARTITION:rds:REGION:ACCOUNT:cluster:DB_CLUSTER",
       "Condition": {
         "StringEquals": {
           "aws:ResourceTag/cheapskate:group": [
@@ -125,9 +114,9 @@ Attach this inspection policy to the reconciler, CLI credentials used for show, 
 
 tag:GetResources cannot be restricted by resource ARN or resource tags. The TagFilters and ResourceTypeFilters sent by cheapskate are query filters, not IAM restrictions. ec2:DescribeInstances also cannot be restricted by instance ARN or tags. application-autoscaling:DescribeScalableTargets does not support the namespace or dimension condition keys either.
 
-For these three actions, aws:RequestedRegion restricts the API endpoint Region. They can still expose information about unmanaged resources in that Region. See [aws:RequestedRegion](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_condition-keys.html#condition-keys-requestedregion).
+For these three actions and rds:DescribeDBClusters, aws:RequestedRegion restricts the API endpoint Region. They can still expose information about unmanaged resources in that Region. See [aws:RequestedRegion](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_condition-keys.html#condition-keys-requestedregion).
 
-RDS Describe requests specify a DB identifier in this deployment, allowing restriction by ARN and membership tag. ECS inspection and updates identify the cluster and service through the long service ARN and require a matching membership tag on the service itself.
+RDS DB instance Describe requests specify a DB identifier in this deployment, allowing restriction by ARN and membership tag. RDS DB cluster discovery also uses the [DescribeDBClusters db-cluster-resource-id filter](https://docs.aws.amazon.com/AmazonRDS/latest/APIReference/API_DescribeDBClusters.html) without specifying a cluster name. The inspection policy uses Resource * to allow this query. Cluster start/stop permissions remain restricted by target ARN and membership tag. ECS inspection and updates identify the cluster and service through the long service ARN and require a matching membership tag on the service itself.
 
 ## Reconciler permissions
 

@@ -96,7 +96,7 @@ func main() {
 	}
 	deps := &reconcile.Deps{
 		Store:      state.New(dynamodb.NewFromConfig(cfg), table),
-		Discoverer: wire.Discoverer(cfg),
+		Discoverer: wire.Discoverer(cfg, logger),
 		Targets:    wire.Targets(cfg),
 		Notifier:   wire.Notifier(cfg, os.Getenv("NOTIFICATION_TOPIC_ARN")),
 		Location:   location,

@@ -5,6 +5,7 @@ package tagging
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -14,19 +15,21 @@ import (
 	"cheapskate/internal/core/model"
 )
 
-//go:generate go tool mockgen -typed -destination mocks/mocks.go -package mocks cheapskate/internal/aws/tagging API
+//go:generate go tool mockgen -typed -destination mocks/mocks.go -package mocks cheapskate/internal/aws/tagging API,RdsAPI
 
 // 利用する Resource Groups Tagging API クライアントの部分集合
 type API interface {
 	GetResources(ctx context.Context, in *resourcegroupstaggingapi.GetResourcesInput, opts ...func(*resourcegroupstaggingapi.Options)) (*resourcegroupstaggingapi.GetResourcesOutput, error)
 }
 
-// Resource Groups Tagging API を用いて port.Discoverer を実装する
+// 所属タグによる探索と RDS クラスタの識別子照合を行う。
 type Discoverer struct {
 	Client API
+	Rds    RdsAPI
+	Log    *slog.Logger
 }
 
-// 固定の所属タグを持つ全対応リソースを ARN をキーとする map で返す。
+// 固定の所属タグを持つ全対応リソースを、正規化した ARN をキーとする map で返す。
 func (d *Discoverer) Discover(ctx context.Context) (map[string]model.Resource, error) {
 	typeFilters := make([]string, 0, len(model.KnownTypes))
 	for _, t := range model.KnownTypes {
@@ -68,7 +71,7 @@ func (d *Discoverer) Discover(ctx context.Context) (map[string]model.Resource, e
 		token = out.PaginationToken
 	}
 
-	return resources, nil
+	return d.normalizeClusters(ctx, resources)
 }
 
 // Tagging API のキーと値の組をマップへ平坦化し、種別固有の設定の参照に用いる

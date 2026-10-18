@@ -16,6 +16,8 @@ DB クラスタ固有の DynamoDB 属性はない。所属グループのスケ�
 
 cheapskate:group は DB クラスタ自身に設定する。所属 DB インスタンスへのタグ付けは、クラスタの所属設定の代わりにはならない。
 
+一覧表示と起動・停止には DBClusterIdentifier のクラスタ名を使用する。DbClusterResourceId の cluster- で始まる resource ID はクラスタ名とは異なる。同一クラスタを両方の識別子で検出した場合も、一覧には 1 件だけ表示する。
+
 グループ dev に所属させるため、DB クラスタ dev-cluster にタグを付けるコマンドを、以下に示す。
 
 ```sh

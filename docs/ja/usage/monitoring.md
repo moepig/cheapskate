@@ -28,6 +28,7 @@ reconciler と Web コンソールは構造化ログを stderr に出力する�
 | apply-action-started / apply-action-finished | debug | 操作要求の開始・終了 |
 | notify-action-started / notify-action-finished | debug | 通知の開始・終了 |
 | resource-discovered | debug | 検索で検出されたリソースの group、resource_id、resource_arn |
+| resource-discovery-skipped | warn | RDS クラスタの照合で除外した候補の resource_arn と reason。not-found または membership-tag-missing |
 | summary | info | 状態確認に到達したリソース数、成功した操作数、グループ・リソースのエラー数 |
 | action-started | info | 起動・停止または ECS 設定の修復を要求する直前のリソースと状態 |
 | action-finished | info | 操作の成否、期待状態、および操作前の観測状態 |

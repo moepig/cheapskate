@@ -28,6 +28,7 @@ The reconciler and web console emit structured logs to stderr. Principal reconci
 | apply-action-started / apply-action-finished | debug | Start and end of action requests |
 | notify-action-started / notify-action-finished | debug | Start and end of notification attempts |
 | resource-discovered | debug | Discovered resource's group, resource_id, and resource_arn |
+| resource-discovery-skipped | warn | Original resource_arn and reason for an excluded RDS cluster candidate: not-found or membership-tag-missing |
 | summary | info | Resources inspected, successful operations, and group/resource error counts |
 | action-started | info | Resource and state immediately before requesting a start, stop, or ECS configuration repair |
 | action-finished | info | Action outcome, desired state, and observed state before the action |

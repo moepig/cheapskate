@@ -149,7 +149,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	}
 	service := groups.New(
 		state.New(dynamodb.NewFromConfig(cfg), tableName),
-		wire.Discoverer(cfg),
+		wire.Discoverer(cfg, nil),
 		wire.Describers(cfg),
 		location,
 	)

@@ -5,6 +5,8 @@
 package wire
 
 import (
+	"log/slog"
+
 	"github.com/aws/aws-sdk-go-v2/aws"
 	aas "github.com/aws/aws-sdk-go-v2/service/applicationautoscaling"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
@@ -20,9 +22,9 @@ import (
 	"cheapskate/internal/core/model"
 )
 
-// Resource Groups Tagging API に裏打ちされた port.Discoverer を組み立てる
-func Discoverer(cfg aws.Config) port.Discoverer {
-	return &tagging.Discoverer{Client: resourcegroupstaggingapi.NewFromConfig(cfg)}
+// Resource Groups Tagging API と RDS の参照 API による port.Discoverer を組み立てる。
+func Discoverer(cfg aws.Config, log *slog.Logger) port.Discoverer {
+	return &tagging.Discoverer{Client: resourcegroupstaggingapi.NewFromConfig(cfg), Rds: rds.NewFromConfig(cfg), Log: log}
 }
 
 // reconciler が必要とする読み書き可能なターゲット一式を、model.Type* をキーにして組み立てる

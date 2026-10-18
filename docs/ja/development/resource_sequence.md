@@ -12,6 +12,7 @@ sequenceDiagram
     participant R as reconciler
     participant D as DynamoDB
     participant T as Resource Groups Tagging API
+    participant S as RDS
     participant A as port.Target
     participant N as SNS
     C->>R: 定期または手動 invoke（payload は不使用）
@@ -25,7 +26,16 @@ sequenceDiagram
         T-->>R: ARN、タグ、次ページ token
         R->>R: ARN を検証し、同一 ARN の最後のタグを採用
     end
-    Note over R,T: 全体読み込みまたは ARN 解析の失敗は<br/>Describe 前にサイクルを中止
+    loop RDS DB クラスタの未解決候補
+        R->>S: DescribeDBClusters(DBClusterIdentifier=Ref、全ページ)
+        S-->>R: クラスタ情報またはエラー
+        opt cluster- で始まる候補が見つからない
+            R->>S: DescribeDBClusters(db-cluster-resource-id フィルタ、全ページ)
+            S-->>R: クラスタ情報またはエラー
+        end
+        R->>R: 名前・ARN を検証し、RDS のタグを採用して同一クラスタを統合
+    end
+    Note over R,S: 全体読み込み・ARN 解析・クラスタ照合の失敗は<br/>adapter の Describe 前にサイクルを中止
     loop ARN 順の各リソース
         alt 所属またはグループが不正
             R->>R: エラーを記録し、次のリソースへ

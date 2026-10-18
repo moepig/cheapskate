@@ -239,7 +239,7 @@ func TestAutoScalingInstancesNeverReachModificationAPIs(t *testing.T) {
 			require.NoError(t, store.CreateGroup(ctx, model.GroupSpec{Name: "dev", Override: tc.override}))
 
 			client := computemocks.NewMockEc2API(gomock.NewController(t))
-			client.EXPECT().DescribeInstances(gomock.Any(), gomock.Any()).Times(3).DoAndReturn(
+			client.EXPECT().DescribeInstances(gomock.Any(), gomock.Any()).Times(2).DoAndReturn(
 				func(_ context.Context, input *ec2.DescribeInstancesInput, _ ...func(*ec2.Options)) (*ec2.DescribeInstancesOutput, error) {
 					instance := ec2types.Instance{State: &ec2types.InstanceState{Name: tc.state}}
 					if input.InstanceIds[0] == "i-0abc123" {
