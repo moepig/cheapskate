@@ -68,10 +68,14 @@ func New(store groups.Store, discoverer port.Discoverer, describers map[model.Re
 }
 
 func (s *Server) Handler() http.Handler {
+	protection := http.NewCrossOriginProtection()
+	protection.SetDenyHandler(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		s.fail(response, request, http.StatusForbidden, "cross-origin form submission rejected")
+	}))
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", s.handleIndex)
 	mux.HandleFunc("GET /group", s.handleGroup)
-	mux.HandleFunc("POST /op", s.handleOp)
+	mux.Handle("POST /op", protection.Handler(http.HandlerFunc(s.handleOp)))
 	return securityHeaders(s.logRequests(s.checkHost(mux)))
 }
 
@@ -131,10 +135,6 @@ func (s *Server) handleGroup(response http.ResponseWriter, request *http.Request
 }
 
 func (s *Server) handleOp(response http.ResponseWriter, request *http.Request) {
-	if !sameOrigin(request) {
-		s.fail(response, request, http.StatusForbidden, "cross-origin form submission rejected")
-		return
-	}
 	if err := request.ParseForm(); err != nil {
 		s.fail(response, request, http.StatusBadRequest, err.Error())
 		return
@@ -281,16 +281,4 @@ func sourceIP(requestContext string) string {
 		return contextValue.Identity.SourceIP
 	}
 	return contextValue.HTTP.SourceIP
-}
-
-func sameOrigin(request *http.Request) bool {
-	if site := request.Header.Get("Sec-Fetch-Site"); site != "" && site != "same-origin" && site != "none" {
-		return false
-	}
-	origin := request.Header.Get("Origin")
-	if origin == "" {
-		return true
-	}
-	parsed, err := url.Parse(origin)
-	return err == nil && strings.EqualFold(parsed.Host, request.Host)
 }

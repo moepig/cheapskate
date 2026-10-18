@@ -219,6 +219,45 @@ func TestSecFetchSiteMutationIsRejected(t *testing.T) {
 	assert.Contains(t, response.Body.String(), "cross-origin form submission rejected")
 }
 
+// 変更要求のヘッダーを変え、同一 origin とブラウザ外からの要求を許可し、クロスサイト要求では設定を変更しないことを確認する。
+func TestCrossOriginProtectionHeaderPolicy(t *testing.T) {
+	for _, test := range []struct {
+		name, origin, site string
+		allowed            bool
+	}{
+		{name: "no browser headers", allowed: true},
+		{name: "matching origin", origin: "http://example.com", allowed: true},
+		{name: "different origin", origin: "https://attacker.example"},
+		{name: "opaque origin", origin: "null"},
+		{name: "same-origin fetch", origin: "https://attacker.example", site: "same-origin", allowed: true},
+		{name: "direct navigation", site: "none", allowed: true},
+		{name: "same-site fetch", origin: "http://example.com", site: "same-site"},
+		{name: "cross-site fetch", origin: "http://example.com", site: "cross-site"},
+		{name: "unknown fetch site", site: "unknown"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			db, _, server := webFixture(t)
+			request := httptest.NewRequest(http.MethodPost, "/op", strings.NewReader("action=override&group=dev&override=running"))
+			request.Host = "example.com"
+			request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			request.Header.Set("Origin", test.origin)
+			request.Header.Set("Sec-Fetch-Site", test.site)
+			response := httptest.NewRecorder()
+
+			server.Handler().ServeHTTP(response, request)
+
+			if test.allowed {
+				assert.Equal(t, http.StatusSeeOther, response.Code)
+				assert.NotNil(t, db.Item("CONFIG", "GROUP#dev"))
+			} else {
+				assert.Equal(t, http.StatusForbidden, response.Code)
+				assert.Zero(t, db.Calls("get"))
+				assert.Zero(t, db.Calls("put"))
+			}
+		})
+	}
+}
+
 // 未許可の Host を各ルートと未登録ルートへ送信し、Origin の一致や転送ヘッダーによらず HTTP 403 となり、読み取りと変更が発生しないことを確認する。
 func TestUntrustedHostIsRejectedBeforeRouting(t *testing.T) {
 	for _, route := range []struct {
