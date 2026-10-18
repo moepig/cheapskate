@@ -69,34 +69,35 @@ func decodeGroup(raw map[string]types.AttributeValue) (model.GroupSpec, error) {
 		return model.GroupSpec{}, err
 	}
 	g.Override = model.Override(override)
-	if value, ok := raw["override_expires_at"]; ok {
-		n, ok := value.(*types.AttributeValueMemberN)
-		if !ok {
-			return model.GroupSpec{}, fmt.Errorf("attribute override_expires_at must be a Number")
-		}
-		if !positiveDecimal.MatchString(n.Value) {
-			return model.GroupSpec{}, fmt.Errorf("attribute override_expires_at must be a positive decimal integer")
-		}
-		g.OverrideExpiresAt, err = strconv.ParseInt(n.Value, 10, 64)
-		if err != nil {
-			return model.GroupSpec{}, fmt.Errorf("attribute override_expires_at is out of range: %w", err)
-		}
+	if g.OverrideExpiresAt, err = positiveIntegerAttribute(raw, "override_expires_at", 64); err != nil {
+		return model.GroupSpec{}, err
 	}
-	if value, ok := raw["ecs_max_count"]; ok {
-		n, ok := value.(*types.AttributeValueMemberN)
-		if !ok {
-			return model.GroupSpec{}, fmt.Errorf("attribute ecs_max_count must be a Number")
-		}
-		if !positiveDecimal.MatchString(n.Value) {
-			return model.GroupSpec{}, fmt.Errorf("attribute ecs_max_count must be a positive decimal integer")
-		}
-		maximum, err := strconv.ParseInt(n.Value, 10, 32)
-		if err != nil {
-			return model.GroupSpec{}, fmt.Errorf("attribute ecs_max_count is out of range: %w", err)
-		}
-		g.EcsMaxCount = int32(maximum)
+	maximum, err := positiveIntegerAttribute(raw, "ecs_max_count", 32)
+	if err != nil {
+		return model.GroupSpec{}, err
 	}
+	g.EcsMaxCount = int32(maximum)
 	return g, nil
+}
+
+// name の Number 属性を bitSize ビットの正整数として返す。属性がなければ 0、形式または範囲が不正ならエラーを返す。
+func positiveIntegerAttribute(raw map[string]types.AttributeValue, name string, bitSize int) (int64, error) {
+	value, present := raw[name]
+	if !present {
+		return 0, nil
+	}
+	number, ok := value.(*types.AttributeValueMemberN)
+	if !ok {
+		return 0, fmt.Errorf("attribute %s must be a Number", name)
+	}
+	if !positiveDecimal.MatchString(number.Value) {
+		return 0, fmt.Errorf("attribute %s must be a positive decimal integer", name)
+	}
+	parsed, err := strconv.ParseInt(number.Value, 10, bitSize)
+	if err != nil {
+		return 0, fmt.Errorf("attribute %s is out of range: %w", name, err)
+	}
+	return parsed, nil
 }
 
 func stringAttribute(raw map[string]types.AttributeValue, name string, required bool) (string, error) {
