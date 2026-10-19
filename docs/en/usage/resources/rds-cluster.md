@@ -18,6 +18,8 @@ Set cheapskate:group on the DB cluster itself. Tagging a member DB instance does
 
 Listings and start/stop operations use the cluster name in DBClusterIdentifier. The cluster- resource ID in DbClusterResourceId is a separate identifier. A cluster discovered through both identifiers appears only once in the list.
 
+The ARN in listings is the DBClusterArn returned by RDS. Its final component can differ from the cluster name in DBClusterIdentifier.
+
 To assign dev-cluster to group dev:
 
 ```sh

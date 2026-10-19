@@ -46,7 +46,7 @@ func (d *Discoverer) normalizeClusters(ctx context.Context, resources map[string
 		candidate := resources[key]
 		resource, cached := cache[key]
 		if !cached {
-			cluster, err := d.resolveCluster(ctx, candidate.Ref)
+			cluster, err := d.resolveCluster(ctx, candidate)
 			if err != nil {
 				return nil, fmt.Errorf("discover: resolve RDS cluster %q: %w", key, err)
 			}
@@ -60,9 +60,12 @@ func (d *Discoverer) normalizeClusters(ctx context.Context, resources map[string
 			}
 			cache[key] = resource
 			cache[resource.ARN] = resource
-			if id := aws.ToString(cluster.DbClusterResourceId); id != "" {
+			for _, ref := range []string{resource.Ref, aws.ToString(cluster.DbClusterResourceId)} {
+				if ref == "" {
+					continue
+				}
 				alias, _ := arn.Parse(resource.ARN)
-				alias.Resource = "cluster:" + id
+				alias.Resource = "cluster:" + ref
 				cache[alias.String()] = resource
 			}
 		}
@@ -75,9 +78,28 @@ func (d *Discoverer) normalizeClusters(ctx context.Context, resources map[string
 	return normalized, nil
 }
 
-// クラスタ名を優先して照会し、見つからない resource ID の候補をフィルタで照会する。
-func (d *Discoverer) resolveCluster(ctx context.Context, ref string) (*types.DBCluster, error) {
-	clusters, err := d.describeClusters(ctx, &rds.DescribeDBClustersInput{DBClusterIdentifier: aws.String(ref)})
+// ARN を優先して照会し、見つからない候補をクラスタ名、resource ID の順に照会する。
+func (d *Discoverer) resolveCluster(ctx context.Context, candidate model.Resource) (*types.DBCluster, error) {
+	// https://docs.aws.amazon.com/AmazonRDS/latest/APIReference/API_DescribeDBClusters.html
+	// "The user-supplied DB cluster identifier or the Amazon Resource Name (ARN) of the DB cluster."
+	clusters, err := d.describeClusters(ctx, &rds.DescribeDBClustersInput{DBClusterIdentifier: aws.String(candidate.ARN)})
+	if err != nil {
+		if _, notFound := errors.AsType[*types.DBClusterNotFoundFault](err); !notFound {
+			return nil, err
+		}
+	}
+	if len(clusters) != 0 {
+		if len(clusters) != 1 {
+			return nil, fmt.Errorf("DescribeDBClusters returned %d clusters for %q", len(clusters), candidate.ARN)
+		}
+		cluster := &clusters[0]
+		if !strings.EqualFold(aws.ToString(cluster.DBClusterArn), candidate.ARN) {
+			return nil, fmt.Errorf("DescribeDBClusters returned a different cluster ARN for %q: got %q", candidate.ARN, aws.ToString(cluster.DBClusterArn))
+		}
+		return cluster, nil
+	}
+	ref := candidate.Ref
+	clusters, err = d.describeClusters(ctx, &rds.DescribeDBClustersInput{DBClusterIdentifier: aws.String(ref)})
 	if err != nil {
 		if _, notFound := errors.AsType[*types.DBClusterNotFoundFault](err); !notFound {
 			return nil, err
@@ -104,7 +126,8 @@ func (d *Discoverer) resolveCluster(ctx context.Context, ref string) (*types.DBC
 	cluster := &clusters[0]
 	if byResourceID {
 		if aws.ToString(cluster.DbClusterResourceId) != ref {
-			return nil, fmt.Errorf("DescribeDBClusters returned a different resource ID for %q", ref)
+			return nil, fmt.Errorf("DescribeDBClusters returned a different resource ID for %q: got %q (DBClusterIdentifier=%q, DBClusterArn=%q)",
+				ref, aws.ToString(cluster.DbClusterResourceId), aws.ToString(cluster.DBClusterIdentifier), aws.ToString(cluster.DBClusterArn))
 		}
 	} else if !strings.EqualFold(aws.ToString(cluster.DBClusterIdentifier), ref) {
 		return nil, fmt.Errorf("DescribeDBClusters returned a different cluster identifier for %q", ref)
@@ -138,19 +161,24 @@ func (d *Discoverer) describeClusters(ctx context.Context, input *rds.DescribeDB
 }
 
 // RDS 応答のクラスタ名、ARN、およびタグから Resource を組み立てる。
-// ARN は入力と同じパーティション・リージョン・アカウントに属し、クラスタ名と一致する必要がある。
+// ARN は入力と同じパーティション・リージョン・アカウントに属する必要がある。
+// 操作用の Ref には DBClusterIdentifier を用いる。
 func clusterResource(candidate model.Resource, cluster types.DBCluster) (model.Resource, error) {
 	resource, err := ParseARN(aws.ToString(cluster.DBClusterArn))
 	if err != nil {
 		return model.Resource{}, err
 	}
-	if resource.Type != model.TypeRdsCluster || resource.Ref != aws.ToString(cluster.DBClusterIdentifier) {
-		return model.Resource{}, fmt.Errorf("DBClusterArn and DBClusterIdentifier do not match")
+	if resource.Type != model.TypeRdsCluster {
+		return model.Resource{}, fmt.Errorf("DBClusterArn %q is not an RDS cluster", resource.ARN)
 	}
 	source, _ := arn.Parse(candidate.ARN)
 	canonical, _ := arn.Parse(resource.ARN)
 	if source.Partition != canonical.Partition || source.Region != canonical.Region || source.AccountID != canonical.AccountID {
 		return model.Resource{}, fmt.Errorf("DBClusterArn %q belongs to a different partition, region, or account", resource.ARN)
+	}
+	resource.Ref = aws.ToString(cluster.DBClusterIdentifier)
+	if err := resource.Validate(); err != nil {
+		return model.Resource{}, fmt.Errorf("invalid DBClusterIdentifier: %w", err)
 	}
 	resource.Tags = map[string]string{}
 	for _, tag := range cluster.TagList {

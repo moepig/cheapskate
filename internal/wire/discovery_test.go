@@ -22,18 +22,27 @@ import (
 )
 
 // 合成ルートから実際の SDK をローカル HTTP サーバーへ接続し、JSON/XML の変換、署名、resource ID フィルタ、およびページ継続を確認する。
-// RDS の NotFound は resource ID の解決へ進み、権限エラーは探索全体のエラーとして返る必要がある。
+// ARN から名前を解決し、NotFound はエイリアスの照会へ進む。権限エラーは探索全体のエラーとして返る必要がある。
 func TestDiscovererThroughAWSSDK(t *testing.T) {
-	for _, denied := range []bool{false, true} {
-		t.Run(fmt.Sprintf("access_denied=%t", denied), func(t *testing.T) {
-			const prefix = "arn:aws:rds:ap-northeast-1:123456789012:cluster:"
-			const resourceID = "cluster-ANPAJ4AE5446DAEXAMPLE"
+	const prefix = "arn:aws:rds:ap-northeast-1:123456789012:cluster:"
+	const resourceID = "cluster-ANPAJ4AE5446DAEXAMPLE"
+	for _, tc := range []struct {
+		denied bool
+		arnRef string
+	}{
+		{false, "dev-aurora"}, {true, "dev-aurora"}, {false, resourceID},
+	} {
+		t.Run(fmt.Sprintf("access_denied=%t/arn=%s", tc.denied, tc.arnRef), func(t *testing.T) {
+			denied := tc.denied
 			var mu sync.Mutex
 			var requests []string
 			record := func(request string) {
 				mu.Lock()
 				defer mu.Unlock()
 				requests = append(requests, request)
+			}
+			writeCluster := func(w http.ResponseWriter) {
+				fmt.Fprintf(w, `<DescribeDBClustersResponse xmlns="http://rds.amazonaws.com/doc/2014-10-31/"><DescribeDBClustersResult><DBClusters><DBCluster><DBClusterIdentifier>dev-aurora</DBClusterIdentifier><DBClusterArn>%s%s</DBClusterArn><DbClusterResourceId>%s</DbClusterResourceId><Engine>aurora-postgresql</Engine><TagList><Tag><Key>cheapskate:group</Key><Value>dev</Value></Tag></TagList></DBCluster></DBClusters></DescribeDBClustersResult></DescribeDBClustersResponse>`, prefix, tc.arnRef, resourceID)
 			}
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				assert.Equal(t, http.MethodPost, r.Method)
@@ -58,9 +67,17 @@ func TestDiscovererThroughAWSSDK(t *testing.T) {
 				}
 				w.Header().Set("Content-Type", "text/xml")
 				if ref := r.Form.Get("DBClusterIdentifier"); ref != "" {
-					record("DescribeDBClusters:name")
-					assert.Equal(t, resourceID, ref)
+					if ref == prefix+resourceID {
+						record("DescribeDBClusters:arn")
+					} else {
+						record("DescribeDBClusters:name")
+					}
 					assert.Empty(t, r.Form.Get("Filters.Filter.1.Name"))
+					if ref == prefix+tc.arnRef {
+						writeCluster(w)
+						return
+					}
+					assert.Contains(t, []string{resourceID, prefix + resourceID}, ref)
 					w.WriteHeader(http.StatusNotFound)
 					io.WriteString(w, `<ErrorResponse xmlns="http://rds.amazonaws.com/doc/2014-10-31/"><Error><Type>Sender</Type><Code>DBClusterNotFoundFault</Code><Message>Cluster not found</Message></Error><RequestId>not-found</RequestId></ErrorResponse>`)
 					return
@@ -79,7 +96,7 @@ func TestDiscovererThroughAWSSDK(t *testing.T) {
 					return
 				}
 				assert.Equal(t, "next", marker)
-				fmt.Fprintf(w, `<DescribeDBClustersResponse xmlns="http://rds.amazonaws.com/doc/2014-10-31/"><DescribeDBClustersResult><DBClusters><DBCluster><DBClusterIdentifier>dev-aurora</DBClusterIdentifier><DBClusterArn>%sdev-aurora</DBClusterArn><DbClusterResourceId>%s</DbClusterResourceId><Engine>aurora-postgresql</Engine><TagList><Tag><Key>cheapskate:group</Key><Value>dev</Value></Tag></TagList></DBCluster></DBClusters></DescribeDBClustersResult></DescribeDBClustersResponse>`, prefix, resourceID)
+				writeCluster(w)
 			}))
 			defer server.Close()
 			cfg := aws.Config{
@@ -102,14 +119,17 @@ func TestDiscovererThroughAWSSDK(t *testing.T) {
 				assert.ErrorContains(t, err, prefix+resourceID)
 			} else {
 				require.NoError(t, err)
-				assert.Equal(t, map[string]model.Resource{prefix + "dev-aurora": {
-					Type: model.TypeRdsCluster, Ref: "dev-aurora", ARN: prefix + "dev-aurora", Tags: map[string]string{model.GroupTagKey: "dev"},
+				assert.Equal(t, map[string]model.Resource{prefix + tc.arnRef: {
+					Type: model.TypeRdsCluster, Ref: "dev-aurora", ARN: prefix + tc.arnRef, Tags: map[string]string{model.GroupTagKey: "dev"},
 				}}, resources)
 			}
 			mu.Lock()
 			defer mu.Unlock()
-			want := []string{"GetResources", "DescribeDBClusters:name", "DescribeDBClusters:filter:"}
-			if !denied {
+			want := []string{"GetResources", "DescribeDBClusters:arn"}
+			if tc.arnRef != resourceID {
+				want = append(want, "DescribeDBClusters:name", "DescribeDBClusters:filter:")
+			}
+			if !denied && tc.arnRef != resourceID {
 				want = append(want, "DescribeDBClusters:filter:next")
 			}
 			assert.Equal(t, want, requests)

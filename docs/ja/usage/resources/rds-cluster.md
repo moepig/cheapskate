@@ -18,6 +18,8 @@ cheapskate:group は DB クラスタ自身に設定する。所属 DB インス�
 
 一覧表示と起動・停止には DBClusterIdentifier のクラスタ名を使用する。DbClusterResourceId の cluster- で始まる resource ID はクラスタ名とは異なる。同一クラスタを両方の識別子で検出した場合も、一覧には 1 件だけ表示する。
 
+一覧の ARN は RDS が返す DBClusterArn を使用する。ARN の末尾と DBClusterIdentifier のクラスタ名は異なる場合がある。
+
 グループ dev に所属させるため、DB クラスタ dev-cluster にタグを付けるコマンドを、以下に示す。
 
 ```sh

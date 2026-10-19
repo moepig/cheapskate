@@ -125,7 +125,7 @@ tag:GetResources はリソース ARN とタグ条件によるアクセス制御�
 
 この 3 アクションと rds:DescribeDBClusters は aws:RequestedRegion で呼び出し先リージョンを制限する。同じリージョン内では、管理対象以外の情報も参照可能である。詳細は[aws:RequestedRegion](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_condition-keys.html#condition-keys-requestedregion) を参照。
 
-RDS DB インスタンスの Describe は、DB 識別子を指定するこの構成では対象 ARN と所属タグで制限できる。RDS DB クラスタの探索では、名前を指定した照会に加え、[DescribeDBClusters の db-cluster-resource-id フィルタ](https://docs.aws.amazon.com/AmazonRDS/latest/APIReference/API_DescribeDBClusters.html)による照会を使用する。この照会を許可するため、参照権限の例は Resource を * とする。クラスタの起動・停止は対象 ARN と所属タグで制限する。ECS の参照と更新は長形式の service ARN で cluster と service を特定し、service 自身の所属タグを条件にする。
+RDS DB インスタンスの Describe は、DB 識別子を指定するこの構成では対象 ARN と所属タグで制限できる。RDS DB クラスタの探索では ARN を指定して照会し、見つからない候補を名前、[DescribeDBClusters の db-cluster-resource-id フィルタ](https://docs.aws.amazon.com/AmazonRDS/latest/APIReference/API_DescribeDBClusters.html)の順に照会する。resource ID の照会ではクラスタ名を指定しないため、参照権限の例は Resource を * とする。クラスタの起動・停止は対象 ARN と所属タグで制限する。ECS の参照と更新は長形式の service ARN で cluster と service を特定し、service 自身の所属タグを条件にする。
 
 ## reconciler の権限
 

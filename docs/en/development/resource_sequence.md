@@ -27,13 +27,17 @@ sequenceDiagram
         R->>R: Validate ARNs and retain the last tags for duplicates
     end
     loop Each unresolved RDS DB cluster candidate
-        R->>S: DescribeDBClusters(DBClusterIdentifier=Ref, all pages)
+        R->>S: DescribeDBClusters(DBClusterIdentifier=ARN, all pages)
         S-->>R: Cluster information or error
-        opt Candidate starts with cluster- and was not found
-            R->>S: DescribeDBClusters(db-cluster-resource-id filter, all pages)
+        opt ARN was not found
+            R->>S: DescribeDBClusters(DBClusterIdentifier=Ref, all pages)
             S-->>R: Cluster information or error
+            opt Candidate starts with cluster- and its name was not found
+                R->>S: DescribeDBClusters(db-cluster-resource-id filter, all pages)
+                S-->>R: Cluster information or error
+            end
         end
-        R->>R: Validate name and ARN, use RDS tags, and merge the same cluster
+        R->>R: Validate name and ARN, use DBClusterIdentifier for Ref and RDS tags, and merge aliases
     end
     Note over R,S: Global read, ARN parsing, or cluster resolution failure<br/>aborts before adapter Describe
     loop Each resource in ARN order

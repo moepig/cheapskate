@@ -27,13 +27,17 @@ sequenceDiagram
         R->>R: ARN を検証し、同一 ARN の最後のタグを採用
     end
     loop RDS DB クラスタの未解決候補
-        R->>S: DescribeDBClusters(DBClusterIdentifier=Ref、全ページ)
+        R->>S: DescribeDBClusters(DBClusterIdentifier=ARN、全ページ)
         S-->>R: クラスタ情報またはエラー
-        opt cluster- で始まる候補が見つからない
-            R->>S: DescribeDBClusters(db-cluster-resource-id フィルタ、全ページ)
+        opt ARN で見つからない
+            R->>S: DescribeDBClusters(DBClusterIdentifier=Ref、全ページ)
             S-->>R: クラスタ情報またはエラー
+            opt cluster- で始まる候補が名前で見つからない
+                R->>S: DescribeDBClusters(db-cluster-resource-id フィルタ、全ページ)
+                S-->>R: クラスタ情報またはエラー
+            end
         end
-        R->>R: 名前・ARN を検証し、RDS のタグを採用して同一クラスタを統合
+        R->>R: 名前・ARN を検証し、Ref に DBClusterIdentifier、タグに RDS のタグを採用して同一クラスタを統合
     end
     Note over R,S: 全体読み込み・ARN 解析・クラスタ照合の失敗は<br/>adapter の Describe 前にサイクルを中止
     loop ARN 順の各リソース
