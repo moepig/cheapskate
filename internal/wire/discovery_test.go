@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -27,13 +28,19 @@ func TestDiscovererThroughAWSSDK(t *testing.T) {
 	const prefix = "arn:aws:rds:ap-northeast-1:123456789012:cluster:"
 	const resourceID = "cluster-ANPAJ4AE5446DAEXAMPLE"
 	for _, tc := range []struct {
-		denied bool
-		arnRef string
+		denied   bool
+		arnRef   string
+		aliasRef string
 	}{
-		{false, "dev-aurora"}, {true, "dev-aurora"}, {false, resourceID},
+		{arnRef: "dev-aurora"}, {denied: true, arnRef: "dev-aurora"}, {arnRef: resourceID},
+		{arnRef: "dev-aurora", aliasRef: strings.ToLower(resourceID)},
 	} {
-		t.Run(fmt.Sprintf("access_denied=%t/arn=%s", tc.denied, tc.arnRef), func(t *testing.T) {
+		t.Run(fmt.Sprintf("access_denied=%t/arn=%s/alias=%s", tc.denied, tc.arnRef, tc.aliasRef), func(t *testing.T) {
 			denied := tc.denied
+			aliasRef := tc.aliasRef
+			if aliasRef == "" {
+				aliasRef = resourceID
+			}
 			var mu sync.Mutex
 			var requests []string
 			record := func(request string) {
@@ -58,7 +65,7 @@ func TestDiscovererThroughAWSSDK(t *testing.T) {
 					}
 					assert.Equal(t, model.GroupTagKey, input.TagFilters[0].Key)
 					w.Header().Set("Content-Type", "application/x-amz-json-1.1")
-					fmt.Fprintf(w, `{"ResourceTagMappingList":[{"ResourceARN":%q,"Tags":[{"Key":"cheapskate:group","Value":"stale"}]},{"ResourceARN":%q,"Tags":[{"Key":"cheapskate:group","Value":"stale"}]}]}`, prefix+"dev-aurora", prefix+resourceID)
+					fmt.Fprintf(w, `{"ResourceTagMappingList":[{"ResourceARN":%q,"Tags":[{"Key":"cheapskate:group","Value":"stale"}]},{"ResourceARN":%q,"Tags":[{"Key":"cheapskate:group","Value":"stale"}]}]}`, prefix+"dev-aurora", prefix+aliasRef)
 					return
 				}
 				if !assert.NoError(t, r.ParseForm()) || !assert.Equal(t, "DescribeDBClusters", r.Form.Get("Action")) {
@@ -67,7 +74,7 @@ func TestDiscovererThroughAWSSDK(t *testing.T) {
 				}
 				w.Header().Set("Content-Type", "text/xml")
 				if ref := r.Form.Get("DBClusterIdentifier"); ref != "" {
-					if ref == prefix+resourceID {
+					if ref == prefix+aliasRef {
 						record("DescribeDBClusters:arn")
 					} else {
 						record("DescribeDBClusters:name")
@@ -77,13 +84,13 @@ func TestDiscovererThroughAWSSDK(t *testing.T) {
 						writeCluster(w)
 						return
 					}
-					assert.Contains(t, []string{resourceID, prefix + resourceID}, ref)
+					assert.Contains(t, []string{aliasRef, prefix + aliasRef}, ref)
 					w.WriteHeader(http.StatusNotFound)
 					io.WriteString(w, `<ErrorResponse xmlns="http://rds.amazonaws.com/doc/2014-10-31/"><Error><Type>Sender</Type><Code>DBClusterNotFoundFault</Code><Message>Cluster not found</Message></Error><RequestId>not-found</RequestId></ErrorResponse>`)
 					return
 				}
 				assert.Equal(t, "db-cluster-resource-id", r.Form.Get("Filters.Filter.1.Name"))
-				assert.Equal(t, resourceID, r.Form.Get("Filters.Filter.1.Values.Value.1"))
+				assert.Equal(t, aliasRef, r.Form.Get("Filters.Filter.1.Values.Value.1"))
 				marker := r.Form.Get("Marker")
 				record("DescribeDBClusters:filter:" + marker)
 				if denied {
@@ -116,7 +123,7 @@ func TestDiscovererThroughAWSSDK(t *testing.T) {
 				var apiErr smithy.APIError
 				require.True(t, errors.As(err, &apiErr))
 				assert.Equal(t, "AccessDenied", apiErr.ErrorCode())
-				assert.ErrorContains(t, err, prefix+resourceID)
+				assert.ErrorContains(t, err, prefix+aliasRef)
 			} else {
 				require.NoError(t, err)
 				assert.Equal(t, map[string]model.Resource{prefix + tc.arnRef: {

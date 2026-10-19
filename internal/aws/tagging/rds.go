@@ -44,7 +44,8 @@ func (d *Discoverer) normalizeClusters(ctx context.Context, resources map[string
 	}
 	for _, key := range candidates {
 		candidate := resources[key]
-		resource, cached := cache[key]
+		cacheKey := clusterCacheKey(key)
+		resource, cached := cache[cacheKey]
 		if !cached {
 			cluster, err := d.resolveCluster(ctx, candidate)
 			if err != nil {
@@ -58,15 +59,15 @@ func (d *Discoverer) normalizeClusters(ctx context.Context, resources map[string
 			if err != nil {
 				return nil, fmt.Errorf("discover: resolve RDS cluster %q: %w", key, err)
 			}
-			cache[key] = resource
-			cache[resource.ARN] = resource
+			cache[cacheKey] = resource
+			cache[clusterCacheKey(resource.ARN)] = resource
 			for _, ref := range []string{resource.Ref, aws.ToString(cluster.DbClusterResourceId)} {
 				if ref == "" {
 					continue
 				}
 				alias, _ := arn.Parse(resource.ARN)
 				alias.Resource = "cluster:" + ref
-				cache[alias.String()] = resource
+				cache[clusterCacheKey(alias.String())] = resource
 			}
 		}
 		if _, tagged := resource.Tags[model.GroupTagKey]; !tagged {
@@ -76,6 +77,14 @@ func (d *Discoverer) normalizeClusters(ctx context.Context, resources map[string
 		normalized[resource.ARN] = resource
 	}
 	return normalized, nil
+}
+
+// 検証済みクラスタ ARN のリソース部を小文字へ統一したキャッシュキーを返す。
+// パーティション・リージョン・アカウントの表記は保持する。
+func clusterCacheKey(value string) string {
+	parsed, _ := arn.Parse(value)
+	parsed.Resource = strings.ToLower(parsed.Resource)
+	return parsed.String()
 }
 
 // ARN を優先して照会し、見つからない候補をクラスタ名、resource ID の順に照会する。
@@ -125,7 +134,7 @@ func (d *Discoverer) resolveCluster(ctx context.Context, candidate model.Resourc
 	}
 	cluster := &clusters[0]
 	if byResourceID {
-		if aws.ToString(cluster.DbClusterResourceId) != ref {
+		if !strings.EqualFold(aws.ToString(cluster.DbClusterResourceId), ref) {
 			return nil, fmt.Errorf("DescribeDBClusters returned a different resource ID for %q: got %q (DBClusterIdentifier=%q, DBClusterArn=%q)",
 				ref, aws.ToString(cluster.DbClusterResourceId), aws.ToString(cluster.DBClusterIdentifier), aws.ToString(cluster.DBClusterArn))
 		}

@@ -28,11 +28,12 @@ import (
 	statemocks "cheapskate/internal/state/mocks"
 )
 
-// 名前と resource ID の二重検出を実際の探索・グループ参照・RDS adapter に通す。
+// 大文字・小文字が異なる resource ID と名前の二重検出を実際の探索・グループ参照・RDS adapter に通す。
 // ARN の末尾が名前または resource ID のどちらでも、表示 1 件とクラスタ名による起動・停止 1 回を確認する。
 func TestAuroraAliasesProduceOneRowAndOneCanonicalAction(t *testing.T) {
 	const name = "foo"
-	const resourceID = "cluster-1234567890123456"
+	const resourceID = "cluster-ANPAJ4AE5446DAEXAMPLE"
+	const aliasID = "cluster-anpaj4ae5446daexample"
 	for _, tc := range []struct {
 		desired model.Override
 		arnRef  string
@@ -54,7 +55,7 @@ func TestAuroraAliasesProduceOneRowAndOneCanonicalAction(t *testing.T) {
 			tags.EXPECT().GetResources(gomock.Any(), gomock.Any()).Times(2).Return(&resourcegroupstaggingapi.GetResourcesOutput{
 				ResourceTagMappingList: []tagtypes.ResourceTagMapping{
 					{ResourceARN: aws.String(prefix + name), Tags: []tagtypes.Tag{{Key: aws.String(model.GroupTagKey), Value: aws.String("old")}}},
-					{ResourceARN: aws.String(prefix + resourceID), Tags: []tagtypes.Tag{{Key: aws.String(model.GroupTagKey), Value: aws.String("other")}}},
+					{ResourceARN: aws.String(prefix + aliasID), Tags: []tagtypes.Tag{{Key: aws.String(model.GroupTagKey), Value: aws.String("other")}}},
 				},
 			}, nil)
 			status := "available"
@@ -72,11 +73,11 @@ func TestAuroraAliasesProduceOneRowAndOneCanonicalAction(t *testing.T) {
 			rdsClient.EXPECT().DescribeDBClusters(gomock.Any(), gomock.Any()).AnyTimes().DoAndReturn(
 				func(_ context.Context, input *rds.DescribeDBClustersInput, _ ...func(*rds.Options)) (*rds.DescribeDBClustersOutput, error) {
 					ref := aws.ToString(input.DBClusterIdentifier)
-					if ref == resourceID || (ref == prefix+resourceID && tc.arnRef != resourceID) {
+					if ref == aliasID || ref == prefix+aliasID {
 						return nil, &types.DBClusterNotFoundFault{}
 					}
 					if input.DBClusterIdentifier == nil {
-						assert.Equal(t, []types.Filter{{Name: aws.String("db-cluster-resource-id"), Values: []string{resourceID}}}, input.Filters)
+						assert.Equal(t, []types.Filter{{Name: aws.String("db-cluster-resource-id"), Values: []string{aliasID}}}, input.Filters)
 					} else {
 						assert.Contains(t, []string{name, prefix + tc.arnRef}, ref)
 						assert.Empty(t, input.Filters)

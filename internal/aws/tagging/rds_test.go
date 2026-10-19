@@ -105,6 +105,60 @@ func TestDiscoverNormalizesClusterAliases(t *testing.T) {
 	}
 }
 
+// 大文字・小文字が異なる resource ID を返し、名前・ID の重複を同じ ARN へ統合する。
+// 名前を先に解決した場合も、ID の表記差による再照会を行わない。
+func TestDiscoverNormalizesClusterResourceIDCase(t *testing.T) {
+	lowerID := strings.ToLower(clusterResourceID)
+	mixedID := "cluster-AnPaJ4AE5446DAEXAMPLE"
+	for _, tc := range []struct {
+		name     string
+		cluster  string
+		arnRef   string
+		refs     []string
+		queryRef string
+		calls    int
+	}{
+		{name: "lowercase ID", cluster: "foo", arnRef: "foo", refs: []string{lowerID}, queryRef: lowerID, calls: 3},
+		{name: "mixed case ID", cluster: "foo", arnRef: "foo", refs: []string{mixedID}, queryRef: mixedID, calls: 3},
+		{name: "resource ID in canonical ARN", cluster: "foo", arnRef: clusterResourceID, refs: []string{lowerID}, queryRef: lowerID, calls: 3},
+		{name: "name resolved first", cluster: "alpha", arnRef: "alpha", refs: []string{"alpha", lowerID, mixedID}, calls: 1},
+		{name: "multiple ID spellings", cluster: "foo", arnRef: "foo", refs: []string{lowerID, clusterResourceID, mixedID}, queryRef: clusterResourceID, calls: 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			controller := gomock.NewController(t)
+			tags := mocks.NewMockAPI(controller)
+			out := &resourcegroupstaggingapi.GetResourcesOutput{}
+			for _, ref := range tc.refs {
+				out.ResourceTagMappingList = append(out.ResourceTagMappingList, taggedClusterMapping(ref))
+			}
+			tags.EXPECT().GetResources(gomock.Any(), gomock.Any()).Return(out, nil)
+			cluster := testCluster(tc.cluster)
+			cluster.DBClusterArn = aws.String(clusterARN(tc.arnRef))
+			rdsClient := mocks.NewMockRdsAPI(controller)
+			rdsClient.EXPECT().DescribeDBClusters(gomock.Any(), gomock.Any()).Times(tc.calls).DoAndReturn(
+				func(_ context.Context, input *rds.DescribeDBClustersInput, _ ...func(*rds.Options)) (*rds.DescribeDBClustersOutput, error) {
+					if input.DBClusterIdentifier != nil {
+						assert.Empty(t, input.Filters)
+						if *input.DBClusterIdentifier != aws.ToString(cluster.DBClusterArn) {
+							assert.Contains(t, []string{tc.queryRef, clusterARN(tc.queryRef)}, *input.DBClusterIdentifier)
+							return nil, &rdstypes.DBClusterNotFoundFault{}
+						}
+					} else {
+						assert.Equal(t, []rdstypes.Filter{{Name: aws.String("db-cluster-resource-id"), Values: []string{tc.queryRef}}}, input.Filters)
+					}
+					return &rds.DescribeDBClustersOutput{DBClusters: []rdstypes.DBCluster{cluster}}, nil
+				})
+
+			resources, err := (&Discoverer{Client: tags, Rds: rdsClient}).Discover(context.Background())
+
+			require.NoError(t, err)
+			assert.Equal(t, map[string]model.Resource{clusterARN(tc.arnRef): {
+				Type: model.TypeRdsCluster, Ref: tc.cluster, ARN: clusterARN(tc.arnRef), Tags: map[string]string{model.GroupTagKey: "dev"},
+			}}, resources)
+		})
+	}
+}
+
 // ARN の末尾と名前が異なる応答を返し、ARN の保持、名前による Ref、および重複候補の統合を確認する。
 func TestDiscoverPreservesClusterARNWithIndependentName(t *testing.T) {
 	for _, tc := range []struct {
@@ -446,10 +500,11 @@ func TestDiscoverKeepsDistinctClustersWithAliases(t *testing.T) {
 	}
 }
 
-// 解決済みクラスタと同じ resource ID を別アカウント・リージョンの候補として返し、キャッシュで誤統合しないことを確認する。
-// 参照先と異なる範囲の応答は探索エラーとし、解決済みクラスタも部分結果として返さない。
+// 同じ resource ID を別パーティション・アカウント・リージョンの候補として返し、範囲をまたいで統合しないことを確認する。
+// 参照先と異なる範囲の応答は探索エラーとし、部分結果を返さない。
 func TestDiscoverDoesNotReuseClusterIdentityAcrossScopes(t *testing.T) {
 	for _, alias := range []string{
+		strings.Replace(clusterARN(clusterResourceID), "arn:aws:", "arn:AWS:", 1),
 		strings.Replace(clusterARN(clusterResourceID), "123456789012", "999999999999", 1),
 		strings.Replace(clusterARN(clusterResourceID), "ap-northeast-1", "us-east-1", 1),
 	} {
@@ -461,12 +516,16 @@ func TestDiscoverDoesNotReuseClusterIdentityAcrossScopes(t *testing.T) {
 			}, nil)
 			cluster := testCluster("alpha")
 			rdsClient := mocks.NewMockRdsAPI(controller)
-			gomock.InOrder(
-				rdsClient.EXPECT().DescribeDBClusters(gomock.Any(), gomock.Eq(&rds.DescribeDBClustersInput{DBClusterIdentifier: aws.String(clusterARN("alpha"))})).Return(&rds.DescribeDBClustersOutput{DBClusters: []rdstypes.DBCluster{cluster}}, nil),
+			var calls []any
+			if clusterARN("alpha") < alias {
+				calls = append(calls, rdsClient.EXPECT().DescribeDBClusters(gomock.Any(), gomock.Eq(&rds.DescribeDBClustersInput{DBClusterIdentifier: aws.String(clusterARN("alpha"))})).Return(&rds.DescribeDBClustersOutput{DBClusters: []rdstypes.DBCluster{cluster}}, nil))
+			}
+			calls = append(calls,
 				rdsClient.EXPECT().DescribeDBClusters(gomock.Any(), gomock.Eq(&rds.DescribeDBClustersInput{DBClusterIdentifier: aws.String(alias)})).Return(nil, &rdstypes.DBClusterNotFoundFault{}),
 				rdsClient.EXPECT().DescribeDBClusters(gomock.Any(), gomock.Eq(&rds.DescribeDBClustersInput{DBClusterIdentifier: aws.String(clusterResourceID)})).Return(nil, &rdstypes.DBClusterNotFoundFault{}),
 				rdsClient.EXPECT().DescribeDBClusters(gomock.Any(), gomock.Any()).Return(&rds.DescribeDBClustersOutput{DBClusters: []rdstypes.DBCluster{cluster}}, nil),
 			)
+			gomock.InOrder(calls...)
 
 			resources, err := (&Discoverer{Client: tags, Rds: rdsClient}).Discover(context.Background())
 
