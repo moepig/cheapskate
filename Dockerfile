@@ -8,7 +8,7 @@
 # The reconciler is the last stage, so a bare `docker build .` builds that one.
 
 # Build on the host platform and cross-compile via GOARCH, so no emulation is needed when building arm64 images on x86 hosts (and vice versa).
-FROM --platform=$BUILDPLATFORM golang:1.27.0@sha256:4013ae0f9e7994f8535c58c811f8f863fbed38b72e0d51e6592156f758d66146 AS build
+FROM --platform=$BUILDPLATFORM golang:1.27.3@sha256:2920bb124f1a2e12a1d39f0cab756ae0068441ee1da7655dec7f5e374944095b AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
@@ -35,7 +35,7 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
 # is not in go.mod, so its version tag and digest are maintained as a Docker dependency.
 FROM public.ecr.aws/awsguru/aws-lambda-adapter:1.1.0@sha256:17cfd08eff1dfea3f6a9a1e9c65fdac80aa4919b6085e746615530f43f57d2f1 AS lambda-adapter
 
-FROM public.ecr.aws/lambda/provided:al2023@sha256:aa71e364ea5e730a64390124ecf951d44107fbc3149cfc23e8f408ec44888828 AS webconsole
+FROM public.ecr.aws/lambda/provided:al2023@sha256:2dc0f1f26731018b369932201d1dac295edd1730d1280f194486ae093ac39798 AS webconsole
 # Lambda's init starts every executable under /opt/extensions before invoking the function.
 COPY --from=lambda-adapter /lambda-adapter /opt/extensions/lambda-adapter
 COPY --from=build-webconsole /bootstrap /var/runtime/bootstrap
@@ -49,6 +49,6 @@ ENV AWS_LWA_READINESS_CHECK_PROTOCOL=tcp
 # provided.al2023 runs /var/runtime/bootstrap; the CMD is unused but required to be non-empty by some tooling.
 CMD ["handler"]
 
-FROM public.ecr.aws/lambda/provided:al2023@sha256:aa71e364ea5e730a64390124ecf951d44107fbc3149cfc23e8f408ec44888828 AS reconciler
+FROM public.ecr.aws/lambda/provided:al2023@sha256:2dc0f1f26731018b369932201d1dac295edd1730d1280f194486ae093ac39798 AS reconciler
 COPY --from=build-reconciler /bootstrap /var/runtime/bootstrap
 CMD ["handler"]
