@@ -2,18 +2,15 @@
 
 This document covers how a release is cut, what a release produces, and the reasoning behind the dependency-update settings.
 
-Run goreleaser in CI rather than locally. For configuration validation on every pull request and snapshot builds when the release path changes, see [GitHub Actions](github-actions.md).
+Run goreleaser in CI rather than locally. For configuration validation on every pull request and snapshot builds on every CI run, see [GitHub Actions](github-actions.md).
 
 ## Cutting a release
 
-A release starts from pushing a Git tag. The whole test suite runs against the tagged commit before publication; if any test fails, no release is created for that tag.
+Release Please runs on main pushes or manual dispatch. It creates or updates a release PR when main contains unreleased fix or feat changes. It creates no new PR when there are no releasable changes. There is no scheduled run. After a GITHUB_TOKEN dependency merge, run it manually on main with tag empty.
 
-```console
-git tag v0.1.0
-git push origin v0.1.0
-```
+A maintainer approves CI if requested, reviews the version and compatibility, and merges the release PR. That merge pushes to main and automatically starts publication by creating the tag and draft release. Distribution checks the tag against the merge SHA, uploads the GoReleaser archives and versioned images, updates stable latest tags, and publishes the GitHub Release. Prereleases do not advance latest.
 
-goreleaser derives the version from the Git tag. For a semver prerelease (`v0.1.0-rc.1`), the GitHub release is created as a prerelease and the images' `latest` tags do not move.
+See the [release flow and operations](../../dependency-release.md#公開) for stopping publication and retrying a failed distribution.
 
 ## Release artifacts
 
@@ -42,8 +39,7 @@ Local builds and image tests build from source with the `Dockerfile` at the repo
 
 Pushing to GHCR uses the workflow's `GITHUB_TOKEN` (`packages: write`). There is no secret to configure.
 
-> [!IMPORTANT]
-> After the first release, manually change each GHCR package to public once. A freshly created GHCR package is private regardless of the repository's visibility, and an unauthenticated `docker pull` fails against it, because a package inherits the linked repository's permissions rather than its visibility. Change each package to public from the repository's Packages (package settings → Change visibility).
+New GHCR packages are private by default. After the first release, change each package to public in its Settings to allow unauthenticated pulls. Repository visibility alone does not change package visibility. Follow [GitHub's package visibility documentation](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry).
 
 Later releases push to the existing package, so the visibility is preserved.
 
@@ -59,23 +55,15 @@ The Dockerfile frontend, Go builder, Lambda base image, and Lambda Web Adapter a
 
 Dependabot proposes versions 7 days after publication. Every ecosystem is configured with `cooldown.default-days: 7`, extending the default 3-day cooldown.
 
-Patch and minor updates are merged without human review. The waiting period allows time for a malicious release to be detected or withdrawn before Dependabot proposes the update.
+Patch and minor updates merge after the required CI and review conditions pass. The waiting period allows time for a malicious release to be detected or withdrawn before Dependabot proposes the update.
 
 > [!NOTE]
 > Security updates are exempt from the cooldown. An update for a known CVE is proposed regardless of how recently it was published.
 
 ### Auto-merge
 
-`dependabot-auto-merge.yml` runs on each of Dependabot's pull requests and calls `gh pr merge --auto` for patch and minor updates. These two update types form an allowlist. Major updates require human review. Updates whose type cannot be determined are also excluded from auto-merge.
+dependabot/fetch-metadata verifies Dependabot commits and reports the update type. The workflow uses GitHub CLI to approve and reserve squash auto-merge for minor and patch updates. Major and unknown updates require manual review.
 
-For a grouped pull request, metadata reports the largest update type in the group. Ten patch updates with one major update therefore leave the whole group pending.
+Require the ci check from GitHub Actions, reviews, an up-to-date main base, and stale approval dismissal before enabling DEPENDABOT_AUTO_MERGE. Application dependencies use fix commits and Actions use chore commits through Dependabot configuration. There is no per-dependency product-impact analysis or security evidence registration.
 
-`--auto` records the auto-merge setting, and GitHub performs the merge once the required checks pass. Branch protection on `main` defines those required checks.
-
-Auto-merge requires the following repository settings:
-
-- Enable Settings → General → Allow auto-merge. Disabled, `gh pr merge --auto` fails
-- Require the `ci.yml` checks in branch protection (or a ruleset) on `main`. For which check names to select, see the check names section in [GitHub Actions](github-actions.md)
-
-> [!WARNING]
-> With no required checks configured, a pull request is merged the moment `--auto` is set. Successful tests are not a merge requirement, and dependency updates reach `main` unchecked.
+Retry failed distribution jobs only after verifying the tag, draft, and registry state. An existing draft tag can be supplied to Release Please for a manual retry; versioned images may be replaced. No automatic recovery service or image ownership inspection is used.
