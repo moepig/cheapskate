@@ -1,6 +1,6 @@
 # GitHub Actions
 
-CI, dependency updates, and release publication use standard GitHub Actions and repository configuration. Every workflow uses GITHUB_TOKEN; there is no repository-owned control action.
+This document describes the workflows for CI, dependency auto-merge, release PR creation, and publication. Each job authenticates with GITHUB_TOKEN.
 
 ## Workflows
 
@@ -10,7 +10,7 @@ CI, dependency updates, and release publication use standard GitHub Actions and 
 | test.yml | Reusable lint, unit, integration, image, and config checks |
 | dependabot-auto-merge.yml | Metadata action and GitHub auto-merge |
 | release-please.yml | Release Please PRs, tags, and draft releases |
-| distribute.yml | GoReleaser, checksum verification, and publication |
+| distribute.yml | GoReleaser, distribution, and publication |
 
 CI runs on main pushes and pull requests. The ci check fails if a required job fails or is skipped. The reusable jobs appear as test / lint, test / unit, test / integration, test / image, and test / goreleaser. release-snapshot builds every target and image without publication. Integration and image tests use Docker and need no AWS credentials.
 
@@ -20,9 +20,11 @@ Require ci from GitHub Actions on main, an up-to-date branch, and reviews. Dismi
 
 ## Releases
 
-Release Please manages versions, changelogs, tags, and draft releases. A maintainer merges its PR. The action output passes the tag and merge SHA to distribute.yml. GoReleaser attaches archives and stages versioned containers. The workflow checks uploaded SHA-256 checksums, advances stable latest tags, and publishes the draft.
+Release Please runs on main pushes or manual dispatch. It creates a release PR when main contains unreleased fix or feat changes, updates an existing PR, and creates no new PR when there are no releasable changes. There is no scheduled run. After a dependency PR merges through GITHUB_TOKEN, run Release Please manually on main with tag left empty because that merge does not trigger a push workflow.
 
-Recovery is manual: rerun a failed job or provide an existing draft tag to the Release Please workflow. No custom Check Runs, state issues, or image ownership service are used. See [release operations](../../dependency-release.md) for retry limitations and repository settings.
+A maintainer reviews and merges the release PR. That merge pushes to main and automatically starts Release Please, which creates the tag and draft release and passes the merge SHA to distribute.yml. GoReleaser uploads archives and versioned containers. The workflow updates stable latest tags and publishes the draft.
+
+Rerun a failed job after inspecting the release and registry state. Use a tag input only to retry an existing draft; that run skips PR creation. See the [release flow and operations](../../dependency-release.md#公開) for the creation and publication steps.
 
 ## Workflow changes
 

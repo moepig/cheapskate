@@ -6,11 +6,11 @@ Run goreleaser in CI rather than locally. For configuration validation on every 
 
 ## Cutting a release
 
-Release Please creates the version and changelog in a release PR. A maintainer approves its CI run, reviews the release contents, and merges it manually. The release workflow checks the tag against the PR merge SHA and calls the distribution workflow directly.
+Release Please runs on main pushes or manual dispatch. It creates or updates a release PR when main contains unreleased fix or feat changes. It creates no new PR when there are no releasable changes. There is no scheduled run. After a GITHUB_TOKEN dependency merge, run it manually on main with tag empty.
 
-GoReleaser attaches archives to the existing draft without replacing Release Please notes. Containers are staged with versioned tags; latest advances only after every target has been verified. Prereleases do not advance latest. The workflow publishes the GitHub Release after checking its assets and SHA-256 checksums.
+A maintainer approves CI if requested, reviews the version and compatibility, and merges the release PR. That merge pushes to main and automatically starts publication by creating the tag and draft release. Distribution checks the tag against the merge SHA, uploads the GoReleaser archives and versioned images, updates stable latest tags, and publishes the GitHub Release. Prereleases do not advance latest.
 
-See [dependency and release operations](../../dependency-release.md) for stopping publication, manual retry, and required settings.
+See the [release flow and operations](../../dependency-release.md#公開) for stopping publication and retrying a failed distribution.
 
 ## Release artifacts
 
@@ -39,8 +39,7 @@ Local builds and image tests build from source with the `Dockerfile` at the repo
 
 Pushing to GHCR uses the workflow's `GITHUB_TOKEN` (`packages: write`). There is no secret to configure.
 
-> [!IMPORTANT]
-> After the first release, manually change each GHCR package to public once. A freshly created GHCR package is private regardless of the repository's visibility, and an unauthenticated `docker pull` fails against it, because a package inherits the linked repository's permissions rather than its visibility. Change each package to public from the repository's Packages (package settings → Change visibility).
+New GHCR packages are private by default. After the first release, change each package to public in its Settings to allow unauthenticated pulls. Repository visibility alone does not change package visibility. Follow [GitHub's package visibility documentation](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry).
 
 Later releases push to the existing package, so the visibility is preserved.
 
@@ -56,7 +55,7 @@ The Dockerfile frontend, Go builder, Lambda base image, and Lambda Web Adapter a
 
 Dependabot proposes versions 7 days after publication. Every ecosystem is configured with `cooldown.default-days: 7`, extending the default 3-day cooldown.
 
-Patch and minor updates are merged without human review. The waiting period allows time for a malicious release to be detected or withdrawn before Dependabot proposes the update.
+Patch and minor updates merge after the required CI and review conditions pass. The waiting period allows time for a malicious release to be detected or withdrawn before Dependabot proposes the update.
 
 > [!NOTE]
 > Security updates are exempt from the cooldown. An update for a known CVE is proposed regardless of how recently it was published.
