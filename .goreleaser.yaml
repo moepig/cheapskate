@@ -62,8 +62,8 @@ archives:
         formats: [ zip ]
     files: [ README.md ]
 
-# Versioned multi-architecture images are staged before final publication checks.
-# The release controller advances latest after verifying every distribution target.
+# Versioned multi-architecture images are published by GoReleaser.
+# The workflow advances latest after the artifact checks complete.
 dockers_v2:
   - id: reconciler
     ids: [ reconciler ]

@@ -10,7 +10,7 @@ release-please がバージョンと変更履歴を含むリリース PR を作�
 
 GoReleaser は既存 draft にアーカイブを添付し、release-please の変更履歴を維持する。コンテナはバージョン付きタグを先に登録し、全対象の検証後に latest を更新する。プレリリースでは latest を更新しない。添付ファイルと SHA-256 の検証後に GitHub Release を公開する。
 
-設定、保留、復旧は [依存更新とリリース](../../dependency-release.md)に従う。
+設定、停止、手動再実行は [依存更新とリリース](../../dependency-release.md)に従う。
 
 ## リリースの成果物
 
@@ -63,6 +63,8 @@ patch と minor の更新は人によるレビューを経ずに自動マージ�
 
 ### 自動マージ
 
-Dependency control は署名済み Dependabot コミット、現在の差分、CI、main の保護設定を確認する。minor・patch 更新は bot 承認と squash の auto-merge を予約できる。major と種別不明の更新は、管理者による最新 SHA のレビューを必要とする。
+dependabot/fetch-metadata が Dependabot コミットを検証し、更新種別を取得する。GitHub CLI で minor・patch の承認と squash auto-merge を予約する。major と種別不明の更新は管理者が確認して手動でマージする。
 
-必須チェックは GitHub Actions 提供の ci、dependency-review、release-ready とする。保護設定が不足する場合は自動マージを保留する。配布物に影響する更新には fix(deps) を使う。影響しない更新は chore(deps) とする。セキュリティ修正の根拠登録は行わない。
+GitHub Actions 提供の ci、レビュー、最新ベース、push 後の承認無効化を設定してから DEPENDABOT_AUTO_MERGE を有効にする。アプリケーション依存は fix、Actions は chore を Dependabot の設定で指定する。依存ごとの影響解析やセキュリティ修正の根拠登録は行わない。
+
+配布失敗時はタグ、draft、レジストリの状態を確認して再実行する。Release Please の tag 入力でも既存 draft を指定できる。バージョン付きイメージを置き換える可能性があるため、無条件には再実行しない。自動復旧や既存イメージの所有情報の照合は行わない。

@@ -1,6 +1,6 @@
 # GitHub Actions
 
-CI, dependency control, and releases use the workflows under .github/workflows. Authentication uses each job's GITHUB_TOKEN.
+CI, dependency updates, and release publication use standard GitHub Actions and repository configuration. Every workflow uses GITHUB_TOKEN; there is no repository-owned control action.
 
 ## Workflows
 
@@ -8,24 +8,22 @@ CI, dependency control, and releases use the workflows under .github/workflows. 
 | --- | --- |
 | ci.yml | Tests, snapshot builds, and the ci aggregate check |
 | test.yml | Reusable lint, unit, integration, image, and config checks |
-| dependency-control.yml | Dependency policy and merge reservations |
-| release-control.yml | Release PRs, recovery, and publication |
-| distribute.yml | Archives and versioned container images |
+| dependabot-auto-merge.yml | Metadata action and GitHub auto-merge |
+| release-please.yml | Release Please PRs, tags, and draft releases |
+| distribute.yml | GoReleaser, checksum verification, and publication |
 
-CI runs on main pushes and pull requests. The aggregate ci job fails if a required job fails or is skipped. The reusable test jobs appear as test / lint, test / unit, test / integration, test / image, and test / goreleaser. The separate release-snapshot job builds every target and image without publication on every CI run. Integration and image tests use the runner's Docker daemon and need no AWS credentials.
+CI runs on main pushes and pull requests. The ci check fails if a required job fails or is skipped. The reusable jobs appear as test / lint, test / unit, test / integration, test / image, and test / goreleaser. release-snapshot builds every target and image without publication. Integration and image tests use Docker and need no AWS credentials.
 
-## Required checks
+## Merge requirements
 
-Require ci, dependency-review, and release-ready from GitHub Actions on main. Also require an up-to-date branch and reviews, and dismiss stale approvals. The dependency controller verifies these settings before reserving auto-merge. Its decision uses the latest CI attempt for the current PR head.
+Require ci from GitHub Actions on main, an up-to-date branch, and reviews. Dismiss approvals after a new push. Enable DEPENDABOT_AUTO_MERGE only after these settings and CI have been verified. The metadata action verifies Dependabot commits; the workflow uses GitHub CLI to approve and reserve squash auto-merge for minor and patch updates. Major and unknown updates remain manual. PR code is never checked out by the privileged auto-merge workflow.
 
-## Trusted control
+## Releases
 
-Dependency control runs from pull_request_target, workflow_run, scheduled, or manual events. It reads PR files through the API and does not check out PR code. The shared action is pinned to a full commit SHA. Reviews of manually merged dependency updates are reevaluated on the next scheduled or manual run.
+Release Please manages versions, changelogs, tags, and draft releases. A maintainer merges its PR. The action output passes the tag and merge SHA to distribute.yml. GoReleaser attaches archives and stages versioned containers. The workflow checks uploaded SHA-256 checksums, advances stable latest tags, and publishes the draft.
 
-Release control calls distribute.yml directly with the merged release PR SHA. GoReleaser keeps the existing draft and notes; container publication stages versioned tags before updating latest. Publication checks run before the draft is made public. See [release operations](../../dependency-release.md) for CI approval, holds, and recovery.
-
-Each workflow defaults to contents: read. Control jobs add repository write permissions for their API operations. Distribution receives contents: write and packages: write. No additional secret is required.
+Recovery is manual: rerun a failed job or provide an existing draft tag to the Release Please workflow. No custom Check Runs, state issues, or image ownership service are used. See [release operations](../../dependency-release.md) for retry limitations and repository settings.
 
 ## Workflow changes
 
-Pin external actions to complete commit SHAs and retain their version comments for Dependabot. Local reusable workflows resolve at the caller commit. Keep ci job names and the configured ciJobs list aligned. Required workflows must not use path filters that leave PRs without a result.
+Pin external actions to complete commit SHAs with version comments for Dependabot. Local reusable workflows resolve at the caller commit. Keep the aggregate ci check dependent on every required job. Avoid workflow path filters that omit required results.

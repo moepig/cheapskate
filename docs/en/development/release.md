@@ -6,11 +6,11 @@ Run goreleaser in CI rather than locally. For configuration validation on every 
 
 ## Cutting a release
 
-Release Please creates the version and changelog in a release PR. A maintainer approves its CI run, reviews the release contents, and merges it manually. Release control checks the tag against the PR merge SHA and calls the distribution workflow directly.
+Release Please creates the version and changelog in a release PR. A maintainer approves its CI run, reviews the release contents, and merges it manually. The release workflow checks the tag against the PR merge SHA and calls the distribution workflow directly.
 
-GoReleaser attaches archives to the existing draft without replacing Release Please notes. Containers are staged with versioned tags; latest advances only after every target has been verified. Prereleases do not advance latest. The controller publishes the GitHub Release after checking its assets and SHA-256 checksums.
+GoReleaser attaches archives to the existing draft without replacing Release Please notes. Containers are staged with versioned tags; latest advances only after every target has been verified. Prereleases do not advance latest. The workflow publishes the GitHub Release after checking its assets and SHA-256 checksums.
 
-See [dependency and release operations](../../dependency-release.md) for holds, recovery, and required settings.
+See [dependency and release operations](../../dependency-release.md) for stopping publication, manual retry, and required settings.
 
 ## Release artifacts
 
@@ -63,6 +63,8 @@ Patch and minor updates are merged without human review. The waiting period allo
 
 ### Auto-merge
 
-Dependency control reads signed Dependabot commits and validates the current diff, CI results, and main protection. Minor and patch updates can receive bot approval and a squash auto-merge reservation. Major or unknown updates require a maintainer review of the current SHA.
+dependabot/fetch-metadata verifies Dependabot commits and reports the update type. The workflow uses GitHub CLI to approve and reserve squash auto-merge for minor and patch updates. Major and unknown updates require manual review.
 
-The required checks are ci, dependency-review, and release-ready, provided by GitHub Actions. Missing protection leaves auto-merge disabled. Updates that affect the product use fix(deps); test and repository-only updates use chore(deps). No separate security evidence registration is used.
+Require the ci check from GitHub Actions, reviews, an up-to-date main base, and stale approval dismissal before enabling DEPENDABOT_AUTO_MERGE. Application dependencies use fix commits and Actions use chore commits through Dependabot configuration. There is no per-dependency product-impact analysis or security evidence registration.
+
+Retry failed distribution jobs only after verifying the tag, draft, and registry state. An existing draft tag can be supplied to Release Please for a manual retry; versioned images may be replaced. No automatic recovery service or image ownership inspection is used.

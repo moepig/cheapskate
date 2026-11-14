@@ -36,6 +36,6 @@ jobs:
       - release-snapshot
     if: ${{ always() }}
     steps:
-      - env:
-          RESULTS: ${{ toJSON(needs) }}
-        run: node -e 'const jobs = JSON.parse(process.env.RESULTS); if (!Object.values(jobs).every(job => job.result === "success")) process.exit(1)'
+      - name: Require every CI job to succeed
+        if: ${{ needs['test'].result != 'success' || needs['release-snapshot'].result != 'success' }}
+        run: exit 1
