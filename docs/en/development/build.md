@@ -34,7 +34,9 @@ make image PLATFORM=linux/amd64 TAG=v0.1.0   # the x86 build
 
 Both binaries are placed as `/var/runtime/bootstrap`, so no `ImageConfig.EntryPoint` override is needed.
 
-Build inputs are pinned by both tag and digest. This includes the Go builder, Lambda base image, and Dockerfile frontend. Tags identify the intended version; digests fix the referenced content. The Lambda base image is `public.ecr.aws/lambda/provided:al2023`.
+Container images are pinned by both tag and digest. This includes the Go and Rust builders, Lambda base images, and Dockerfile frontend. Tags identify the intended version; digests fix the referenced content. The Lambda base images come from AWS's `amazon/aws-lambda-provided` repository on Docker Hub. Separate `al2023-x86_64` and `al2023-arm64` stages are selected through `TARGETARCH`.
+
+Image builds do not pull from ECR Public, so they do not need AWS credentials or an IAM role for dependency downloads. Docker Hub, GitHub, Rust toolchain downloads, Alpine packages, and crates.io must be reachable.
 
 The Dockerfile cross-compiles from the host platform through `GOARCH`, so building for another architecture needs no emulation.
 
@@ -44,9 +46,11 @@ An allowlist in `.dockerignore` limits the build context to the Dockerfile, modu
 
 ### Lambda Web Adapter
 
-The web console image carries the Lambda Web Adapter executable as `/opt/extensions/lambda-adapter`, pinned by version tag and digest in the `Dockerfile`. It is the only runtime dependency outside go.mod, and it is updated through Dependabot's docker updates rather than with the Go modules.
+The web console image carries Lambda Web Adapter v1.1.0 as `/opt/extensions/lambda-adapter`. The `lambda-adapter` stage builds the official GitHub source from a pinned commit archive, verified with SHA-256 by `ADD --checksum`. Cargo uses the upstream lockfile with `--locked`. The adapter's Apache license and notice are included under `/opt/licenses/aws-lambda-web-adapter/`.
 
-For how the adapter converts invocation events into HTTP, and its relationship to the web-console application, see [Lambda runtime](../architecture/overview.md#lambda-runtime). For how a Dependabot update reaches a release, see the dependency updates section in [Releases and dependency updates](release.md).
+Rust cross-compiles a static musl binary for the selected architecture using its bundled LLD linker. No target-architecture emulation is needed. The first build compiles the adapter; later builds reuse Docker layers and Cargo caches.
+
+For how the adapter converts invocation events into HTTP, and its relationship to the web-console application, see [Lambda runtime](../architecture/overview.md#lambda-runtime). For updating the pinned source, see the dependency updates section in [Releases and dependency updates](release.md).
 
 ## Testing the images
 

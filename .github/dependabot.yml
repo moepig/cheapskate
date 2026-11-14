@@ -32,8 +32,7 @@ updates:
       actions:
         patterns: ["*"]
 
-  # Base images: the root Dockerfile (Go toolchain, Lambda base, Lambda Web Adapter) and the
-  # release Dockerfiles under build/ that goreleaser uses.
+  # Base images and compilers in the root Dockerfile and the release Dockerfiles under build/.
   - package-ecosystem: docker
     directories: ["/", "/build"]
     schedule:

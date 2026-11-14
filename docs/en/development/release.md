@@ -53,7 +53,9 @@ Dependabot opens pull requests weekly according to `.github/dependabot.yml`. Upd
 
 AWS SDK modules, Actions, and images are each grouped into the units updated together. All updates are checked by `ci.yml`, including image tests.
 
-The Dockerfile frontend, Go builder, Lambda base image, and Lambda Web Adapter are all pinned by tag and digest and covered by Docker updates. Unlike Go dependencies, they do not appear in `go.mod`, so Dependabot updates their tags and digests together.
+The Dockerfile frontend, Go and Rust builders, and Lambda base images are pinned by tag and digest and covered by Docker updates. Unlike Go dependencies, they do not appear in `go.mod`, so Dependabot updates their tags and digests together.
+
+The Lambda Web Adapter source is pinned by commit and archive SHA-256 and is updated manually. Resolve the desired upstream release tag to its commit, download that commit's archive, and calculate its SHA-256. Update the archive URL, checksum, version comment, and `LAMBDA_RUNTIME_USER_AGENT` in both the root `Dockerfile` and `build/Dockerfile.webconsole`. Keep the adapter build stages identical, then run the image tests and confirm the pull request's multi-architecture release snapshot succeeds.
 
 ### Days since release
 

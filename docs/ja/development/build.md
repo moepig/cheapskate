@@ -34,7 +34,9 @@ make image PLATFORM=linux/amd64 TAG=v0.1.0   # x86 版
 
 バイナリはどちらも `/var/runtime/bootstrap` として配置する。このため、`ImageConfig.EntryPoint` による上書きは不要である。
 
-ビルド入力はタグと digest の両方で固定する。対象は Go ビルダー、Lambda ベースイメージ、および Dockerfile frontend である。タグは更新対象のバージョンを示し、digest は参照する内容を固定する。Lambda ベースイメージは `public.ecr.aws/lambda/provided:al2023` である。
+コンテナイメージはタグと digest の両方で固定する。対象は Go と Rust のビルダー、Lambda ベースイメージ、および Dockerfile frontend である。タグは更新対象のバージョンを示し、digest は参照する内容を固定する。Lambda ベースイメージは、Docker Hub の AWS 公式リポジトリ `amazon/aws-lambda-provided` から取得する。`al2023-x86_64` と `al2023-arm64` のステージを用意し、`TARGETARCH` に応じて選択する。
+
+イメージのビルドでは ECR Public から取得しないため、依存のダウンロードに AWS の認証情報や IAM ロールは不要である。Docker Hub、GitHub、Rust ツールチェーンの配布先、Alpine パッケージ、crates.io への接続は必要である。
 
 Dockerfile はホストプラットフォームから `GOARCH` でクロスコンパイルする。このため、異なるアーキテクチャ向けのビルドにエミュレーションは不要である。
 
@@ -44,9 +46,11 @@ Go のビルドステージは 2 つのイメージで共有する。このた�
 
 ### Lambda Web Adapter
 
-Web コンソールのイメージには、Lambda Web Adapter の実行ファイルが `/opt/extensions/lambda-adapter` として入る。バージョンタグと digest は `Dockerfile` で固定してある。これは go.mod の外にある唯一の実行時依存であり、更新は Go モジュールとは別に Dependabot の docker 更新で行う。
+Web コンソールのイメージには、Lambda Web Adapter v1.1.0 が `/opt/extensions/lambda-adapter` として入る。`lambda-adapter` ステージで、公式 GitHub ソースのコミットを固定したアーカイブからビルドする。アーカイブは `ADD --checksum` で SHA-256 を検証し、Cargo は `--locked` で上流のロックファイルを使用する。Apache ライセンスと NOTICE は `/opt/licenses/aws-lambda-web-adapter/` に同梱する。
 
-アダプタが呼び出しイベントを HTTP へ変換する仕組みと、Web コンソール本体との関係は、[Lambda 実行](../architecture/overview.md#lambda-実行)を参照する。Dependabot による更新方法は、[リリースと依存の更新](release.md)の依存の更新を参照する。
+Rust は付属の LLD リンカを使い、対象アーキテクチャ向けの静的な musl バイナリをクロスコンパイルする。このため、対象アーキテクチャのエミュレーションは不要である。初回はアダプタをコンパイルし、以後は Docker のレイヤーと Cargo のキャッシュを再利用する。
+
+アダプタが呼び出しイベントを HTTP へ変換する仕組みと、Web コンソール本体との関係は、[Lambda 実行](../architecture/overview.md#lambda-実行)を参照する。固定したソースの更新方法は、[リリースと依存の更新](release.md)の依存の更新を参照する。
 
 ## イメージのテスト
 

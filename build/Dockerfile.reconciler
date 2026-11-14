@@ -4,7 +4,10 @@
 # the repository, so this file only assembles — the compile flags live in .goreleaser.yaml. The
 # root Dockerfile is the one that builds from source, for local builds and the image tests; the
 # runtime stage below must stay in step with its `reconciler` target.
-FROM public.ecr.aws/lambda/provided:al2023@sha256:b419ebba0f018a555467401d3e7eaafe3eb455a6a612ca06834887fdefde2621
+FROM amazon/aws-lambda-provided:al2023-x86_64@sha256:4999d3a0e62f5eefe8eb0236ff2085a9f016e49badbfd4556b9ddaad0b13ff26 AS lambda-runtime-amd64
+FROM amazon/aws-lambda-provided:al2023-arm64@sha256:9e1b7d09646700454ad9a6c8207970a14f4bc5ee2868d80739ad00f8eb50d81c AS lambda-runtime-arm64
+
+FROM lambda-runtime-${TARGETARCH}
 # goreleaser lays the binaries out per platform, as <goos>/<goarch>/<name>, because buildx builds
 # every platform of the manifest from this one file. TARGETPLATFORM is what selects among them.
 ARG TARGETPLATFORM
