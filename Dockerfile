@@ -8,7 +8,7 @@
 # The reconciler is the last stage, so a bare `docker build .` builds that one.
 
 # Build on the host platform and cross-compile via GOARCH, so no emulation is needed when building arm64 images on x86 hosts (and vice versa).
-FROM --platform=$BUILDPLATFORM golang:1.27.3@sha256:2920bb124f1a2e12a1d39f0cab756ae0068441ee1da7655dec7f5e374944095b AS build
+FROM --platform=$BUILDPLATFORM golang:1.27.3@sha256:e519d3b0a5b285e5aa53ab9eef02bc6bbb9cb04608389b743a136a9ce75f0d1e AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
@@ -34,7 +34,7 @@ FROM amazon/aws-lambda-provided:al2023-x86_64@sha256:4999d3a0e62f5eefe8eb0236ff2
 FROM amazon/aws-lambda-provided:al2023-arm64@sha256:9e1b7d09646700454ad9a6c8207970a14f4bc5ee2868d80739ad00f8eb50d81c AS lambda-runtime-arm64
 
 # Lambda Web Adapter v1.1.0, built from a verified source archive for the target architecture.
-FROM --platform=$BUILDPLATFORM rust:1.99.0-alpine3.24@sha256:0cce0a5e0e8ba67b455257a3a02a1d99005f382748789d6464460028810f1627 AS lambda-adapter
+FROM --platform=$BUILDPLATFORM rust:1.99.1-alpine3.24@sha256:44819b27be4c97b0e4d7203bd2e02c4820f97700211b6a37fb4c246a2de59383 AS lambda-adapter
 WORKDIR /src
 RUN apk add --no-cache gcc musl-dev
 ADD --checksum=sha256:41e437baff00539d5cd4bf6c7a9f9f6106386b9cf5461c38c19b969b94b568ea https://github.com/aws/aws-lambda-web-adapter/archive/596bdbcea78a89084fd0b522807d04cd2f1f3f7e.tar.gz /tmp/lambda-adapter.tar.gz
