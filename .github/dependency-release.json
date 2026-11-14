@@ -1,0 +1,117 @@
+{
+  "schemaVersion": 1,
+  "bootstrap": "ec31140da250f595f3c26e88d72c667f96e9d87a",
+  "requiresInitialVersion": false,
+  "ci": "ci.yml",
+  "ciJobs": [
+    "test / lint",
+    "test / unit",
+    "test / integration",
+    "test / image",
+    "test / goreleaser",
+    "release-snapshot"
+  ],
+  "files": [
+    "go.mod",
+    "go.sum",
+    "Dockerfile",
+    "build/Dockerfile.reconciler",
+    "build/Dockerfile.webconsole"
+  ],
+  "actions": [
+    "actions/checkout",
+    "actions/setup-go",
+    "docker/login-action",
+    "docker/setup-buildx-action",
+    "googleapis/release-please-action",
+    "goreleaser/goreleaser-action",
+    "moepig/flexi/.github/actions/dependency-release"
+  ],
+  "images": [
+    "golang",
+    "public.ecr.aws/lambda/provided",
+    "public.ecr.aws/awsguru/aws-lambda-adapter"
+  ],
+  "noRelease": [
+    {
+      "name": "googleapis/release-please-action",
+      "files": [
+        ".github/workflows/dependency-control.yml",
+        ".github/workflows/release-control.yml",
+        ".github/workflows/ci.yml",
+        ".github/workflows/distribute.yml",
+        ".github/workflows/test.yml"
+      ],
+      "reason": "Action implementation used for repository automation; product toolchain versions are configured separately."
+    },
+    {
+      "name": "actions/checkout",
+      "files": [
+        ".github/workflows/dependency-control.yml",
+        ".github/workflows/release-control.yml",
+        ".github/workflows/ci.yml",
+        ".github/workflows/distribute.yml",
+        ".github/workflows/test.yml"
+      ],
+      "reason": "Action implementation used for repository automation; product toolchain versions are configured separately."
+    },
+    {
+      "name": "actions/setup-go",
+      "files": [
+        ".github/workflows/dependency-control.yml",
+        ".github/workflows/release-control.yml",
+        ".github/workflows/ci.yml",
+        ".github/workflows/distribute.yml",
+        ".github/workflows/test.yml"
+      ],
+      "reason": "Action implementation used for repository automation; product toolchain versions are configured separately."
+    },
+    {
+      "name": "docker/setup-buildx-action",
+      "files": [
+        ".github/workflows/dependency-control.yml",
+        ".github/workflows/release-control.yml",
+        ".github/workflows/ci.yml",
+        ".github/workflows/distribute.yml",
+        ".github/workflows/test.yml"
+      ],
+      "reason": "Action implementation used for repository automation; product toolchain versions are configured separately."
+    },
+    {
+      "name": "docker/login-action",
+      "files": [
+        ".github/workflows/dependency-control.yml",
+        ".github/workflows/release-control.yml",
+        ".github/workflows/ci.yml",
+        ".github/workflows/distribute.yml",
+        ".github/workflows/test.yml"
+      ],
+      "reason": "Action implementation used for repository automation; product toolchain versions are configured separately."
+    }
+  ],
+  "allowMajor": [],
+  "assets": [
+    "cheapskate-cli_{version}_linux_amd64.tar.gz",
+    "cheapskate-cli_{version}_linux_arm64.tar.gz",
+    "cheapskate-cli_{version}_darwin_amd64.tar.gz",
+    "cheapskate-cli_{version}_darwin_arm64.tar.gz",
+    "cheapskate-cli_{version}_windows_amd64.zip",
+    "cheapskate-cli_{version}_windows_arm64.zip",
+    "checksums.txt"
+  ],
+  "containers": [
+    {
+      "id": "reconciler",
+      "image": "ghcr.io/moepig/cheapskate-reconciler",
+      "dockerfile": "build/Dockerfile.reconciler",
+      "binary": "bootstrap"
+    },
+    {
+      "id": "webconsole",
+      "image": "ghcr.io/moepig/cheapskate-webconsole",
+      "dockerfile": "build/Dockerfile.webconsole",
+      "binary": "bootstrap"
+    }
+  ],
+  "versionFiles": []
+}

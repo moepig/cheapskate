@@ -2,18 +2,15 @@
 
 This document covers how a release is cut, what a release produces, and the reasoning behind the dependency-update settings.
 
-Run goreleaser in CI rather than locally. For configuration validation on every pull request and snapshot builds when the release path changes, see [GitHub Actions](github-actions.md).
+Run goreleaser in CI rather than locally. For configuration validation on every pull request and snapshot builds on every CI run, see [GitHub Actions](github-actions.md).
 
 ## Cutting a release
 
-A release starts from pushing a Git tag. The whole test suite runs against the tagged commit before publication; if any test fails, no release is created for that tag.
+Release Please creates the version and changelog in a release PR. A maintainer approves its CI run, reviews the release contents, and merges it manually. Release control checks the tag against the PR merge SHA and calls the distribution workflow directly.
 
-```console
-git tag v0.1.0
-git push origin v0.1.0
-```
+GoReleaser attaches archives to the existing draft without replacing Release Please notes. Containers are staged with versioned tags; latest advances only after every target has been verified. Prereleases do not advance latest. The controller publishes the GitHub Release after checking its assets and SHA-256 checksums.
 
-goreleaser derives the version from the Git tag. For a semver prerelease (`v0.1.0-rc.1`), the GitHub release is created as a prerelease and the images' `latest` tags do not move.
+See [dependency and release operations](../../dependency-release.md) for holds, recovery, and required settings.
 
 ## Release artifacts
 
@@ -66,16 +63,6 @@ Patch and minor updates are merged without human review. The waiting period allo
 
 ### Auto-merge
 
-`dependabot-auto-merge.yml` runs on each of Dependabot's pull requests and calls `gh pr merge --auto` for patch and minor updates. These two update types form an allowlist. Major updates require human review. Updates whose type cannot be determined are also excluded from auto-merge.
+Dependency control reads signed Dependabot commits and validates the current diff, CI results, and main protection. Minor and patch updates can receive bot approval and a squash auto-merge reservation. Major or unknown updates require a maintainer review of the current SHA.
 
-For a grouped pull request, metadata reports the largest update type in the group. Ten patch updates with one major update therefore leave the whole group pending.
-
-`--auto` records the auto-merge setting, and GitHub performs the merge once the required checks pass. Branch protection on `main` defines those required checks.
-
-Auto-merge requires the following repository settings:
-
-- Enable Settings → General → Allow auto-merge. Disabled, `gh pr merge --auto` fails
-- Require the `ci.yml` checks in branch protection (or a ruleset) on `main`. For which check names to select, see the check names section in [GitHub Actions](github-actions.md)
-
-> [!WARNING]
-> With no required checks configured, a pull request is merged the moment `--auto` is set. Successful tests are not a merge requirement, and dependency updates reach `main` unchecked.
+The required checks are ci, dependency-review, and release-ready, provided by GitHub Actions. Missing protection leaves auto-merge disabled. Updates that affect the product use fix(deps); test and repository-only updates use chore(deps). No separate security evidence registration is used.

@@ -22,58 +22,56 @@ builds:
   - id: reconciler
     main: ./cmd/reconciler
     binary: bootstrap
-    env: [CGO_ENABLED=0]
+    env: [ CGO_ENABLED=0 ]
     # aws-lambda-go serves the deprecated RPC protocol unless this tag drops it.
-    tags: [lambda.norpc]
-    flags: [-trimpath]
-    ldflags: ["-s -w"]
-    goos: [linux]
-    goarch: [amd64, arm64]
+    tags: [ lambda.norpc ]
+    flags: [ -trimpath ]
+    ldflags: [ "-s -w" ]
+    goos: [ linux ]
+    goarch: [ amd64, arm64 ]
 
   # No lambda.norpc: the web console links no Lambda runtime library at all — the Lambda Web
   # Adapter in the image speaks the Runtime API on its behalf.
   - id: webconsole
     main: ./cmd/webconsole
     binary: bootstrap
-    env: [CGO_ENABLED=0]
-    flags: [-trimpath]
-    ldflags: ["-s -w"]
-    goos: [linux]
-    goarch: [amd64, arm64]
+    env: [ CGO_ENABLED=0 ]
+    flags: [ -trimpath ]
+    ldflags: [ "-s -w" ]
+    goos: [ linux ]
+    goarch: [ amd64, arm64 ]
 
   # The CLI runs on an operator's machine, not on Lambda, hence the wider platform matrix.
   - id: cheapskate-cli
     main: ./cmd/cheapskate-cli
     binary: cheapskate-cli
-    env: [CGO_ENABLED=0]
-    flags: [-trimpath]
-    ldflags: ["-s -w"]
-    goos: [linux, darwin, windows]
-    goarch: [amd64, arm64]
+    env: [ CGO_ENABLED=0 ]
+    flags: [ -trimpath ]
+    ldflags: [ "-s -w" ]
+    goos: [ linux, darwin, windows ]
+    goarch: [ amd64, arm64 ]
 
 # Only the CLI is archived; the Lambda binaries are released as images instead.
 archives:
   - id: cheapskate-cli
-    ids: [cheapskate-cli]
+    ids: [ cheapskate-cli ]
     name_template: "{{ .ProjectName }}-cli_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-    formats: [tar.gz]
+    formats: [ tar.gz ]
     format_overrides:
       - goos: windows
-        formats: [zip]
-    files: [README.md]
+        formats: [ zip ]
+    files: [ README.md ]
 
-# One multi-arch tag per image, built and pushed by buildx in a single step. An empty tag is
-# ignored, which is how `latest` stops at the last stable release instead of following a
-# prerelease tag such as v1.0.0-rc.1.
+# Versioned multi-architecture images are staged before final publication checks.
+# The release controller advances latest after verifying every distribution target.
 dockers_v2:
   - id: reconciler
-    ids: [reconciler]
-    images: ["ghcr.io/moepig/cheapskate-reconciler"]
+    ids: [ reconciler ]
+    images: [ "ghcr.io/moepig/cheapskate-reconciler" ]
     tags:
       - "{{ .Version }}"
-      - "{{ if not .Prerelease }}latest{{ end }}"
     dockerfile: build/Dockerfile.reconciler
-    platforms: [linux/amd64, linux/arm64]
+    platforms: [ linux/amd64, linux/arm64 ]
     labels:
       org.opencontainers.image.title: cheapskate-reconciler
       org.opencontainers.image.description: cheapskate reconcile loop, as a Lambda container image
@@ -84,13 +82,12 @@ dockers_v2:
       org.opencontainers.image.licenses: MIT
 
   - id: webconsole
-    ids: [webconsole]
-    images: ["ghcr.io/moepig/cheapskate-webconsole"]
+    ids: [ webconsole ]
+    images: [ "ghcr.io/moepig/cheapskate-webconsole" ]
     tags:
       - "{{ .Version }}"
-      - "{{ if not .Prerelease }}latest{{ end }}"
     dockerfile: build/Dockerfile.webconsole
-    platforms: [linux/amd64, linux/arm64]
+    platforms: [ linux/amd64, linux/arm64 ]
     labels:
       org.opencontainers.image.title: cheapskate-webconsole
       org.opencontainers.image.description: cheapskate web console, as a Lambda container image
@@ -104,20 +101,11 @@ checksum:
   name_template: checksums.txt
 
 changelog:
-  use: github
-  sort: asc
-  filters:
-    exclude: ["^docs:", "^test:", "^chore:", "^ci:", "Merge pull request"]
+  disable: true
 
 release:
   prerelease: auto
-  footer: |
-    ## Container images
-
-    ```
-    ghcr.io/moepig/cheapskate-reconciler:{{ .Version }}
-    ghcr.io/moepig/cheapskate-webconsole:{{ .Version }}
-    ```
-
-    Lambda pulls images from ECR only — copy them into a repository in your own account
-    (see `docs/en/usage/setup.md`).
+  draft: true
+  use_existing_draft: true
+  replace_existing_artifacts: true
+  mode: keep-existing
