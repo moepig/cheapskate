@@ -53,9 +53,7 @@ Dependabot は `.github/dependabot.yml` に従って週次で pull request を�
 
 AWS SDK のモジュール群、Actions、イメージは、それぞれ一括更新する単位でグループ化する。更新はイメージテストを含む `ci.yml` の検査を受ける。
 
-Dockerfile frontend、Go と Rust のビルダー、Lambda ベースイメージはタグと digest の両方で固定し、docker の更新対象に含める。Go の依存と異なり `go.mod` には現れないため、Dependabot がタグと digest を同時に更新する。
-
-Lambda Web Adapter のソースは、コミットとアーカイブの SHA-256 で固定し、手動で更新する。上流のリリースタグに対応するコミットを確認し、そのアーカイブをダウンロードして SHA-256 を計算する。更新先はルートの `Dockerfile` と `build/Dockerfile.webconsole` である。両方の URL、checksum、バージョンコメント、`LAMBDA_RUNTIME_USER_AGENT` を更新する。アダプタのビルドステージを同一に保ち、イメージテストと pull request のマルチアーキテクチャのリリーススナップショットを通過することを確認する。
+Dockerfile frontend、Go ビルダー、Lambda ベースイメージ、Lambda Web Adapter はタグと digest の両方で固定し、docker の更新対象に含める。Go の依存と異なり `go.mod` には現れないため、Dependabot がタグと digest を同時に更新する。
 
 ### リリースからの経過日数
 
