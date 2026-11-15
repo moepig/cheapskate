@@ -6,9 +6,7 @@ GoReleaser は CI で実行し、ローカルでは実行しない。PR ごと�
 
 ## リリース
 
-専用 Automation App が main の push からリリース PR を作成・更新する。人がバージョン、変更履歴、互換性、CI を確認してマージする。その push でタグと draft を作成し、読み取り権限のビルドがアーカイブと OCI イメージを作成する。
-
-別の公開ジョブが公開記録と digest を検査し、不足分だけを追加する。最大の正式版だけで Latest を更新する。停止と release_id による復旧は [依存更新とリリース](../../dependency-release.md)に従う。
+リリースは既存 Action と標準コマンドで行う。公開後は immutable releases で保護する。一部配布後の失敗は管理者が調査し、修正版を別バージョンで公開する。詳細は依存更新とリリースの手順に従う。
 
 ## リリースの成果物
 
@@ -16,11 +14,11 @@ GoReleaser は CI で実行し、ローカルでは実行しない。PR ごと�
 
 | 成果物 | 配置先 | イメージタグ |
 |---|---|---|
-| `cheapskate-reconciler` イメージ | `ghcr.io/moepig/cheapskate-reconciler` | バージョン、`latest` |
-| `cheapskate-webconsole` イメージ | `ghcr.io/moepig/cheapskate-webconsole` | バージョン、`latest` |
+| `cheapskate-reconciler` イメージ | `ghcr.io/moepig/cheapskate-reconciler` | バージョン |
+| `cheapskate-webconsole` イメージ | `ghcr.io/moepig/cheapskate-webconsole` | バージョン |
 | `cheapskate-cli` アーカイブ | GitHub リリース | — |
 
-`latest` は試用と最新版の発見のために残す移動タグであり、デプロイには使わない。Lambda へ配置するイメージはバージョンタグ、厳密に同じ内容を再現する必要がある環境では digest で参照する。
+GHCR の latest は自動更新しない。Lambda へ配置するイメージはバージョンタグ、厳密に同じ内容を再現する必要がある環境では digest で参照する。
 
 どちらのイメージも `linux/amd64` と `linux/arm64` に対応するマルチアーキテクチャイメージである。
 
@@ -60,6 +58,4 @@ Dependabot は公開から 7 日が経過したバージョンを提案する。
 
 ### 自動マージ
 
-metadata Action が Dependabot の作成者とコミット署名を検証する。専用 App がアプリケーション依存の minor・patch だけを承認し、squash auto-merge を予約する。major、種別不明、Actions、Docker、draft は手動判断とする。保留には draft を使い、breaking-change は分類用とする。
-
-必須 ci、最新の main、レビュー、追加 push 時の承認無効化、Code Owner レビューを設定してから有効化する。既存のタグと配布物は再実行時も公開記録と一致する必要がある。復旧入力は既存の release_id だけとし、任意のタグや SHA は受け付けない。
+metadata Action が Dependabot の作成者とコミット署名を検証する。専用 App がアプリケーション依存の minor・patch だけを承認し、squash auto-merge を予約する。複数依存のグループ、major、種別不明、Actions、Docker、draft は手動判断とする。保留には draft を使い、breaking-change は分類用とする。

@@ -8,7 +8,7 @@ Run goreleaser in CI rather than locally. For configuration validation on every 
 
 Release Please uses a dedicated Automation App on main pushes to create and update the release PR. A maintainer reviews its version, compatibility, changelog, and CI, then merges it manually. That push creates a tag and draft. Read-only build jobs create the archives and OCI images; a separate publication job verifies digests, records the publication manifest, and uploads only missing items.
 
-Stable Latest tags advance only when the published version is the greatest stable SemVer. Published releases are never rebuilt or overwritten during recovery. See [release operations](../../dependency-release.md) for prerequisites, stopping publication, and release_id recovery.
+Release Please creates the reviewed release. GoReleaser performs build and publication with GITHUB_TOKEN. Use immutable releases and investigate partial publication before issuing a new version. See the dependency and release operations document.
 
 ## Release artifacts
 
@@ -16,11 +16,11 @@ A release produces the following.
 
 | Artifact | Destination | Image tags |
 |---|---|---|
-| The `cheapskate-reconciler` image | `ghcr.io/moepig/cheapskate-reconciler` | The version, `latest` |
-| The `cheapskate-webconsole` image | `ghcr.io/moepig/cheapskate-webconsole` | The version, `latest` |
+| The `cheapskate-reconciler` image | `ghcr.io/moepig/cheapskate-reconciler` | The version |
+| The `cheapskate-webconsole` image | `ghcr.io/moepig/cheapskate-webconsole` | The version |
 | The `cheapskate-cli` archives | The GitHub release | — |
 
-`latest` remains as a moving tag for trials and discovering the newest release; do not deploy it. Refer to a version tag for Lambda deployment, or to a digest where the exact same contents must be reproducible.
+GHCR latest is not updated automatically. Refer to a version tag for Lambda deployment, or to a digest where the exact same contents must be reproducible.
 
 Both images are multi-architecture (`linux/amd64`, `linux/arm64`).
 
@@ -61,5 +61,3 @@ Patch and minor updates merge after the required CI and review conditions pass. 
 ### Auto-merge
 
 The metadata action validates the Dependabot author and commit signatures. Only application dependency minor and patch updates qualify for App approval and squash auto-merge. Major, unknown, Actions, Docker, and draft updates remain manual. Use draft status to hold an update; breaking-change is a classification label.
-
-Require the GitHub Actions ci check, latest main, reviews, stale approval dismissal, and Code Owner review before enabling DEPENDABOT_AUTO_MERGE. Code Owner files include workflow and publication settings. Existing version tags and assets must match the publication record on every retry. Recovery accepts an existing release_id, never an arbitrary tag or SHA.

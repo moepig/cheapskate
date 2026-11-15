@@ -41,8 +41,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - name: Test release validation
-        run: python3 -m unittest discover -s .github/scripts -p 'test_*.py'
       - name: Require every CI job to succeed
         if: ${{ needs['test'].result != 'success' || needs['release-snapshot'].result != 'success' }}
         run: exit 1
