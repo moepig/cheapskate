@@ -1,33 +1,22 @@
 # GitHub Actions
 
-CI、依存 PR の自動マージ、リリース PR の作成、配布を実行するワークフローを説明する。認証には GITHUB_TOKEN を使う。
+CI、依存更新の検証、レビュー済みリリースの公開を行う。PR の自動処理と Release Please は専用 App、ビルドは読み取り専用 GITHUB_TOKEN、公開は必要な書き込み権限を使う。
 
 ## ワークフロー
 
-| ファイル | 用途 |
+| ファイル | 処理 |
 | --- | --- |
-| ci.yml | テスト、スナップショット、ci 集約結果 |
-| test.yml | lint、単体・結合・イメージ・設定の検査 |
-| dependabot-auto-merge.yml | メタデータ Action と GitHub auto-merge |
-| release-please.yml | リリース PR、タグ、draft Release |
-| distribute.yml | GoReleaser、配布、公開 |
+| ci.yml | テスト・snapshot・必須 ci |
+| test.yml | lint・単体・統合・イメージ・設定検査 |
+| dependabot-auto-merge.yml | 署名検証・App の承認・予約 |
+| release-please.yml | PR・draft・ビルド・検査・公開 |
 
-CI は main への push と PR で実行する。必要なジョブの失敗やスキップがあれば ci は失敗する。test.yml は test / lint、test / unit、test / integration、test / image、test / goreleaser を実行する。release-snapshot は全対象とイメージをビルドし、公開しない。結合・イメージテストは Docker を使い、AWS の認証情報を必要としない。
+CI は PR と main の push で実行する。ci は必要なジョブの失敗とスキップを失敗にする。統合テストとイメージテストは Docker を使い、AWS の資格情報を必要としない。外部 Action は完全長 SHA で固定し、checkout で資格情報を保存しない。
 
-## マージ条件
+## マージと公開の条件
 
-main では GitHub Actions 提供の ci、最新ベースでの検証、レビューを必須にし、push 後の承認を無効にする。設定と CI を確認してから DEPENDABOT_AUTO_MERGE を有効にする。メタデータ Action が Dependabot コミットを検証し、GitHub CLI で minor・patch の承認と squash auto-merge を予約する。major と種別不明の更新は管理者が手動でマージする。
+GitHub Actions 提供の ci、最新の main、レビュー、承認の無効化、Code Owner レビューを必須にする。自動マージはアプリケーション依存の minor・patch だけを対象とする。Actions、Docker、major、種別不明、draft は手動判断とする。特権ジョブで PR のコードを checkout しない。
 
-自動マージ用のワークフローでは PR のコードを checkout しない。独自の Check Run や差分解析は使わない。
+人が App のリリース PR をレビューしてマージすると、その push でタグと draft を作成する。読み取り権限で配布物をビルドし、別の公開ジョブがハッシュを照合する。公開記録を最初に添付し、不足分だけを追加する。最大の正式版だけで Latest を更新する。
 
-## 公開
-
-Release Please は main への push と手動実行で起動する。未公開の fix・feat などがあればリリース PR を作成・更新する。定期実行は行わない。GITHUB_TOKEN による依存 PR の自動マージ後は、main、tag 空欄で手動実行する。
-
-管理者がリリース PR を main へマージすると、その push で自動起動してタグと draft Release を作成し、マージ SHA を配布処理へ渡す。GoReleaser がアーカイブとバージョン付きイメージを配布する。安定版の latest を更新してから draft を解除する。
-
-失敗時はジョブを再実行するか、Release Please の tag 入力で既存 draft を指定する。専用の状態管理 Issue や自動復旧は設けない。PR 作成と公開のフロー図、停止と再実行の手順は [依存更新とリリース](../../dependency-release.md)を参照する。
-
-## ワークフローの変更
-
-外部 Action は完全な SHA とバージョンコメントで固定する。ローカルの再利用可能ワークフローは呼び出し元のコミットで解決する。ci には必要な全ジョブを含め、結果を欠落させる paths フィルターを付けない。
+有効化、停止、release_id による復旧は [依存更新とリリース](../../dependency-release.md)に従う。ci は必要なジョブに依存させ、必須チェックを欠落させる paths フィルターを付けない。

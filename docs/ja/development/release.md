@@ -4,15 +4,11 @@
 
 GoReleaser は CI で実行し、ローカルでは実行しない。PR ごとの設定検証と、すべての CI 実行で行うスナップショットビルドは、[GitHub Actions](github-actions.md)を参照する。
 
-## リリースの手順
+## リリース
 
-Release Please は main への push と手動実行で未公開変更を確認し、fix・feat などがあればリリース PR を作成・更新する。定期実行は行わない。GITHUB_TOKEN による依存 PR の自動マージ後は、main、tag 空欄で手動実行する。
+専用 Automation App が main の push からリリース PR を作成・更新する。人がバージョン、変更履歴、互換性、CI を確認してマージする。その push でタグと draft を作成し、読み取り権限のビルドがアーカイブと OCI イメージを作成する。
 
-管理者は CI が承認待ちなら開始を承認し、バージョン、変更履歴、互換性を確認してリリース PR をマージする。マージに伴う main への push で公開処理が自動起動し、タグと draft Release を作成する。配布処理でタグとマージ SHA を照合してからビルド・配布する。
-
-GoReleaser は既存 draft へアーカイブとチェックサムを添付し、変更履歴を維持する。コンテナはバージョン付きタグへ配布する。配布後に latest を更新し、GitHub Release を公開する。プレリリースでは latest を更新しない。
-
-フロー図、停止、再実行の手順は [依存更新とリリース](../../dependency-release.md)を参照する。
+別の公開ジョブが公開記録と digest を検査し、不足分だけを追加する。最大の正式版だけで Latest を更新する。停止と release_id による復旧は [依存更新とリリース](../../dependency-release.md)に従う。
 
 ## リリースの成果物
 
@@ -39,7 +35,7 @@ GoReleaser は既存 draft へアーカイブとチェックサムを添付し�
 
 ## GHCR の初回公開
 
-GHCR への push はワークフローの `GITHUB_TOKEN` (`packages: write`) で行う。設定すべきシークレットはない。
+GHCR への push は公開ジョブの GITHUB_TOKEN の packages: write で行う。PR の自動処理と Release Please は、main 限定の automation Environment に置く専用 App の鍵を使う。
 
 初回公開時の GHCR パッケージは既定で private になる。認証なしで取得できるよう、各パッケージの Settings で public に変更する。リポジトリの公開範囲だけではパッケージの公開範囲は変わらない。[GitHub のパッケージ公開設定](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry)に従う。
 
@@ -64,8 +60,6 @@ Dependabot は公開から 7 日が経過したバージョンを提案する。
 
 ### 自動マージ
 
-dependabot/fetch-metadata が Dependabot コミットを検証し、更新種別を取得する。GitHub CLI で minor・patch の承認と squash auto-merge を予約する。major と種別不明の更新は管理者が確認して手動でマージする。
+metadata Action が Dependabot の作成者とコミット署名を検証する。専用 App がアプリケーション依存の minor・patch だけを承認し、squash auto-merge を予約する。major、種別不明、Actions、Docker、draft は手動判断とする。保留には draft を使い、breaking-change は分類用とする。
 
-GitHub Actions 提供の ci、レビュー、最新ベース、push 後の承認無効化を設定してから DEPENDABOT_AUTO_MERGE を有効にする。アプリケーション依存は fix、Actions は chore を Dependabot の設定で指定する。依存ごとの影響解析やセキュリティ修正の根拠登録は行わない。
-
-配布失敗時はタグ、draft、レジストリの状態を確認して再実行する。Release Please の tag 入力でも既存 draft を指定できる。バージョン付きイメージを置き換える可能性があるため、無条件には再実行しない。自動復旧や既存イメージの所有情報の照合は行わない。
+必須 ci、最新の main、レビュー、追加 push 時の承認無効化、Code Owner レビューを設定してから有効化する。既存のタグと配布物は再実行時も公開記録と一致する必要がある。復旧入力は既存の release_id だけとし、任意のタグや SHA は受け付けない。

@@ -6,11 +6,9 @@ Run goreleaser in CI rather than locally. For configuration validation on every 
 
 ## Cutting a release
 
-Release Please runs on main pushes or manual dispatch. It creates or updates a release PR when main contains unreleased fix or feat changes. It creates no new PR when there are no releasable changes. There is no scheduled run. After a GITHUB_TOKEN dependency merge, run it manually on main with tag empty.
+Release Please uses a dedicated Automation App on main pushes to create and update the release PR. A maintainer reviews its version, compatibility, changelog, and CI, then merges it manually. That push creates a tag and draft. Read-only build jobs create the archives and OCI images; a separate publication job verifies digests, records the publication manifest, and uploads only missing items.
 
-A maintainer approves CI if requested, reviews the version and compatibility, and merges the release PR. That merge pushes to main and automatically starts publication by creating the tag and draft release. Distribution checks the tag against the merge SHA, uploads the GoReleaser archives and versioned images, updates stable latest tags, and publishes the GitHub Release. Prereleases do not advance latest.
-
-See the [release flow and operations](../../dependency-release.md#公開) for stopping publication and retrying a failed distribution.
+Stable Latest tags advance only when the published version is the greatest stable SemVer. Published releases are never rebuilt or overwritten during recovery. See [release operations](../../dependency-release.md) for prerequisites, stopping publication, and release_id recovery.
 
 ## Release artifacts
 
@@ -37,7 +35,7 @@ Local builds and image tests build from source with the `Dockerfile` at the repo
 
 ## Initial GHCR publication
 
-Pushing to GHCR uses the workflow's `GITHUB_TOKEN` (`packages: write`). There is no secret to configure.
+The publication job pushes to GHCR using GITHUB_TOKEN with packages: write. The Automation App key is required separately by PR automation and Release Please, and stays in the main-only automation Environment.
 
 New GHCR packages are private by default. After the first release, change each package to public in its Settings to allow unauthenticated pulls. Repository visibility alone does not change package visibility. Follow [GitHub's package visibility documentation](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry).
 
@@ -62,8 +60,6 @@ Patch and minor updates merge after the required CI and review conditions pass. 
 
 ### Auto-merge
 
-dependabot/fetch-metadata verifies Dependabot commits and reports the update type. The workflow uses GitHub CLI to approve and reserve squash auto-merge for minor and patch updates. Major and unknown updates require manual review.
+The metadata action validates the Dependabot author and commit signatures. Only application dependency minor and patch updates qualify for App approval and squash auto-merge. Major, unknown, Actions, Docker, and draft updates remain manual. Use draft status to hold an update; breaking-change is a classification label.
 
-Require the ci check from GitHub Actions, reviews, an up-to-date main base, and stale approval dismissal before enabling DEPENDABOT_AUTO_MERGE. Application dependencies use fix commits and Actions use chore commits through Dependabot configuration. There is no per-dependency product-impact analysis or security evidence registration.
-
-Retry failed distribution jobs only after verifying the tag, draft, and registry state. An existing draft tag can be supplied to Release Please for a manual retry; versioned images may be replaced. No automatic recovery service or image ownership inspection is used.
+Require the GitHub Actions ci check, latest main, reviews, stale approval dismissal, and Code Owner review before enabling DEPENDABOT_AUTO_MERGE. Code Owner files include workflow and publication settings. Existing version tags and assets must match the publication record on every retry. Recovery accepts an existing release_id, never an arbitrary tag or SHA.

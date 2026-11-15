@@ -107,5 +107,5 @@ release:
   prerelease: auto
   draft: true
   use_existing_draft: true
-  replace_existing_artifacts: true
+  replace_existing_artifacts: false
   mode: keep-existing
