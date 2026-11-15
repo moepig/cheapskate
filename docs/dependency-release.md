@@ -79,6 +79,24 @@ flowchart TD
 
 GoReleaser の配布先を分岐で示している。両配布先の更新順序は GoReleaser が決める。一方だけ更新された状態で失敗した場合、[再実行の条件](#失敗時の再実行)に従って調査する。
 
+## リリース時に人が行う操作
+
+[導入条件](#導入条件)の設定後、App が作成したリリース PR を開き、次の順で操作する。CI またはレビュー条件を満たさない場合は、マージを保留する。
+
+| 操作 | 方法 |
+| --- | --- |
+| リリース内容の確認 | Files changed でバージョンと変更履歴を確認する |
+| CI の確認 | PR の Checks で必須 ci の成功を確認する |
+| [PR の承認](https://docs.github.com/en/pull-requests/how-tos/review-pull-requests/approving-a-pull-request-with-required-reviews) | Files changed → Review changes → Approve → Submit review |
+| [公開を開始するマージ](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/merging-a-pull-request) | PR 下部の Squash and merge を選び、マージを確定する |
+| 公開処理の確認 | Actions → Release Please でマージ後の main の実行が成功したか確認する |
+| 成果物の確認 | Releases で全対象 OS の CLI アーカイブと checksums.txt を確認する |
+| コンテナの公開確認 | 各 GHCR パッケージで対象バージョンの amd64・arm64 イメージを確認する |
+| GHCR の初回公開 | 各パッケージの Settings で公開範囲を public に変更する |
+| AWS へデプロイする場合 | [セットアップ](ja/usage/setup.md)に従い、対象バージョンのイメージを Lambda に配置する |
+
+マージ後のタグ作成と Release の公開はワークフローが行う。失敗した場合は Actions のログを確認し、[再実行の条件](#失敗時の再実行)に従う。
+
 ## 失敗時の再実行
 
 配布先への書き込み前なら、失敗したジョブを再実行する。一部配布後は再実行を止め、管理者が draft、添付、GHCR を調査する。原則として修正版を別バージョンで公開する。同名ファイルを上書きしない。
