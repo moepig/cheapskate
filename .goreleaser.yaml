@@ -63,7 +63,7 @@ archives:
     files: [ README.md ]
 
 # Versioned multi-architecture images are published by GoReleaser.
-# The workflow advances latest after the artifact checks complete.
+# Only version tags are published.
 dockers_v2:
   - id: reconciler
     ids: [ reconciler ]
@@ -106,7 +106,7 @@ changelog:
 release:
   prerelease: auto
   draft: false
-  use_existing_draft: false
+  use_existing_draft: true
   replace_existing_artifacts: false
   mode: keep-existing
   replace_existing_draft: false

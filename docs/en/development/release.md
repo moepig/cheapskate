@@ -8,7 +8,7 @@ Run goreleaser in CI rather than locally. For configuration validation on every 
 
 Release Please uses a dedicated Automation App on main pushes to create and update the release PR. A maintainer reviews its version, compatibility, changelog, and CI, then merges it manually. That push creates a tag and draft. Read-only build jobs create the archives and OCI images; a separate publication job verifies digests, records the publication manifest, and uploads only missing items.
 
-Release Please creates the reviewed release. GoReleaser performs build and publication with GITHUB_TOKEN. Use immutable releases and investigate partial publication before issuing a new version. See the dependency and release operations document.
+Release Please creates the reviewed release. GoReleaser performs build and publication with GITHUB_TOKEN. Use immutable releases and investigate partial publication before issuing a new version. See [dependency and release operations](../../dependency-release.md).
 
 ## Release artifacts
 
